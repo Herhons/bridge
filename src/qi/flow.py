@@ -24,7 +24,7 @@ class Site:
     actions: str               # 回答动作条整排模板名
     copy: str                  # 动作条内复制键模板名
     composer_offset: tuple[int, int]   # 从锚点中心到文字区的偏移
-    newchat: str | None = None         # 新对话按钮
+    newchat: str | tuple[str, ...] | None = None   # 新对话按钮（可多个候选：整条 / 收起后的图标）
     sidebar: str | None = None         # 侧栏折叠/展开按钮（侧栏没开时先点它）
     stop: str | None = None            # 生成中的停止键
     send_mode: str = "color"           # color=靠颜色判断可用；exists=出现即可用
@@ -41,21 +41,35 @@ def _send_enabled(s: Screen, site: Site, m: Match) -> bool:
 
 
 def _open_new_chat(s: Screen, site: Site) -> dict:
-    """点新对话。侧栏没开就先点侧栏开关再试一次——这是实际会遇到的场景。"""
+    """点新对话。
+
+    侧栏有两种形态：展开是一整条「新聊天」，收起只剩一个铅笔图标。
+    所以这里按候选列表找：整条 → 图标 → 都不是就先点侧栏开关再找一遍。
+    """
     if not site.newchat:
         return {"ok": True, "stage": "skipped"}
-    hit = s.find(site.newchat, threshold=0.85)
+    names = (site.newchat,) if isinstance(site.newchat, str) else tuple(site.newchat)
+
+    def _try() -> object:
+        for nm in names:
+            hit = s.find(nm, threshold=0.85)
+            if hit is not None:
+                return hit
+        return None
+
+    hit = _try()
     if hit is None and site.sidebar:
         if s.find(site.sidebar) is not None:
             s.click(s.find(site.sidebar))
-            time.sleep(0.6)
-            hit = s.find(site.newchat, threshold=0.85)
+            time.sleep(0.7)
+            hit = _try()
     if hit is None:
         return {"ok": False, "stage": "newchat_not_found",
-                "hint": "找不到新对话按钮；如果侧栏是收起的，先补一张侧栏开关图"}
+                "tried": list(names),
+                "hint": "找不到新对话按钮：补一张收起状态的图标图，或一张侧栏开关图"}
     s.click(hit)
     time.sleep(0.9)
-    return {"ok": True, "stage": "clicked"}
+    return {"ok": True, "stage": "clicked", "via": hit.name}
 
 
 def _is_action_row(s: Screen, m: Match) -> bool:

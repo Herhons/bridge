@@ -31,7 +31,7 @@ SITE = Site(
     actions="gpt_actions",
     copy="gpt_copy",
     composer_offset=(240, -5),
-    newchat="gpt_newchat",
+    newchat=("gpt_newchat", "gpt_newchat_icon"),   # 展开=整条，收起=铅笔图标
     sidebar="gpt_sidebar",
     send_mode="exists",
     send_threshold=0.88,
