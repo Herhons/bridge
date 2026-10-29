@@ -55,14 +55,22 @@ EFFORTS = {
     "high": {"chip": "gpt_chip_high", "frac": 0.78, "desc": "高"},
 }
 CHIP_DX, CHIP_DY = -70, -3
+# 弹层里「选择模型」那一行，相对语音键的偏移（实测）
+MENU_MODEL_DX, MENU_MODEL_DY = -75, 41
+MODELS = {"gpt6": "GPT-6（默认）", "gpt56": "GPT-5.6 Sol"}
 TRACK_DX, TRACK_W, TRACK_DY = -200, 230, -46
 
 
 def _voice_center(s: Screen) -> tuple[int, int] | None:
-    """右下角橙色语音键的中心（屏幕坐标）。找不到返回 None。"""
-    img = s.grab()
-    h = img.shape[0]
-    band = img[h - 320:h, :]
+    """右下角橙色语音键的中心（屏幕坐标）。找不到返回 None。
+
+    只在**副屏**里找：整块虚拟桌面扫的话，主屏上的橙色元素（视频、图标）会抢先命中。
+    """
+    win = s.window_rect("Google Chrome", on_secondary=True)
+    if win is None:
+        return None
+    band = s.grab(win)
+    h = band.shape[0]
     b = band[:, :, 0].astype(int)
     r = band[:, :, 2].astype(int)
     orange = ((r - b > 80) & (r > 200)).astype(np.uint8)
@@ -72,9 +80,7 @@ def _voice_center(s: Screen) -> tuple[int, int] | None:
     if not cands:
         return None
     _a, x, y, w, hh = max(cands)
-    u = ctypes.windll.user32
-    vx, vy = u.GetSystemMetrics(76), u.GetSystemMetrics(77)
-    return (vx + x + w // 2, vy + (h - 320) + y + hh // 2)
+    return (win[0] + x + w // 2, win[1] + y + hh // 2)
 
 
 def _calm(s: Screen) -> None:
@@ -90,13 +96,17 @@ def _calm(s: Screen) -> None:
 
 
 def read_current(s: Screen) -> dict:
-    _calm(s)
+    """读当前强度：匹配芯片图。
+
+    已知不稳：芯片形态会变（有时显示「5.6 中」，有时只显示「思考强度」），
+    换模型或改版都要重截 gpt_chip_*。读不出来就说 unknown，不猜。
+    """
     for key, cfg in EFFORTS.items():
         m = s.find(cfg["chip"], threshold=0.90)
         if m is not None:
             return {"effort": key, "score": round(m.score, 3)}
     return {"effort": "unknown",
-            "hint": "当前芯片和 instant/mid/high 三张图都对不上（可能停在别的档，或主题/缩放变了）"}
+            "hint": "当前芯片和 instant/mid/high 三张图都对不上（芯片形态或主题变了，需重截）"}
 
 
 def set_effort(s: Screen, key: str) -> dict:
@@ -127,10 +137,80 @@ def set_effort(s: Screen, key: str) -> dict:
             "before": cur["effort"], "after": after["effort"]}
 
 
+# ------------------------------------------------------------------ 模型
+def _items_visible(s: Screen) -> bool:
+    return any(s.find(f"gpt_model_{k}", threshold=0.80) is not None for k in MODELS)
+
+
+def _open_model_list(s: Screen) -> bool:
+    """点开"选择模型"那一层。
+
+    要先判状态：弹层已经开着的时候再点芯片会把它关掉（实测踩过）。
+    """
+    if _items_visible(s):
+        return True
+    v = _voice_center(s)
+    if v is None:
+        return False
+    s.press("esc")
+    time.sleep(0.35)
+    s.click_xy(v[0] + CHIP_DX, v[1] + CHIP_DY)
+    time.sleep(0.9)
+    if _items_visible(s):
+        return True
+    s.click_xy(v[0] + MENU_MODEL_DX, v[1] + MENU_MODEL_DY)
+    time.sleep(0.9)
+    return _items_visible(s)
+
+
+def read_model(s: Screen) -> dict:
+    """读当前模型：看哪一行的行尾有勾。
+
+    模型名确实显示在芯片上（"5.6 中"），但和强度粘在一起，做模板会变成组合爆炸。
+    菜单项行尾的 ✓ 是干净的判据：勾上时右端有 10+ 个深色像素，没勾是 0。
+    """
+    if not _open_model_list(s):
+        time.sleep(0.5)
+        if not _open_model_list(s):       # 弹层有过渡态，给一次重试
+            return {"model": "unknown", "hint": "打不开模型列表"}
+    ink = {}
+    for k in MODELS:
+        m = s.find(f"gpt_model_{k}", threshold=0.80)
+        if m is not None:
+            band = s.grab((m.x, m.y, m.w, m.h))[:, -50:]
+            g = cv2.cvtColor(band, cv2.COLOR_BGR2GRAY)
+            ink[k] = int((g < 120).sum())
+    s.press("esc")
+    time.sleep(0.3)
+    if not ink:
+        return {"model": "unknown", "hint": "模型项一个都没定位到"}
+    best = max(ink, key=ink.get)
+    return {"model": best if ink[best] > 5 else "unknown", "ink": ink}
+
+
+def set_model(s: Screen, key: str) -> dict:
+    cur = read_model(s)["model"]
+    if cur == key:
+        return {"ok": True, "stage": "already", "before": cur, "after": cur}
+    if not _open_model_list(s):
+        return {"ok": False, "stage": "menu_not_open", "before": cur}
+    m = s.find(f"gpt_model_{key}", threshold=0.80)
+    if m is None:
+        s.press("esc")
+        return {"ok": False, "stage": "item_not_found", "before": cur, "want": key}
+    s.click(m)
+    time.sleep(1.3)
+    s.move_to(-1200, 100)
+    time.sleep(0.4)
+    after = read_model(s)["model"]
+    return {"ok": after == key, "stage": "done" if after == key else "unverified",
+            "before": cur, "after": after}
+
+
 def main() -> int:
     name = os.path.basename(__file__)
     args = sys.argv[1:]
-    want, tab, bad, writer = None, None, [], None
+    want, tab, bad, writer, model = None, None, [], None, None
     do_list = "--list" in args or "-l" in args
     if "--effort" in args:
         i = args.index("--effort")
@@ -138,6 +218,12 @@ def main() -> int:
             want = args[i + 1].strip().lower()
         else:
             bad.append("--effort 缺值")
+    if "--model" in args:
+        i = args.index("--model")
+        if i + 1 < len(args):
+            model = args[i + 1].strip().lower()
+        else:
+            bad.append("--model 缺值")
     if "--writer" in args:
         i = args.index("--writer")
         if i + 1 < len(args):
@@ -157,11 +243,14 @@ def main() -> int:
     if bad:
         print("参数有问题：", bad)
         return 2
-    if not do_list and want is None and writer is None:
+    if not do_list and want is None and writer is None and model is None:
         print("用法：")
         print(f"  python {name} --list [--tab N]")
         print(f"  python {name} --effort instant|mid|high [--tab N]")
         print(f"  python {name} --writer chat|work [--effort X]   # 换模式会换掉强度档位")
+        print(f"  python {name} --model <{'|'.join(MODELS)}>")
+        for k, v in MODELS.items():
+            print(f"    {k:8} {v}")
         for k, v in EFFORTS.items():
             print(f"    {k:8} {v['desc']}")
         print("  说明：本端只支持强度；模型选择（弹层里「中 ›」那层子菜单）还没做")
@@ -171,7 +260,9 @@ def main() -> int:
         return 2
 
     lib = Library()
-    need = [cfg["chip"] for cfg in EFFORTS.values()] + ["gpt_writer_tabs_chat", "gpt_writer_tabs_work"]
+    need = ([cfg["chip"] for cfg in EFFORTS.values()]
+            + ["gpt_writer_tabs_chat", "gpt_writer_tabs_work"]
+            + [f"gpt_model_{k}" for k in MODELS])
     print(lib.report(need))
     if lib.missing(need):
         return 3
@@ -192,6 +283,7 @@ def main() -> int:
     if do_list:
         out = dict(read_current(s))
         out.update(read_writer(s, WRITER))
+        out.update(read_model(s))
         print(json.dumps(out, ensure_ascii=False))
         return 0
 
@@ -201,6 +293,10 @@ def main() -> int:
         print(json.dumps(w, ensure_ascii=False))
         if not w.get("ok"):
             rc = 1
+    if model is not None:
+        r = set_model(s, model)
+        print(json.dumps(r, ensure_ascii=False))
+        rc = 0 if r.get("ok") else 1
     if want is not None:
         r = set_effort(s, want)
         print(json.dumps(r, ensure_ascii=False))

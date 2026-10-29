@@ -161,6 +161,39 @@ class Screen:
         return (user32.GetSystemMetrics(SM_XVIRTUALSCREEN), user32.GetSystemMetrics(SM_YVIRTUALSCREEN),
                 user32.GetSystemMetrics(SM_CXVIRTUALSCREEN), user32.GetSystemMetrics(SM_CYVIRTUALSCREEN))
 
+    def window_rect(self, title_hint: str, *, on_secondary: bool = False) -> tuple[int, int, int, int] | None:
+        """按标题取窗口矩形。
+
+        用来把"颜色搜索"限定在目标窗口内——整块虚拟桌面里别的屏有视频、
+        图标也可能是同色，很容易抢先命中。
+        """
+        pw, ph = user32.GetSystemMetrics(0), user32.GetSystemMetrics(1)
+        found = []
+
+        @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+        def _cb(hwnd, _):
+            if not user32.IsWindowVisible(hwnd):
+                return True
+            n = user32.GetWindowTextLengthW(hwnd)
+            if n <= 0:
+                return True
+            buf = ctypes.create_unicode_buffer(n + 1)
+            user32.GetWindowTextW(hwnd, buf, n + 1)
+            if title_hint.lower() not in buf.value.lower():
+                return True
+            r = wintypes.RECT()
+            user32.GetWindowRect(hwnd, ctypes.byref(r))
+            cx, cy = (r.left + r.right) // 2, (r.top + r.bottom) // 2
+            if on_secondary and (0 <= cx < pw and 0 <= cy < ph):
+                return True
+            if r.right - r.left < 200 or r.bottom - r.top < 200:
+                return True
+            found.append((r.left, r.top, r.right - r.left, r.bottom - r.top))
+            return True
+
+        user32.EnumWindows(_cb, 0)
+        return found[0] if found else None
+
     def bring_to_front(self, title_hint: str, *, on_secondary: bool = False) -> bool:
         """把标题含 title_hint 的已有窗口提到前台。
 
