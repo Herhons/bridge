@@ -321,6 +321,58 @@ class Screen:
             time.sleep(interval)
         return False
 
+    def monitor_rect(self, x: int, y: int) -> tuple[int, int, int, int]:
+        """点 (x,y) 所在显示器的矩形。用来把"画面静止"限定在一块屏上。"""
+
+        class _POINT(ctypes.Structure):
+            _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
+
+        class _RECT(ctypes.Structure):
+            _fields_ = [("left", ctypes.c_long), ("top", ctypes.c_long),
+                        ("right", ctypes.c_long), ("bottom", ctypes.c_long)]
+
+        class _MI(ctypes.Structure):
+            _fields_ = [("cbSize", wintypes.DWORD), ("rcMonitor", _RECT),
+                        ("rcWork", _RECT), ("dwFlags", wintypes.DWORD)]
+
+        user32.MonitorFromPoint.argtypes = [_POINT, wintypes.DWORD]
+        user32.MonitorFromPoint.restype = wintypes.HMONITOR
+        user32.GetMonitorInfoW.argtypes = [wintypes.HMONITOR, ctypes.POINTER(_MI)]
+        hmon = user32.MonitorFromPoint(_POINT(x, y), 2)  # MONITOR_DEFAULTTONEAREST
+        mi = _MI()
+        mi.cbSize = ctypes.sizeof(_MI)
+        if not user32.GetMonitorInfoW(hmon, ctypes.byref(mi)):
+            return self.bounds()
+        r = mi.rcMonitor
+        return (r.left, r.top, r.right - r.left, r.bottom - r.top)
+
+    def wait_quiet(self, *, timeout: float = 120.0, interval: float = 0.7,
+                   tol: float = 0.35, need: int = 2,
+                   region: tuple[int, int, int, int] | None = None) -> bool:
+        """等画面静止下来。
+
+        用来兜"没抓到停止键"的情况：流式输出时画面一直在变，
+        连续 need 帧几乎没变化，就认为生成结束了。
+        不依赖任何模板，所以不会因为换主题/换版本失效。
+
+        region 建议传目标窗口所在显示器：整块虚拟桌面里可能有别的屏在放视频。
+        """
+        prev = self.grab(region)
+        stable = 0
+        end = time.time() + timeout
+        while time.time() < end:
+            time.sleep(interval)
+            cur = self.grab(region)
+            d = float(cv2.absdiff(prev, cur).mean()) if cur.shape == prev.shape else 1.0
+            prev = cur
+            if d < tol:
+                stable += 1
+                if stable >= need:
+                    return True
+            else:
+                stable = 0
+        return False
+
     # ---------------------------------------------------------------- 动作
     def move_to(self, x: int, y: int) -> None:
         vx, vy = user32.GetSystemMetrics(SM_XVIRTUALSCREEN), user32.GetSystemMetrics(SM_YVIRTUALSCREEN)

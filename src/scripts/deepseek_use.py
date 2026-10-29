@@ -102,24 +102,6 @@ def _is_action_row(s: Screen, m) -> bool:
     return peers >= 2
 
 
-def _pick_answer_copy(hits: list, s: Screen) -> tuple[object, dict]:
-    """从所有复制键里挑回答那一个。
-
-    两道判据叠加：
-    1. 结构：右侧有同伴图标的才算动作条（提问上的那个是孤立的）。
-    2. 兜底：都没有同伴时退回"最左 + 最下"——提问靠右、回答靠左。
-    """
-    rows = [h for h in hits if _is_action_row(s, h)]
-    if rows:
-        target = max(rows, key=lambda m: m.y)
-        return target, {"rule": "action_row", "candidates": len(rows), "total": len(hits)}
-
-    left = min(h.x for h in hits)
-    lefts = [h for h in hits if h.x <= left + 40]
-    target = max(lefts, key=lambda m: m.y)
-    return target, {"rule": "leftmost", "leftmost_x": left, "left_count": len(lefts), "total": len(hits)}
-
-
 def _hover_hunt_copy(s: Screen) -> tuple[list, str]:
     """找回答的复制键。它常常只在鼠标悬停时才出现，所以分几档高度扫一下。"""
     hits = s.find_all("ds_copy")
@@ -133,6 +115,42 @@ def _hover_hunt_copy(s: Screen) -> tuple[list, str]:
         if hits:
             return hits, f"hover@{frac}"
     return [], "none"
+
+
+def _pick_copy_target(s: Screen) -> tuple[object | None, dict]:
+    """挑出"回答的复制键"，返回 (Match|None, 说明)。
+
+    首选判据（用户提的，比按位置猜可靠得多）：**整排动作条**——
+    复制/重新生成/点赞/点踩/朗读/分享 六连排只在回答下面出现，全屏唯一。
+    找到整排后，复制键就在排内左侧固定位置。
+
+    兜底：整排找不到（比如只露出半个）时，退回单图标 + 结构判据。
+    """
+    from qi import Match
+
+    row = None
+    rows = s.find_all("ds_actions", threshold=0.88)
+    if rows:
+        # 多轮会话里每轮回答下面都有一排，取最靠下的那排＝最新回答
+        row = max(rows, key=lambda m: m.y)
+    if row is not None:
+        inner = s.find("ds_copy", threshold=0.85, region=(row.x, row.y, row.w, row.h))
+        if inner is not None:
+            return inner, {"rule": "actions_row", "row": [row.x, row.y, row.w, row.h]}
+        # 排内精定位失败时，按截模板时留的 6px 边距推算复制键位置
+        guess = Match("ds_copy@row_offset", 1.0, row.x + 6, row.y + 6, 22, 22)
+        return guess, {"rule": "actions_row_offset", "row": [row.x, row.y, row.w, row.h]}
+
+    hits, how = _hover_hunt_copy(s)
+    if not hits:
+        return None, {"rule": "none", "how": how}
+    rows = [h for h in hits if _is_action_row(s, h)]
+    if rows:
+        return max(rows, key=lambda m: m.y), {"rule": "action_row_peer", "how": how,
+                                              "candidates": len(rows), "total": len(hits)}
+    left = min(h.x for h in hits)
+    lefts = [h for h in hits if h.x <= left + 40]
+    return max(lefts, key=lambda m: m.y), {"rule": "leftmost", "how": how, "total": len(hits)}
 
 
 def ask(prompt: str, *, mode: str = "new", timeout: float = 180.0) -> dict:
@@ -188,32 +206,36 @@ def ask(prompt: str, *, mode: str = "new", timeout: float = 180.0) -> dict:
     s.click(send)
     t_sent = time.time()
 
-    # 4. 等生成结束（停止键出现 → 消失）。没有 ds_stop 就退回"等复制键"。
+    # 4. 等生成结束（停止键出现 → 消失）。没抓到停止键就等画面静止。
     generating_seen = False
     if lib.has("ds_stop"):
         generating_seen = s.wait_present("ds_stop", timeout=12.0)
-        if not generating_seen:
-            time.sleep(1.5)  # 极短回答可能没赶上停止键，继续往下走
-        elif not s.wait_gone("ds_stop", timeout=timeout):
+        if generating_seen and not s.wait_gone("ds_stop", timeout=timeout):
             return {"ok": False, "stage": "timeout", "elapsed": round(time.time() - t0, 1),
                     "hint": "停止键一直没消失，生成超时"}
+    if not generating_seen:
+        # 兜底：不依赖模板，等画面连续两帧静止，避免复制到上一轮的回答。
+        # 只看输入框所在那块屏——主屏在放视频，整屏比会永远不静。
+        page = s.monitor_rect(*composer.center)
+        if not s.wait_quiet(timeout=timeout, region=page):
+            return {"ok": False, "stage": "timeout", "elapsed": round(time.time() - t0, 1),
+                    "hint": "等画面静止超时，生成可能还没结束"}
 
-    # 5. 复制回答
-    hits, how = [], "none"
+    # 5. 复制回答：先找整排动作条（全屏唯一），再点排内的复制键
+    target, pick = None, {}
     deadline = time.time() + timeout
     while time.time() < deadline:
-        hits, how = _hover_hunt_copy(s)
-        if hits and (generating_seen or time.time() - t_sent > 2.0):
+        cand, info = _pick_copy_target(s)
+        if cand is not None:
+            target, pick = cand, info
             break
         time.sleep(1.0)
-    if not hits:
+    if target is None:
         return {"ok": False, "stage": "copy_not_found", "elapsed": round(time.time() - t0, 1),
-                "hint": "没找到回答的复制键：确认 ds_copy.png 是回答动作条里那一个，而不是提问上的"}
+                "pick": pick,
+                "hint": "没找到回答动作条：确认 ds_actions.png 是整排六连排，且页面没被遮挡"}
 
-    target, pick = _pick_answer_copy(hits, s)
-    # 候选顺序：按左右挑出来的那个优先，其余按 y 从下往上兜底
-    ordered = [target] + [h for h in sorted(hits, key=lambda m: m.y, reverse=True) if h is not target]
-
+    ordered = [target]
     reply, tried = "", []
     sentinel = f"__QI_EMPTY_{int(time.time() * 1000)}__"
     for cand in ordered[:3]:
@@ -231,13 +253,13 @@ def ask(prompt: str, *, mode: str = "new", timeout: float = 180.0) -> dict:
             break
 
     if not reply:
-        # 三种可能：剪贴板没变、只拿到提问本身
+        # 两种可能：剪贴板没变、只拿到提问本身
         copied_prompt = any(t["chars"] > 0 for t in tried)
         return {"ok": False,
                 "stage": "copied_prompt" if copied_prompt else "copy_failed",
                 "elapsed": round(time.time() - t0, 1),
-                "copies": len(hits), "how": how, "pick": pick, "tried": tried,
-                "hint": "所有候选复制键拿到的都是提问内容或空。回答的动作条可能还没渲染，或被顶出视口"}
+                "pick": pick, "tried": tried,
+                "hint": "拿到的还是提问内容或空：动作条可能还没渲染完，或被顶出视口"}
 
     return {
         "ok": True,
@@ -245,8 +267,6 @@ def ask(prompt: str, *, mode: str = "new", timeout: float = 180.0) -> dict:
         "reply": reply,
         "elapsed": round(time.time() - t0, 1),
         "basis": "copied",
-        "copies": len(hits),
-        "how": how,
         "pick": pick,
         "score": round(target.score, 3),
         "at": [target.center[0], target.center[1]],
