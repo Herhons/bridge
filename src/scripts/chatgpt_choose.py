@@ -176,10 +176,11 @@ def safe_click(s: Screen, target, *, voice=None) -> tuple[bool, str]:
         d = max(abs(cx - int(voice[0])), abs(cy - int(voice[1])))
         if d < CLICK_SAFE_R:
             return False, f"点击点离橙色圆钮只有 {d}px（<{CLICK_SAFE_R}），会压到麦克风/发送键，拒绝"
-        # 橙色检查只在橙钮附近做。全屏查橙色会把**弹层里那个橙色的档位字**也算进去：
-        # 入口行就在「轻度」下面 2px，实测因此被拦（"12px 内有 102 个橙色像素"）。
-        # 半径取 100：麦克风最危险时的距离是 43px，100 足够覆盖，又放得开入口行（131px）。
-        if d < 100:
+        # 橙色检查只在橙钮贴身范围内做。
+        # 半径不能大：滑块拖到 Max 时离橙钮只有 94px，橙色填充一路铺到那里，
+        # 用 100 会把它当录音键拦掉（实测 570 个橙色像素，--effort 直接失败）。
+        # 挡麦克风靠的是上面那条距离检查（麦克风在 43px，阈值 60 够用）。
+        if d < 40:
             blob = orange_near(s, (cx, cy), 12)
             if blob > 60:
                 return False, f"点击点 12px 内有 {blob} 个橙色像素，落在录音/发送键上，拒绝"
@@ -486,27 +487,6 @@ def close_all(s: Screen, writer: str) -> None:
         time.sleep(0.6)
 
 
-def _drag_knob(s: Screen, target_x: int, tries: int = 3) -> int | None:
-    """把滑块拖到 target_x（窗口内 x），返回最终位置。
-
-    实测拖动会"打折"：拖 60px 只走 34px（网页对 mousemove 有节流/惯性）。
-    所以不指望一次到位，读回实际位置反复逼近，最多 tries 次。
-    """
-    for _ in range(tries):
-        sl = _slider(s)
-        if sl is None:
-            return None
-        cur = sl["knob"]
-        if abs(cur - target_x) <= 3:
-            return cur
-        win = sl["win"]
-        y = win[1] + sl["cy"]
-        s.drag(win[0] + cur, y, win[0] + target_x, y, steps=18)
-        time.sleep(0.9)
-    sl = _slider(s)
-    return sl["knob"] if sl else None
-
-
 def read_effort(s: Screen, writer: str | None = None) -> dict:
     """读当前强度。会开关一次弹层（Esc 不会改设置，只关）。"""
     w = writer or read_writer(s).get("writer")
@@ -526,7 +506,20 @@ def read_effort(s: Screen, writer: str | None = None) -> dict:
 
 
 def set_effort(s: Screen, key: str, writer: str | None = None) -> dict:
-    """设强度。链路：开强度层 -> 拖滑块到目标档 -> Esc 关闭让它生效 -> 复核。"""
+    """设强度。
+
+    **用键盘方向键，不用拖。** 拖拽实测不可靠：拖 -52px 实际走 -82px（过冲），
+    而且从第二次拖动开始就不动了（连续拖同一个控件会失灵），
+    一次只能落在两档中间（实测 1072，离两边各 30px）。
+
+    方向键是精确的：点一下滑块让它拿到焦点，然后
+      · 先按左键到底（多按两下确保归零）
+      · 再按右键走 idx 次
+    每按一次正好一档（实测 high 1096 -> xhigh 1154 -> Max 1211，间距 58）。
+
+    读数（橙色右端-16）比真实圆心系统偏小 6~12px，但对所有档位一样偏，
+    不影响"取最近档"。
+    """
     if key not in EFFORTS:
         return {"ok": False, "stage": "bad_arg", "want": key,
                 "options": {k: v[0] for k, v in EFFORTS.items()}}
@@ -541,20 +534,38 @@ def set_effort(s: Screen, key: str, writer: str | None = None) -> dict:
     if sl is None:
         return {"ok": False, "stage": "no_slider"}
     before, _bd = _effort_of(sl["knob"])
-    target = EFFORTS[key][1]
-    final = _drag_knob(s, target)
-    after_sl = _slider(s)
-    moved_by = ("drag" if final is not None else "none")
-    if final is None:
-        after_sl = None
 
+    # 点滑块拿焦点（点击会让它跳到点击处，无所谓——紧接着就归零）
+    win = sl["win"]
+    ok, why = safe_click(s, (win[0] + sl["knob"], win[1] + sl["cy"]))
+    if not ok:
+        return {"ok": False, "stage": "click_blocked", "detail": why, "before": before}
+    time.sleep(0.6)
+
+    # 归零：按左键到底，多按两下
+    for _ in range(len(EFFORT_ORDER) + 1):
+        s.press("left")
+        time.sleep(0.35)
+    # 往上走到目标档
+    idx = EFFORT_ORDER.index(key)
+    for _ in range(idx):
+        s.press("right")
+        time.sleep(0.35)
+    time.sleep(0.4)
+
+    after_sl = _slider(s)
     after, ad = _effort_of(after_sl["knob"]) if after_sl else (None, None)
+    knob = after_sl["knob"] if after_sl else None
     close_all(s, w)                        # Esc 才会让强度生效
     time.sleep(0.5)
-    ok = after == key
-    return {"ok": ok, "stage": "done" if ok else "unverified",
-            "before": before, "after": after, "want": key,
-            "knob": final, "off": ad, "by": moved_by}
+    # 只要求"最近档 == 想要的"不够：滑块可能停在两档正中间，那时 UI 其实没定下来。
+    on_target = after == key and ad is not None and ad <= EFFORT_GAP
+    out = {"ok": on_target, "stage": "done" if on_target else "unverified",
+           "before": before, "after": after, "want": key, "knob": knob, "off": ad,
+           "by": "keyboard"}
+    if not on_target:
+        out["hint"] = f"滑块停在 {knob}，离「{EFFORTS[key][0]}」{ad}px，超出容差 {EFFORT_GAP}"
+    return out
 
 
 def _find_item(s: Screen, writer: str, tpl: str, scroll: bool = True):
