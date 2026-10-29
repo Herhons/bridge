@@ -412,6 +412,34 @@ class Screen:
         cx, cy = m.center
         self.click_xy(cx + offset[0], cy + offset[1])
 
+    def drag(self, x1: int, y1: int, x2: int, y2: int, *, steps: int = 8) -> None:
+        """按住从 (x1,y1) 拖到 (x2,y2)。
+
+        滑杆这类控件只点一下改不动（点了也弹回原位），必须按住拖。
+        """
+        vx, vy = user32.GetSystemMetrics(SM_XVIRTUALSCREEN), user32.GetSystemMetrics(SM_YVIRTUALSCREEN)
+        vw, vh = user32.GetSystemMetrics(SM_CXVIRTUALSCREEN), user32.GetSystemMetrics(SM_CYVIRTUALSCREEN)
+
+        def _abs(x: int, y: int) -> tuple[int, int]:
+            return (int(round((x - vx) * 65535 / max(1, vw - 1))),
+                    int(round((y - vy) * 65535 / max(1, vh - 1))))
+
+        ax, ay = _abs(x1, y1)
+        _send(_INPUT(type=INPUT_MOUSE,
+                     mi=_MOUSEINPUT(ax, ay, 0, MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK, 0, None)))
+        time.sleep(0.05)
+        _send(_INPUT(type=INPUT_MOUSE, mi=_MOUSEINPUT(0, 0, 0, MOUSEEVENTF_LEFTDOWN, 0, None)))
+        time.sleep(0.08)
+        for i in range(1, steps + 1):
+            x = x1 + (x2 - x1) * i // steps
+            y = y1 + (y2 - y1) * i // steps
+            ax, ay = _abs(x, y)
+            _send(_INPUT(type=INPUT_MOUSE,
+                         mi=_MOUSEINPUT(ax, ay, 0, MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK, 0, None)))
+            time.sleep(0.03)
+        time.sleep(0.05)
+        _send(_INPUT(type=INPUT_MOUSE, mi=_MOUSEINPUT(0, 0, 0, MOUSEEVENTF_LEFTUP, 0, None)))
+
     def click_image(self, name: str, *, offset: tuple[int, int] = (0, 0),
                     wait: float = 0.0, threshold: float | None = None) -> Match:
         m = self.find(name, threshold=threshold)

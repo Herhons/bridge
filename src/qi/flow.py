@@ -115,13 +115,16 @@ def _hover_hunt(s: Screen, site: Site) -> list[Match]:
 
 
 def ask(site: Site, prompt: str, *, mode: str = "new", timeout: float = 180.0,
-        verbose: bool = True) -> dict:
+        verbose: bool = True, tab: int | None = None) -> dict:
     t0 = time.time()
     s = Screen(verbose=verbose)
 
     if not s.bring_to_front(site.title_hint, on_secondary=site.on_secondary):
         return {"ok": False, "stage": "page_not_front", "elapsed": round(time.time() - t0, 1),
                 "hint": f"没找到标题含 {site.title_hint!r} 的窗口"}
+    if tab:
+        s.hotkey("ctrl", str(tab))
+        time.sleep(1.2)
 
     # 1. 新对话
     if mode == "new":
@@ -206,7 +209,7 @@ def ask(site: Site, prompt: str, *, mode: str = "new", timeout: float = 180.0,
 
 
 def cli(site: Site, argv: list[str]) -> int:
-    mode, timeout, words, bad = "new", 180.0, [], []
+    mode, timeout, words, bad, tab = "new", 180.0, [], [], None
     i = 0
     while i < len(argv):
         a = argv[i]
@@ -214,6 +217,15 @@ def cli(site: Site, argv: list[str]) -> int:
             mode = "new"
         elif a == "--continue":
             mode = "continue"
+        elif a == "--tab":
+            if i + 1 < len(argv):
+                i += 1
+                try:
+                    tab = int(argv[i])
+                except ValueError:
+                    bad.append(f"--tab 要数字，收到 {argv[i]!r}")
+            else:
+                bad.append("--tab 缺值")
         elif a == "--timeout":
             if i + 1 < len(argv):
                 i += 1
@@ -230,15 +242,15 @@ def cli(site: Site, argv: list[str]) -> int:
 
     if bad:
         print("参数有问题：", bad)
-        print(f'用法: python {name} "你的提问" [--new|--continue] [--timeout 180]')
+        print(f'用法: python {name} "你的提问" [--new|--continue] [--timeout 180] [--tab N]')
         return 2
     if not prompt.strip():
-        print(f'用法: python {name} "你的提问" [--new|--continue] [--timeout 180]')
+        print(f'用法: python {name} "你的提问" [--new|--continue] [--timeout 180] [--tab N]')
         print("  --new       先点新对话再发（默认）")
         print("  --continue  直接发在当前对话里")
         return 2
 
-    result = ask(site, prompt, mode=mode, timeout=timeout)
+    result = ask(site, prompt, mode=mode, timeout=timeout, tab=tab)
     if result.get("ok"):
         print("=== 回答 ===")
         print(result.pop("reply"))
