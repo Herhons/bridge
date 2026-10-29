@@ -312,38 +312,56 @@ def _items_visible(s: Screen, writer: str) -> bool:
 #   滑杆（轨道 x 954..1239）
 # 五档等分，滑块圆心 x 与档位的对应关系是量出来的，不是猜的：
 #   981=轻度 1041=中 1102=高 1163=极高 1223=Max
+# 档位表**按模式分开**：两个模式的滑杆长度和档数都不一样（实测 2026-10-29）
+#   work: 5 档，读数 988/1046/1097/1154/1211（间距 58）
+#   chat: 3 档，读数 1013/1115/1217（间距 102），最低档界面上写「即时」
+# 读数是「橙色块右端 - 16」，比真实滑块圆心系统偏小 6~12px；但在同一模式内
+# 所有档位偏得一样，不影响"取最近档"。
 EFFORTS = {
-    "low":   ("轻度", 981),
-    "mid":   ("中",   1041),
-    "high":  ("高",   1102),
-    "xhigh": ("极高", 1163),
-    "max":   ("Max",  1223),
+    "work": {
+        "low":   ("轻度", 988),
+        "mid":   ("中",   1046),
+        "high":  ("高",   1097),
+        "xhigh": ("极高", 1154),
+        "max":   ("Max",  1211),
+    },
+    "chat": {
+        "low":  ("即时", 1013),
+        "mid":  ("中", 1115),
+        "high": ("高", 1217),
+    },
 }
-EFFORT_ORDER = ["low", "mid", "high", "xhigh", "max"]
+def effort_order(writer: str) -> list[str]:
+    """某个模式的档位顺序（从低到高）。"""
+    return list(EFFORTS.get(writer, {}))
 
 SLIDER_L, SLIDER_R = 954, 1239   # 轨道两端（窗口内 x）
 KNOB_R = 16                      # 滑块半径
 KNOB_DY = 94                     # 滑块圆心 y = 橙钮 y + 94
 ENTRY_DY = -38                   # 入口行 y = 滑块圆心 y - 38
 SLIDER_BAND = (60, 140)          # 滑杆纵向搜索带（相对橙钮 y）
-EFFORT_GAP = 14                  # 滑块离档位点超过这么多就认为没落在档上
+EFFORT_GAP = 14                  # 兜底容差；实际按各模式档位间距算（见 _gap_limit）
 
 
 def _slider(s: Screen):
     """强度滑杆的几何（窗口内坐标）。None = **强度层没开**。
 
-    这是"强度层开着"的唯一判据。原来那版用「非背景块的外接矩形」判断，
-    页面上任何文字都会满足，弹层没开也返回坐标（实测返回过窗口内 (1153,811)，
-    把「选择项目/文件/插件」那行当成了弹层），于是后面全链路都在错的前提上跑。
+    这是"强度层开着"的唯一判据，所以判据本身必须稳。踩过三次：
 
-    橙色判据的 x **必须限定在轨道附近**：全宽扫会抓到窗口右边外面的橙色
-    （实测返回 1363）和侧栏图标（x=44）。
+    1. 用「非背景块外接矩形」：页面上任何文字都满足，弹层没开也返回坐标。
+    2. 用橙色：**滑块停在最低档时整条滑杆是灰的、一点橙色都没有**，
+       弹层开着也被判成没开（--effort low 之后紧跟 --effort mid 直接报 menu_not_open）。
+    3. 用「轨道行最长灰段」：滑块在最左时滑块是白的，最长灰段从滑块右边缘才开始，
+       滑块被排除在外；而且下方「打开桌面应用」那一带也是长灰条，会被并进来
+       导致轨道中心偏 14px（实测 cy 算成 748，实际 734）。
 
-    滑块圆心 = 橙色块右端 - 16，这条对三个区段都成立：
-      · 最低档时橙色就是滑块自己（32px 宽），右端 - 16 仍是圆心
-      · 中间档是「填充段 + 滑块」连成一块，右端仍是滑块右缘
-      · 最高档填满整条，右端仍是滑块右缘
-    所以不需要橙色填充也能定位——这一点很关键，最低档时填充宽度是 0。
+    现在的做法：
+      · 逐行找长 170~340px 的连续灰段，**按连续行分组**，取高度 20~40 的组
+        （真轨道 24~28 行高，下面那一片只有 15 行，被排除）；
+      · 滑块用**轨道上下方凸出**那几行找：滑块直径 32 > 轨道高 24，
+        上下各凸出 4px，那几行只有滑块的边框有像素（宽度 8~46）。
+        在轨道行上找白色段不行——滑块贴着轨道左端时，滑块的白色和弹层的白色
+        连成一片，宽度远超上限，永远匹配不上。
     """
     win = _win(s)
     v = _voice_center(s)
@@ -352,26 +370,100 @@ def _slider(s: Screen):
     img = s.grab(win)
     if img.size == 0:
         return None
+    g = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    vx, vy = int(v[0]) - win[0], int(v[1]) - win[1]
+    x0, x1 = max(0, vx - 380), min(g.shape[1], vx + 15)
+    y0, y1 = max(0, vy + 40), min(g.shape[0], vy + 170)
+    if x1 - x0 < 200 or y1 - y0 < 40:
+        return None
+
+    def runs_of(mask):
+        out, st = [], None
+        for i, m in enumerate(mask):
+            if m:
+                if st is None:
+                    st = i
+            elif st is not None:
+                out.append((st, i - 1))
+                st = None
+        if st is not None:
+            out.append((st, len(mask) - 1))
+        return out
+
+    # 1) 候选轨道行。
+    #    判据不能用「最长连续段」：滑块是白的，会把轨道切成左右两段，
+    #    滑块在中间时最长的一段只有 130px，达不到 170 的下限，真轨道直接被排除
+    #    （实测候选里只剩下方「打开桌面应用」那一片阴影）。
+    #    改成看「整行首尾跨度」+「像素占比」：轨道是实心横条，跨度 220 里
+    #    190 个像素是深的；文字行跨度也大但像素稀。
+    cand = []
+    for y in range(y0, y1):
+        idx = np.where(g[y, x0:x1] < 250)[0]
+        if len(idx) < 150:
+            continue
+        span = int(idx[-1] - idx[0] + 1)
+        if 170 <= span <= 340 and len(idx) >= span * 0.55:
+            cand.append((y, x0 + int(idx[0]), x0 + int(idx[-1])))
+    if len(cand) < 8:
+        return None
+
+    # 2) 定轨道上下边。
+    #    不能按「连续行分组」：滑块和橙色填充会把轨道打断，实测 723..746 这一段
+    #    被切成 2 行 / 3 行 / 7 行三小段，没有一段凑得够 20 行，全被丢掉，
+    #    候选里只剩下方「打开桌面应用」那片阴影。
+    #    改用「宽度接近最宽行」来收集：轨道是等宽的（实测 268~270 稳定），
+    #    下方阴影是渐变的（260 一路收到 208），一筛就分开。
+    widest = max(c[2] - c[1] + 1 for c in cand)
+    same = [c for c in cand if (c[2] - c[1] + 1) >= widest - 6]
+    if not same:
+        return None
+    ys = [c[0] for c in same]
+    top, bottom = min(ys), max(ys)
+    if not (14 <= bottom - top + 1 <= 42):
+        return None
+    cy = (top + bottom) // 2
+    tx0 = min(c[1] for c in same)
+    tx1 = max(c[2] for c in same)
+
+    # 3) 滑块位置。只有两种情况，不要试图用「凸出」或「白色段」来通用判定——
+    #    实测那两条都会在某个档位翻车（凸出部分在圆顶处只有 11px 宽、
+    #    白色段在最低档时和弹层白连成一片，还有轨道左圆角的残留会被误当成滑块）。
+    #
+    #    (a) 轨道上有橙色（填充 + 滑块）：圆心 = 橙色最右端 - 滑块半径。
+    #        这条对最低档以外的所有档位都成立，包括填满的 Max。
+    #    (b) 轨道全灰 = 橙色填充宽度为 0 = 停在最低档。
+    #        此时滑块贴着轨道左端，圆心 ≈ tx0 + 33
+    #        （33 = 半径 16 + 圆角内缩 17，work tx0=954 -> 987、chat tx0=980 -> 1013，
+    #         和两个模式实测的最低档读数 988 / 1013 都对得上）。
     b = img[:, :, 0].astype(int)
     r = img[:, :, 2].astype(int)
     om = ((r - b > 40) & (r > 140)).astype(np.uint8)
-    vx, vy = int(v[0]) - win[0], int(v[1]) - win[1]
-    y0, y1 = vy + SLIDER_BAND[0], vy + SLIDER_BAND[1]
-    x0, x1 = SLIDER_L - 40, SLIDER_R + 40
-    band = om[y0:y1, x0:x1]
-    ys, xs = np.where(band)
-    if len(xs) < 80:
-        return None
-    knob = x0 + int(xs.max()) - KNOB_R
-    if not (SLIDER_L + KNOB_R - 12 <= knob <= SLIDER_R - KNOB_R + 12):
-        return None
-    return {"knob": knob, "cy": vy + KNOB_DY, "win": win}
+    _yy, xx = np.where(om[top:bottom + 1, tx0:tx1 + 1])
+    if len(xx) >= 80:
+        return {"knob": tx0 + int(xx.max()) - KNOB_R, "cy": cy, "win": win,
+                "track": (tx0, tx1)}
+    return {"knob": tx0 + 33, "cy": cy, "win": win, "track": (tx0, tx1),
+            "at_min": True}
 
 
-def _effort_of(knob: int):
+def _gap_limit(writer: str) -> int:
+    """某个模式允许的最大"离档距离"。
+
+    不能用一个固定值：两个模式的档距差一倍（work 58 / chat 102），
+    读数误差也跟着差（work 实测 5~12px，chat 到过 24px）。
+    固定 14 会让 chat 每次都报"不在档上"，固定 30 又会把 work 的相邻档混起来。
+    按档距的 40% 取，两个模式都刚好。
+    """
+    px = sorted(v[1] for v in EFFORTS.get(writer, {}).values())
+    if len(px) < 2:
+        return EFFORT_GAP
+    return max(8, int(min(b - a for a, b in zip(px, px[1:])) * 0.4))
+
+
+def _effort_of(knob: int, writer: str):
     """滑块圆心 x -> 档位。返回 (key, 距离)，取最近的一档。"""
     best, bd = None, 10 ** 9
-    for k, (_name, px) in EFFORTS.items():
+    for k, (_name, px) in EFFORTS.get(writer, {}).items():
         d = abs(knob - px)
         if d < bd:
             best, bd = k, d
@@ -381,19 +473,51 @@ def _effort_of(knob: int):
 def _menu_entry_pos(s: Screen):
     """入口行（点它进模型列表）的屏幕坐标。**必须先有滑杆**。
 
-    位置跟着滑杆走：入口行在滑块圆心上方 38px（实测 825 -> 787），
-    横向取轨道中点（实测入口行中心 1067、轨道中心 1096，差 29，
-    入口行整行可点，够用）。
+    不能用固定偏移：两个模式的弹层高度不一样，入口行到滑块圆心的距离
+    工作模式是 38px、聊天模式是 59px（实测），写死一个必然点空
+    （聊天模式那次点在了入口行和滑杆之间的空白，弹层毫无反应）。
 
-    为什么不用文字模板：入口行写的是当前模型名（「GPT-6.1 Terra」→「GPT-6 Sol」），
-    切一次模型模板就废一次（实测掉到 0.71）。
+    改成扫「滑块上方第一行有文字的地方」——两个模式的入口行都是弹层里最上面那行字。
+    横向取那一行深色像素的实际范围中心，不用轨道中心：聊天模式的入口行只有
+    「高 ›」几个字、很窄，用轨道中心会点偏 43px 落在字外面。
     """
     sl = _slider(s)
     if sl is None:
         return None
     win = sl["win"]
-    cx = (SLIDER_L + SLIDER_R) // 2
-    return (win[0] + cx, win[1] + sl["cy"] + ENTRY_DY)
+    img = s.grab(win)
+    if img.size == 0:
+        return None
+    g = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    ky = sl["cy"]
+    x0, x1 = SLIDER_L - 40, SLIDER_R + 40
+    y_start = None
+    # 扫描范围 20~80px，**不能更大**：滑块上方 94px 处是芯片
+    # （工作模式 825-94=731 正好是橙钮那一行），扫进去会把芯片当入口行，
+    # 点下去等于点弹层外面，弹层直接被关掉（实测）。
+    # 范围 18~60px：入口行到滑块圆心的距离是 work 38 / chat 44，
+    # 而芯片在 78px（橙钮那一行），范围一大就会先扫到芯片，
+    # 点下去等于点弹层外面，弹层直接被关掉（实测）。
+    for dy in range(60, 18, -1):
+        y = ky - dy
+        if not (0 <= y < g.shape[0]):
+            continue
+        if int((g[y, x0:x1] < 150).sum()) >= 6:
+            y_start = y
+            break
+    if y_start is None:
+        return None
+    # 把这一行往下并成一块（字可能占 12~20px 高）
+    y_end = y_start
+    for y in range(y_start, min(y_start + 26, g.shape[0])):
+        if int((g[y, x0:x1] < 150).sum()) >= 3:
+            y_end = y
+    mid = (y_start + y_end) // 2
+    idx = np.where(g[mid, x0:x1] < 150)[0]
+    if len(idx) == 0:
+        idx = np.where(g[y_start, x0:x1] < 150)[0]
+    cx = x0 + (int(idx.min()) + int(idx.max())) // 2
+    return (win[0] + cx, win[1] + mid)
 
 
 def _layer(s: Screen, writer: str) -> str:
@@ -490,7 +614,7 @@ def close_all(s: Screen, writer: str) -> None:
 def read_effort(s: Screen, writer: str | None = None) -> dict:
     """读当前强度。会开关一次弹层（Esc 不会改设置，只关）。"""
     w = writer or read_writer(s).get("writer")
-    if w not in EFFORTS and w not in MODELS:
+    if w not in EFFORTS:
         return {"effort": "unknown", "hint": "读不出当前模式"}
     if not open_effort(s, w):
         return {"effort": "unknown", "hint": "打不开强度弹层（只在新聊天页有）"}
@@ -498,10 +622,13 @@ def read_effort(s: Screen, writer: str | None = None) -> dict:
     close_all(s, w)
     if sl is None:
         return {"effort": "unknown", "hint": "弹层里没找到滑杆"}
-    key, d = _effort_of(sl["knob"])
-    out = {"effort": key, "label": EFFORTS[key][0], "knob": sl["knob"], "off": d}
-    if d > EFFORT_GAP:
-        out["hint"] = f"滑块停在 {sl['knob']}，离最近档位（{EFFORTS[key][0]}）差 {d}px，不在档上"
+    key, d = _effort_of(sl["knob"], w)
+    gap = _gap_limit(w)
+    out = {"effort": key, "label": EFFORTS[w][key][0], "knob": sl["knob"], "off": d,
+           "tol": gap, "at_min": sl.get("at_min", False)}
+    if d > gap:
+        out["hint"] = (f"滑块停在 {sl['knob']}，离最近档位（{EFFORTS[w][key][0]}）"
+                       f"差 {d}px，不在档上")
     return out
 
 
@@ -509,31 +636,32 @@ def set_effort(s: Screen, key: str, writer: str | None = None) -> dict:
     """设强度。
 
     **用键盘方向键，不用拖。** 拖拽实测不可靠：拖 -52px 实际走 -82px（过冲），
-    而且从第二次拖动开始就不动了（连续拖同一个控件会失灵），
-    一次只能落在两档中间（实测 1072，离两边各 30px）。
+    而且连续拖同一个控件从第二次开始就不动了，一次只能落在两档中间
+    （实测 1072，离两边各 30px）。
 
     方向键是精确的：点一下滑块让它拿到焦点，然后
       · 先按左键到底（多按两下确保归零）
       · 再按右键走 idx 次
-    每按一次正好一档（实测 high 1096 -> xhigh 1154 -> Max 1211，间距 58）。
+    每按一次正好一档（work: high 1096 -> xhigh 1154 -> Max 1211，间距 58；
+    chat: 1013 -> 1115 -> 1217，间距 102）。
 
-    读数（橙色右端-16）比真实圆心系统偏小 6~12px，但对所有档位一样偏，
-    不影响"取最近档"。
+    档位表按模式分开：work 5 档，chat 3 档。传错模式的档位名会直接报 bad_arg。
     """
-    if key not in EFFORTS:
-        return {"ok": False, "stage": "bad_arg", "want": key,
-                "options": {k: v[0] for k, v in EFFORTS.items()}}
     w = writer or read_writer(s).get("writer")
-    if w not in MODELS:
+    if w not in EFFORTS:
         return {"ok": False, "stage": "no_writer",
                 "hint": "读不出当前是聊天还是工作，先用 --writer 定一下"}
+    table = EFFORTS[w]
+    if key not in table:
+        return {"ok": False, "stage": "bad_arg", "writer": w, "want": key,
+                "options": {k: v[0] for k, v in table.items()}}
     if not open_effort(s, w):
         return {"ok": False, "stage": "menu_not_open", "writer": w}
 
     sl = _slider(s)
     if sl is None:
         return {"ok": False, "stage": "no_slider"}
-    before, _bd = _effort_of(sl["knob"])
+    before, _bd = _effort_of(sl["knob"], w)
 
     # 点滑块拿焦点（点击会让它跳到点击处，无所谓——紧接着就归零）
     win = sl["win"]
@@ -542,29 +670,31 @@ def set_effort(s: Screen, key: str, writer: str | None = None) -> dict:
         return {"ok": False, "stage": "click_blocked", "detail": why, "before": before}
     time.sleep(0.6)
 
+    order = effort_order(w)
     # 归零：按左键到底，多按两下
-    for _ in range(len(EFFORT_ORDER) + 1):
+    for _ in range(len(order) + 1):
         s.press("left")
         time.sleep(0.35)
     # 往上走到目标档
-    idx = EFFORT_ORDER.index(key)
+    idx = order.index(key)
     for _ in range(idx):
         s.press("right")
         time.sleep(0.35)
     time.sleep(0.4)
 
     after_sl = _slider(s)
-    after, ad = _effort_of(after_sl["knob"]) if after_sl else (None, None)
+    after, ad = _effort_of(after_sl["knob"], w) if after_sl else (None, None)
     knob = after_sl["knob"] if after_sl else None
     close_all(s, w)                        # Esc 才会让强度生效
     time.sleep(0.5)
     # 只要求"最近档 == 想要的"不够：滑块可能停在两档正中间，那时 UI 其实没定下来。
-    on_target = after == key and ad is not None and ad <= EFFORT_GAP
+    on_target = after == key and ad is not None and ad <= _gap_limit(w)
     out = {"ok": on_target, "stage": "done" if on_target else "unverified",
            "before": before, "after": after, "want": key, "knob": knob, "off": ad,
            "by": "keyboard"}
     if not on_target:
-        out["hint"] = f"滑块停在 {knob}，离「{EFFORTS[key][0]}」{ad}px，超出容差 {EFFORT_GAP}"
+        out["hint"] = (f"滑块停在 {knob}，离「{table[key][0]}」{ad}px，"
+                       f"超出容差 {_gap_limit(w)}")
     return out
 
 
@@ -791,13 +921,16 @@ def main() -> int:
         print("  --idle 2 / --wait 120 / --force   你正在用电脑时是否等待")
         for wr, items in MODELS.items():
             print(f"    [{wr}] " + ", ".join(f"{k}({d})" for k, (d, _t) in items.items()))
-        print("    强度档位：" + ", ".join(f"{k}({v[0]})" for k, v in EFFORTS.items()))
+        for wr, tab in EFFORTS.items():
+            print(f"    [{wr}] 强度 " + ", ".join(f"{k}({v[0]})" for k, v in tab.items()))
         return 2
     if want_writer is not None and want_writer not in TAB_WORDS:
         print(f"没有这个模式：{want_writer}；可选 {', '.join(TAB_WORDS)}")
         return 2
-    if want_effort is not None and want_effort not in EFFORTS:
-        print(f"没有这个强度：{want_effort}；可选 {', '.join(EFFORTS)}")
+    if want_effort is not None and not any(want_effort in v for v in EFFORTS.values()):
+        print(f"没有这个强度：{want_effort}")
+        for wr, tab in EFFORTS.items():
+            print(f"  [{wr}] " + ", ".join(f"{k}({v[0]})" for k, v in tab.items()))
         return 2
     if want_model is not None:
         known = set(MODELS["chat"]) | set(MODELS["work"])
