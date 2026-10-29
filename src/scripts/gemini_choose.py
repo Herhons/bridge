@@ -28,6 +28,7 @@ if _SRC not in sys.path:
     sys.path.insert(0, _SRC)
 
 from qi import Library, Screen  # noqa: E402
+from qi import guard  # noqa: E402
 from qi.choose import Chooser, cli, open_menu, read_writer  # noqa: E402
 
 CFG = Chooser(
@@ -51,29 +52,34 @@ THINK = {"low": ("低 快速高效", "gem_tk_low"),
          "mid": ("中 深度适中", "gem_tk_mid"),
          "high": ("高 超级详尽", "gem_tk_high")}
 THINK_ENTRY = "gem_tk_entry"
-# 模型芯片在输入框锚点右边固定的位置（输入框有最大宽度且居中，所以这个偏移稳定）
-MENU_DX, MENU_DY = 600, -3
+# 旧做法（对输入框 "+" 用固定偏移 600）已废弃，见 MIC_TO_CARET 的注释。
 
 
 def _items_visible(s) -> bool:
     return any(s.find(f"gem_item_{k}", threshold=0.85) is not None for k in CFG.options)
 
 
-def _open_model_menu(s) -> bool:
-    """用输入框锚点 + 偏移打开模型菜单。
+# 芯片右端的下拉箭头相对**麦克风**的偏移。
+# 不能对输入框锚点用固定偏移：芯片左边界随模型名长短变（Flash-Lite 宽、Pro 短），
+# 固定偏移在名字短的时候会点到空白，表现为"菜单打不开"。
+# 麦克风是右对齐的，位置不变，用它当基准稳。
+MIC_TO_CARET = (-68, 0)
 
-    不用芯片图定位：芯片会因聚焦（蓝框）/悬停变样式，模板经常对不上。
-    锚点 gem_composer 一直是 1.000，稳定得多。
+
+def _open_model_menu(s) -> bool:
+    """用麦克风（右对齐，位置固定）作基准，点芯片右端的下拉箭头。
+
+    输入框空时右侧是麦克风；有文字时是发送键，两者同槽位，所以依次兜底。
     """
     if _items_visible(s):
         return True
     s.press("esc")
-    time.sleep(0.25)
-    a = s.find("gem_composer", threshold=0.85)
-    if a is None:
+    time.sleep(0.3)
+    base = s.find("gem_mic", threshold=0.85) or s.find("gem_send_on", threshold=0.85)
+    if base is None:
         return False
-    s.click(a, offset=(MENU_DX, MENU_DY))
-    time.sleep(1.0)
+    s.click(base, offset=MIC_TO_CARET)
+    time.sleep(1.1)
     return _items_visible(s)
 
 
@@ -175,12 +181,15 @@ def set_think(s, key: str) -> dict:
 
 
 REQUIRED = ([f"gem_item_{k}" for k in CFG.options]
+            + ["gem_mic"]
             + list(CFG.writer_tabs)
             + [THINK_ENTRY] + [t for _d, t in THINK.values()])
 
 
 def main() -> int:
-    argv = sys.argv[1:]
+    need, wait, force, argv = guard.parse_guard_args(list(sys.argv[1:]))
+    if not guard.guard(need, wait, force):
+        return 4
     # --think 走单独的流程（子菜单维度），其余交给通用 cli
     if "--model" in argv:
         i = argv.index("--model")
@@ -195,7 +204,7 @@ def main() -> int:
         if "--tab" in rest:
             j = rest.index("--tab")
             if j + 1 < len(rest):
-                sc.hotkey("ctrl", rest[j + 1]); time.sleep(1.2)
+                sc.hotkey("ctrl", rest[j + 1]); time.sleep(1.8)
         r = set_model(sc, key)
         print(json.dumps(r, ensure_ascii=False))
         return 0 if r.get("ok") else 1
@@ -215,7 +224,7 @@ def main() -> int:
         if "--tab" in argv:
             j = argv.index("--tab")
             if j + 1 < len(argv):
-                sc.hotkey("ctrl", argv[j + 1]); time.sleep(1.2)
+                sc.hotkey("ctrl", argv[j + 1]); time.sleep(1.8)
         # 读状态不改页面。模式按钮只在新对话页出现，会话页里读不到是正常的。
         w = read_writer(sc, CFG).get("writer")
         out = {"writer": w}
@@ -233,7 +242,7 @@ def main() -> int:
         if "--tab" in argv:
             j = argv.index("--tab")
             if j + 1 < len(argv):
-                sc.hotkey("ctrl", argv[j + 1]); time.sleep(1.2)
+                sc.hotkey("ctrl", argv[j + 1]); time.sleep(1.8)
         from qi.flow import Site, _open_new_chat
         site = Site(name="gemini", title_hint=CFG.title_hint, composer="gem_composer",
                     send="gem_send_on", actions="gem_actions", copy="gem_copy",

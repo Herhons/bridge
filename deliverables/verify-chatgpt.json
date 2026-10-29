@@ -1,0 +1,286 @@
+[
+  {
+    "kind": "writer",
+    "target": "chat",
+    "rc": 0,
+    "ok": true,
+    "detail": "after=chat",
+    "sec": 5.5,
+    "raw": {
+      "ok": true,
+      "stage": "done",
+      "before": "work",
+      "after": "chat",
+      "_sec": 5.5
+    }
+  },
+  {
+    "kind": "model",
+    "target": "chat+gpt6",
+    "rc": 0,
+    "ok": true,
+    "detail": "after=gpt6",
+    "sec": 28.5,
+    "raw": {
+      "ok": true,
+      "stage": "done",
+      "before": "gpt56",
+      "after": "gpt6",
+      "_sec": 28.5
+    }
+  },
+  {
+    "kind": "model",
+    "target": "chat+gpt56",
+    "rc": 0,
+    "ok": true,
+    "detail": "after=gpt56",
+    "sec": 28.4,
+    "raw": {
+      "ok": true,
+      "stage": "done",
+      "before": "gpt6",
+      "after": "gpt56",
+      "_sec": 28.4
+    }
+  },
+  {
+    "kind": "writer",
+    "target": "work",
+    "rc": 0,
+    "ok": true,
+    "detail": "after=work",
+    "sec": 7.1,
+    "raw": {
+      "ok": true,
+      "stage": "done",
+      "before": "chat",
+      "after": "work",
+      "_sec": 7.1
+    }
+  },
+  {
+    "kind": "model",
+    "target": "work+default",
+    "rc": 0,
+    "ok": true,
+    "detail": "after=default",
+    "sec": 13.3,
+    "raw": {
+      "ok": true,
+      "stage": "already",
+      "before": "default",
+      "after": "default",
+      "_sec": 13.3
+    }
+  },
+  {
+    "kind": "model",
+    "target": "work+gpt61_sol",
+    "rc": 1,
+    "ok": false,
+    "detail": "after=None",
+    "sec": 3.8,
+    "raw": {
+      "ok": false,
+      "stage": "bad_arg",
+      "want": "gpt61_sol",
+      "writer": "unknown",
+      "options": [],
+      "hint": "当前是 unknown 模式，模型名要从这个列表里选",
+      "_sec": 3.8
+    }
+  },
+  {
+    "kind": "model",
+    "target": "work+gpt61_terra",
+    "rc": 1,
+    "ok": false,
+    "detail": "after=None",
+    "sec": 2.2,
+    "raw": {
+      "ok": false,
+      "stage": "bad_arg",
+      "want": "gpt61_terra",
+      "writer": "unknown",
+      "options": [],
+      "hint": "当前是 unknown 模式，模型名要从这个列表里选",
+      "_sec": 2.2
+    }
+  },
+  {
+    "kind": "model",
+    "target": "work+gpt6_astra",
+    "rc": 1,
+    "ok": false,
+    "detail": "after=None",
+    "sec": 2.2,
+    "raw": {
+      "ok": false,
+      "stage": "bad_arg",
+      "want": "gpt6_astra",
+      "writer": "unknown",
+      "options": [],
+      "hint": "当前是 unknown 模式，模型名要从这个列表里选",
+      "_sec": 2.2
+    }
+  },
+  {
+    "kind": "model",
+    "target": "work+gpt6_sol",
+    "rc": 1,
+    "ok": false,
+    "detail": "after=None",
+    "sec": 2.2,
+    "raw": {
+      "ok": false,
+      "stage": "bad_arg",
+      "want": "gpt6_sol",
+      "writer": "unknown",
+      "options": [],
+      "hint": "当前是 unknown 模式，模型名要从这个列表里选",
+      "_sec": 2.2
+    }
+  },
+  {
+    "kind": "model",
+    "target": "work+gpt6_luna",
+    "rc": 1,
+    "ok": false,
+    "detail": "after=None",
+    "sec": 2.2,
+    "raw": {
+      "ok": false,
+      "stage": "bad_arg",
+      "want": "gpt6_luna",
+      "writer": "unknown",
+      "options": [],
+      "hint": "当前是 unknown 模式，模型名要从这个列表里选",
+      "_sec": 2.2
+    }
+  },
+  {
+    "kind": "model",
+    "target": "work+gpt56_sol",
+    "rc": 1,
+    "ok": false,
+    "detail": "after=None",
+    "sec": 2.2,
+    "raw": {
+      "ok": false,
+      "stage": "bad_arg",
+      "want": "gpt56_sol",
+      "writer": "unknown",
+      "options": [],
+      "hint": "当前是 unknown 模式，模型名要从这个列表里选",
+      "_sec": 2.2
+    }
+  },
+  {
+    "kind": "model",
+    "target": "work+gpt56_terra",
+    "rc": 1,
+    "ok": false,
+    "detail": "after=None",
+    "sec": 2.2,
+    "raw": {
+      "ok": false,
+      "stage": "bad_arg",
+      "want": "gpt56_terra",
+      "writer": "unknown",
+      "options": [],
+      "hint": "当前是 unknown 模式，模型名要从这个列表里选",
+      "_sec": 2.2
+    }
+  },
+  {
+    "kind": "model",
+    "target": "work+gpt56_luna",
+    "rc": 1,
+    "ok": false,
+    "detail": "after=None",
+    "sec": 2.2,
+    "raw": {
+      "ok": false,
+      "stage": "bad_arg",
+      "want": "gpt56_luna",
+      "writer": "unknown",
+      "options": [],
+      "hint": "当前是 unknown 模式，模型名要从这个列表里选",
+      "_sec": 2.2
+    }
+  },
+  {
+    "kind": "effort",
+    "target": "instant",
+    "rc": 1,
+    "ok": false,
+    "detail": "after=None",
+    "sec": 2.9,
+    "raw": {
+      "ok": false,
+      "stage": "unreadable",
+      "hint": "当前芯片和 instant/mid/high 三张图都对不上（芯片形态或主题变了，需重截）",
+      "_sec": 2.9
+    }
+  },
+  {
+    "kind": "effort",
+    "target": "mid",
+    "rc": 1,
+    "ok": false,
+    "detail": "after=None",
+    "sec": 2.8,
+    "raw": {
+      "ok": false,
+      "stage": "unreadable",
+      "hint": "当前芯片和 instant/mid/high 三张图都对不上（芯片形态或主题变了，需重截）",
+      "_sec": 2.8
+    }
+  },
+  {
+    "kind": "random",
+    "target": "work+default",
+    "rc": 0,
+    "ok": true,
+    "detail": "writer=work, after=default",
+    "sec": 11.8,
+    "raw": {
+      "ok": true,
+      "stage": "already",
+      "before": "default",
+      "after": "default",
+      "_sec": 11.8
+    }
+  },
+  {
+    "kind": "random",
+    "target": "work",
+    "rc": 0,
+    "ok": true,
+    "detail": "after=work",
+    "sec": 6.2,
+    "raw": {
+      "ok": true,
+      "stage": "already",
+      "before": "work",
+      "after": "work",
+      "_sec": 6.2
+    }
+  },
+  {
+    "kind": "random",
+    "target": "chat",
+    "rc": 0,
+    "ok": true,
+    "detail": "after=chat",
+    "sec": 5.4,
+    "raw": {
+      "ok": true,
+      "stage": "done",
+      "before": "work",
+      "after": "chat",
+      "_sec": 5.4
+    }
+  }
+]

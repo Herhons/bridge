@@ -27,6 +27,7 @@ if _SRC not in sys.path:
     sys.path.insert(0, _SRC)
 
 from qi import Library, Screen  # noqa: E402
+from qi import guard  # noqa: E402
 
 # 每个开关一张定位图（截"关"的样子即可，两态都能定位到）
 TEMPLATES = {"think": "ds_think", "search": "ds_search"}
@@ -74,7 +75,7 @@ def set_state(s: Screen, kind: str, want: str) -> dict:
 
 
 def _parse(argv: list[str]) -> dict:
-    o = {"list": False, "think": None, "search": None, "bad": [], "help": False}
+    o = {"list": False, "think": None, "search": None, "tab": None, "bad": [], "help": False}
     i = 0
     while i < len(argv):
         a = argv[i]
@@ -93,6 +94,15 @@ def _parse(argv: list[str]) -> dict:
                     o[key] = "off"
                 else:
                     o["bad"].append(f"{a} 的值只能是 on/off，收到 {v!r}")
+        elif a == "--tab":
+            if i + 1 >= len(argv):
+                o["bad"].append("--tab 缺值")
+            else:
+                i += 1
+                try:
+                    o["tab"] = int(argv[i])
+                except ValueError:
+                    o["bad"].append(f"--tab 要数字，收到 {argv[i]!r}")
         elif a in ("-h", "--help"):
             o["help"] = True
         else:
@@ -106,12 +116,14 @@ def usage(name: str) -> None:
     print(f"  python {name} --list                    # 读当前两个开关（只读）")
     print(f"  python {name} --think on|off")
     print(f"  python {name} --search on|off")
+    print(f"  python {name} --list --tab N            # 先按 Ctrl+N 切标签页")
     print("  （发提问请用 deepseek_use.py）")
 
 
 def main() -> int:
     name = os.path.basename(__file__)
-    o = _parse(sys.argv[1:])
+    need, wait, force, rest = guard.parse_guard_args(list(sys.argv[1:]))
+    o = _parse(rest)
     if o.get("help"):
         usage(name)
         return 0
@@ -125,7 +137,15 @@ def main() -> int:
     if lib.missing(REQUIRED):
         return 3
 
+    if not guard.guard(need, wait, force):
+        return 4
     s = Screen()
+    if not s.bring_to_front("Google Chrome", on_secondary=True):
+        print("找不到浏览器窗口")
+        return 1
+    if o.get("tab"):
+        s.hotkey("ctrl", str(o["tab"]))
+        time.sleep(1.8)
     if o["list"]:
         print(json.dumps(list_state(s), ensure_ascii=False))
         return 0

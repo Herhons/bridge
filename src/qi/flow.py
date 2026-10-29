@@ -12,6 +12,7 @@ import sys
 import time
 from dataclasses import dataclass
 
+from . import guard
 from .screen import Match, Screen
 
 
@@ -147,7 +148,7 @@ def ask(site: Site, prompt: str, *, mode: str = "new", timeout: float = 180.0,
                 "hint": f"没找到标题含 {site.title_hint!r} 的窗口"}
     if tab:
         s.hotkey("ctrl", str(tab))
-        time.sleep(1.2)
+        time.sleep(1.8)
 
     # 1. 新对话
     if mode == "new":
@@ -188,7 +189,10 @@ def ask(site: Site, prompt: str, *, mode: str = "new", timeout: float = 180.0,
         return {"ok": False, "stage": "write_not_visible", "elapsed": round(time.time() - t0, 1),
                 "hint": "输入后发送键没变成可用态：焦点没进输入框，或键被拦"}
 
-    # 3. 提交：只点发送键，不按 Enter
+    # 3. 提交前再确认一次：写字的这几秒里你可能开始用电脑了
+    if guard.user_active(0.6):
+        return {"ok": False, "stage": "user_took_over", "elapsed": round(time.time() - t0, 1),
+                "hint": "检测到你在用电脑，已中止（没点发送）。稍后重跑即可。"}
     s.click(send)
 
     # 4. 等生成结束
@@ -240,6 +244,7 @@ def ask(site: Site, prompt: str, *, mode: str = "new", timeout: float = 180.0,
 
 
 def cli(site: Site, argv: list[str], *, prepare=None, extra_help: str = "") -> int:
+    need, wait, force, argv = guard.parse_guard_args(list(argv))
     mode, timeout, words, bad, tab = "new", 180.0, [], [], None
     i = 0
     while i < len(argv):
@@ -281,10 +286,15 @@ def cli(site: Site, argv: list[str], *, prepare=None, extra_help: str = "") -> i
         print(f'用法: python {name} "你的提问" [--new|--continue] [--timeout 180] [--tab N]')
         print("  --new       先点新对话再发（默认）")
         print("  --continue  直接发在当前对话里")
+        print("  --idle 2    你连续 2 秒没动键鼠才开跑（默认 2）")
+        print("  --wait 120  最多等你 120 秒（默认 120），等不到就放弃")
+        print("  --force     不等，立刻跑（会抢焦点）")
         if extra_help:
             print(extra_help)
         return 2
 
+    if not guard.guard(need, wait, force):
+        return 4
     result = ask(site, prompt, mode=mode, timeout=timeout, tab=tab, prepare=prepare)
     if result.get("ok"):
         print("=== 回答 ===")

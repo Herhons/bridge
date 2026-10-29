@@ -15,6 +15,7 @@ import json
 import time
 from dataclasses import dataclass, field
 
+from . import guard
 from .screen import Screen
 
 
@@ -45,7 +46,13 @@ def read_writer(s: Screen, cfg: Chooser) -> dict:
 
     if not cfg.writer_tabs:
         return {"writer": None}
-    loc = s.find(cfg.writer_tabs[0], threshold=0.62)   # 只借它定位那一块
+    # 定位用任意一张：两态的整组外观可能差很多（ChatGPT 聊天是灰底、工作是白胶囊+黑边框），
+    # 只认第一张会在一态下直接归零（实测：chat 模板在工作态连 0.4 都不到）。
+    loc = None
+    for nm in cfg.writer_tabs:
+        loc = s.find(nm, threshold=0.62)
+        if loc is not None:
+            break
     if loc is None:
         return {"writer": "unknown", "hint": "找不到模式按钮组：可能不在新对话页，或换了主题/缩放"}
 
@@ -53,20 +60,26 @@ def read_writer(s: Screen, cfg: Chooser) -> dict:
     pad = 4
     big = s.grab((loc.x - pad, loc.y - pad, loc.w + 2 * pad, loc.h + 2 * pad))
     best, best_d, scores = None, 1e9, {}
-    for i, name in enumerate(cfg.writer_tabs):
-        tpl = cv2.imread(str(s.library / (name if name.endswith(".png") else name + ".png")))
-        if tpl is None or tpl.shape[0] > big.shape[0] or tpl.shape[1] > big.shape[1]:
-            continue
-        d_best = 1e9
-        for dy in range(0, big.shape[0] - tpl.shape[0] + 1):
-            for dx in range(0, big.shape[1] - tpl.shape[1] + 1):
-                patch = big[dy:dy + tpl.shape[0], dx:dx + tpl.shape[1]]
-                d = float(np.abs(patch.astype(int) - tpl.astype(int)).mean())
-                if d < d_best:
-                    d_best = d
-        scores[name] = round(d_best, 2)
-        if d_best < best_d:
-            best, best_d = i, d_best
+    for attempt in range(3):
+        best, best_d, scores = None, 1e9, {}
+        for i, name in enumerate(cfg.writer_tabs):
+            tpl = cv2.imread(str(s.library / (name if name.endswith(".png") else name + ".png")))
+            if tpl is None or tpl.shape[0] > big.shape[0] or tpl.shape[1] > big.shape[1]:
+                continue
+            d_best = 1e9
+            for dy in range(0, big.shape[0] - tpl.shape[0] + 1):
+                for dx in range(0, big.shape[1] - tpl.shape[1] + 1):
+                    patch = big[dy:dy + tpl.shape[0], dx:dx + tpl.shape[1]]
+                    d = float(np.abs(patch.astype(int) - tpl.astype(int)).mean())
+                    if d < d_best:
+                        d_best = d
+            scores[name] = round(d_best, 2)
+            if d_best < best_d:
+                best, best_d = i, d_best
+        if best_d <= 5.0:
+            break                       # 够干净，收工
+        time.sleep(0.8)                 # 否则可能是切换动画的过渡帧，等一帧再算
+        big = s.grab((loc.x - pad, loc.y - pad, loc.w + 2 * pad, loc.h + 2 * pad))
     if best is None or best_d > 12.0:
         return {"writer": "unknown", "diff": scores,
                 "hint": "两种模式都差得远：可能换了主题/缩放，需要重截整组图"}
@@ -90,10 +103,18 @@ def choose_writer(s: Screen, cfg: Chooser, key: str) -> dict:
     x = x0 + w * (2 * idx + 1) // (2 * n)
     y = y0 + h // 2
     s.click_xy(x, y)
-    time.sleep(1.5)
-    s.move_to(x - 300, max(0, y - 400))
-    time.sleep(0.4)
-    after = read_writer(s, cfg)
+
+    # 点完不能固定等 1.5s 就读：切换有动画，会读到旧态（实测 work 被读成 chat）。
+    # 改成轮询——最多 5s，读到目标值就返回。
+    after = cur
+    deadline = time.time() + 5.0
+    while time.time() < deadline:
+        time.sleep(0.6)
+        s.move_to(x - 300, max(0, y - 400))
+        time.sleep(0.15)
+        after = read_writer(s, cfg)
+        if after["writer"] == key:
+            break
     ok = after["writer"] == key
     return {"ok": ok, "stage": "done" if ok else "unverified",
             "before": cur["writer"], "after": after["writer"]}
@@ -181,6 +202,7 @@ def choose(s: Screen, cfg: Chooser, key: str) -> dict:
 
 # ------------------------------------------------------------------ CLI
 def cli(cfg: Chooser, argv: list[str]) -> int:
+    need, wait, force, argv = guard.parse_guard_args(list(argv))
     name = f"{cfg.name}_choose.py"
     do_list, want, bad, help_, tab, writer = False, None, [], False, None, None
     i = 0
@@ -223,6 +245,7 @@ def cli(cfg: Chooser, argv: list[str]) -> int:
             print(f"  python {name} --writer <{'|'.join(cfg.writers)}> [--model X]")
             print("  换模式会换掉整套模型列表，所以 --writer 先于 --model 生效")
         print("  --tab N   先按 Ctrl+N 切到第 N 个标签页（左边数）")
+        print("  --idle 2 / --wait 120 / --force   你正在用电脑时是否等待")
         for k, desc in cfg.options.items():
             mark = "" if k in cfg.has_chip else "  （只能设，不能读）"
             print(f"    {k:12} {desc}{mark}")
@@ -239,13 +262,15 @@ def cli(cfg: Chooser, argv: list[str]) -> int:
         print("可选：", ", ".join(cfg.writers))
         return 2
 
+    if not guard.guard(need, wait, force):
+        return 4
     s = Screen()
     if not s.bring_to_front(cfg.title_hint, on_secondary=cfg.on_secondary):
         print("找不到浏览器窗口")
         return 1
     if tab:
         s.hotkey("ctrl", str(tab))
-        time.sleep(1.2)
+        time.sleep(1.8)
 
     if do_list:
         out = dict(read_current(s, cfg))

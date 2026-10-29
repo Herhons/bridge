@@ -30,6 +30,7 @@ if _SRC not in sys.path:
 
 from qi import Library, Screen  # noqa: E402
 from qi.choose import Chooser, choose_writer, read_writer  # noqa: E402
+from qi import guard  # noqa: E402
 from qi.flow import Site, _open_new_chat  # noqa: E402
 
 # 模式按钮只在新对话页出现，所以动 writer 之前先确保在新对话页
@@ -54,7 +55,9 @@ EFFORTS = {
     "mid": {"chip": "gpt_chip_mid", "frac": 0.50, "desc": "中"},
     "high": {"chip": "gpt_chip_high", "frac": 0.78, "desc": "高"},
 }
-CHIP_DX, CHIP_DY = -70, -3
+# 芯片左边界随内容变宽变窄（"选择推理强度" / "GPT-6.1 Sol 轻度"），
+# 但**右端**是固定的，所以锚在麦克风上、点它左边 40px（落在芯片右端/箭头上）。
+CHIP_DX, CHIP_DY = -40, -3
 # 弹层里「选择模型」那一行，相对语音键的偏移（实测）
 MENU_MODEL_DX, MENU_MODEL_DY = -75, 41
 # 模型按写入器模式分开：两种模式的列表完全不同（聊天 2 项 / 工作 9 项）
@@ -64,15 +67,15 @@ MODELS = {
         "gpt56": ("GPT-5.6 Sol", "gpt_model_gpt56"),
     },
     "work": {
-        "default": ("默认（推荐模型集）", "gpt_wm_default"),
-        "gpt61_sol": ("GPT-6.1 Sol", "gpt_wm_gpt61_sol"),
-        "gpt61_terra": ("GPT-6.1 Terra", "gpt_wm_gpt61_terra"),
-        "gpt6_astra": ("GPT-6 Astra", "gpt_wm_gpt6_astra"),
-        "gpt6_sol": ("GPT-6 Sol", "gpt_wm_gpt6_sol"),
-        "gpt6_luna": ("GPT-6 Luna", "gpt_wm_gpt6_luna"),
-        "gpt56_sol": ("GPT-5.6 Sol", "gpt_wm_gpt56_sol"),
-        "gpt56_terra": ("GPT-5.6 Terra", "gpt_wm_gpt56_terra"),
-        "gpt56_luna": ("GPT-5.6 Luna", "gpt_wm_gpt56_luna"),
+        "default": ("默认（推荐模型集）", "gpt_wm2_default"),
+        "gpt61_sol": ("GPT-6.1 Sol", "gpt_wm2_gpt61_sol"),
+        "gpt61_terra": ("GPT-6.1 Terra", "gpt_wm2_gpt61_terra"),
+        "gpt6_astra": ("GPT-6 Astra", "gpt_wm2_gpt6_astra"),
+        "gpt6_sol": ("GPT-6 Sol", "gpt_wm2_gpt6_sol"),
+        "gpt6_luna": ("GPT-6 Luna", "gpt_wm2_gpt6_luna"),
+        "gpt56_sol": ("GPT-5.6 Sol", "gpt_wm2_gpt56_sol"),
+        "gpt56_terra": ("GPT-5.6 Terra", "gpt_wm2_gpt56_terra"),
+        "gpt56_luna": ("GPT-5.6 Luna", "gpt_wm2_gpt56_luna"),
     },
 }
 ALL_MODEL_KEYS = {k: v[0] for m in MODELS.values() for k, v in m.items()}
@@ -161,12 +164,24 @@ def _models(writer: str) -> dict:
 
 
 def _items_visible(s: Screen, writer: str) -> bool:
-    return any(s.find(tpl, threshold=0.80) is not None for _n, tpl in _models(writer).values())
+    """列表开着吗？
+
+    不能只凭"某一个模型模板命中"：页面上别处也会出现"默认"这类词，会误判
+    （实测：误判成已开 → 跳过打开 → 后面全盘读空）。
+    判据改成：找到勾，或至少两项模型标题同时命中。
+    """
+    if s.find("gpt_check", threshold=0.85) is not None:
+        return True
+    n = sum(1 for _n, tpl in _models(writer).values() if s.find(tpl, threshold=0.85) is not None)
+    return n >= 2
 
 
 def _open_model_list(s: Screen, writer: str) -> bool:
-    """点开"选择模型"那一层。
+    """点开模型列表。
 
+    两种模式的弹层结构不一样，所以"模型入口"要试两个偏移：
+      聊天：芯片 → 弹层里的「选择模型」一行
+      工作：芯片 → 弹层里的「GPT-x.x Xxx ›」一行（芯片上写的是"选择推理强度"，不是模型名）
     先判状态：弹层已经开着时再点芯片会把它关掉（实测踩过）。
     """
     if _items_visible(s, writer):
@@ -174,20 +189,26 @@ def _open_model_list(s: Screen, writer: str) -> bool:
     v = _voice_center(s)
     if v is None:
         return False
-    s.press("esc")
-    time.sleep(0.35)
-    s.click_xy(v[0] + CHIP_DX, v[1] + CHIP_DY)
-    time.sleep(0.9)
-    if _items_visible(s, writer):
-        return True
-    s.click_xy(v[0] + MENU_MODEL_DX, v[1] + MENU_MODEL_DY)
-    time.sleep(0.9)
-    return _items_visible(s, writer)
+    # 两种模式的"模型入口"位置不同，按模式选，不要盲试两个——
+    # 盲试时先点错位置会碰到滑杆，把弹层状态搞乱（实测）。
+    dx, dy = (-100, 36) if writer == "work" else (MENU_MODEL_DX, MENU_MODEL_DY)
+    for _ in range(2):
+        s.press("esc")
+        time.sleep(0.35)
+        s.click_xy(v[0] + CHIP_DX, v[1] + CHIP_DY)
+        time.sleep(0.9)
+        if _items_visible(s, writer):
+            return True
+        s.click_xy(v[0] + dx, v[1] + dy)
+        time.sleep(1.0)
+        if _items_visible(s, writer):
+            return True
+    return False
 
 
 def _find_item(s: Screen, writer: str, tpl: str, scroll: bool = True):
     """找模型项；找不到就往下滚再找（工作模式有 9 项，一屏放不下）。"""
-    m = s.find(tpl, threshold=0.80)
+    m = s.find(tpl, threshold=0.85)
     if m is not None or not scroll:
         return m
     import ctypes
@@ -195,7 +216,7 @@ def _find_item(s: Screen, writer: str, tpl: str, scroll: bool = True):
     # 滚轮滚的是鼠标底下那个东西：先把鼠标移到菜单里，否则滚的是整个页面
     anchor = None
     for _n, t in _models(writer).values():
-        anchor = s.find(t, threshold=0.80)
+        anchor = s.find(t, threshold=0.85)
         if anchor is not None:
             break
     if anchor is not None:
@@ -205,16 +226,18 @@ def _find_item(s: Screen, writer: str, tpl: str, scroll: bool = True):
     for _ in range(3):
         ctypes.windll.user32.mouse_event(0x0800, 0, 0, -120, 0)   # wheel down
         time.sleep(0.45)
-        m = s.find(tpl, threshold=0.80)
+        m = s.find(tpl, threshold=0.85)
         if m is not None:
             return m
     return None
 
 
 def read_model(s: Screen, writer: str) -> dict:
-    """读当前模型：看哪一行行尾有勾。
+    """读当前模型：找那个勾，看它离哪一行最近。
 
-    勾上时行尾 50px 内有 ~14 个深色像素，没勾是 0。
+    不能用"数深色像素"：工作模式是白底浅色主题，文字本身就是深色，
+    数出来的是字而不是勾（实测把 GPT-6 Astra 误判成选中，而实际是 GPT-6.1 Terra）。
+    勾是固定形状的小图标，用模板找最稳，深浅主题都能用。
     """
     models = _models(writer)
     if not models:
@@ -223,19 +246,24 @@ def read_model(s: Screen, writer: str) -> dict:
         time.sleep(0.5)
         if not _open_model_list(s, writer):
             return {"model": "unknown", "hint": "打不开模型列表"}
-    ink = {}
-    for k, (_desc, tpl) in models.items():
-        m = s.find(tpl, threshold=0.80)
-        if m is not None:
-            band = s.grab((m.x, m.y, m.w, m.h))[:, -50:]
-            g = cv2.cvtColor(band, cv2.COLOR_BGR2GRAY)
-            ink[k] = int((g < 120).sum())
+
+    chk = s.find("gpt_check", threshold=0.85)
+    best, best_d, dists = None, 1e9, {}
+    if chk is not None:
+        cy = chk.center[1]
+        for k, (_d, tpl) in models.items():
+            m = s.find(tpl, threshold=0.85)
+            if m is None:
+                continue
+            d = abs(m.center[1] - cy)
+            dists[k] = int(d)
+            if d < best_d:
+                best, best_d = k, d
     s.press("esc")
     time.sleep(0.3)
-    if not ink:
-        return {"model": "unknown", "hint": "模型项一个都没定位到"}
-    best = max(ink, key=ink.get)
-    return {"model": best if ink[best] > 5 else "unknown", "ink": ink}
+    if best is None or best_d > 20:
+        return {"model": "unknown", "dist": dists, "check_found": chk is not None}
+    return {"model": best, "dist": dists}
 
 
 def set_model(s: Screen, key: str) -> dict:
@@ -290,13 +318,100 @@ def set_effort(s: Screen, key: str) -> dict:
             "before": cur["effort"], "after": after["effort"]}
 
 
+# 模式按钮组相对窗口左上角的横向范围是固定的，**纵向会移动**（实测两次差 22px），
+# 所以 y 每次现扫，不能写死。
+TABS_DX, TABS_W, TABS_H = 612, 234, 30
+TABS_SCAN_DY, TABS_SCAN_H = 110, 110
+
+
+def _tabs_box(s: Screen, win) -> tuple[int, int, int, int] | None:
+    """在窗口顶部 150px 内扫出按钮组那一行，返回外扩后的框。"""
+    x0, y0 = win[0] + TABS_DX, win[1] + TABS_SCAN_DY
+    img = s.grab((x0, y0, TABS_W, TABS_SCAN_H))
+    if img.size == 0:
+        return None
+    g = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    ink = (g < 120).mean(axis=1)
+    segs, start = [], None
+    for i, v in enumerate(ink):
+        if v > 0.02 and start is None:
+            start = i
+        elif v <= 0.02 and start is not None:
+            segs.append((start, i))
+            start = None
+    if start is not None:
+        segs.append((start, len(ink)))
+    if not segs:
+        return None
+    top, bot = segs[-1]        # 最靠下的一段＝按钮文字行（上方是书签栏残留，不去碰）
+    cy = y0 + (top + bot) // 2
+    return (x0, cy - TABS_H // 2 + 12, TABS_W, TABS_H)   # +12：扫描命中文字上沿，框要往下压
+
+
 def read_writer_gpt(s: Screen) -> dict:
-    return read_writer(s, WRITER)
+    """读当前是聊天还是工作。
+
+    不用像素差比整组：这按钮的边框样式会随页面变（有时白胶囊、有时白胶囊+黑边框），
+    模板两态都截不全，diff 常在 10~12 之间，等于读不出来（实测）。
+
+    更稳的判据是**两侧文字的墨色**：选中那个字是纯黑（min≈13），未选是灰（min≈93），
+    差 80，非常干净。只看"哪一边更黑"就够，跟边框、hover 都无关。
+    """
+    win = s.window_rect("Google Chrome", on_secondary=True)
+    if win is None:
+        return {"writer": "unknown", "hint": "找不到浏览器窗口"}
+    box = _tabs_box(s, win)
+    if box is None:
+        return {"writer": "unknown", "hint": "窗口顶部找不到模式按钮行"}
+    img = s.grab(box)
+    if img.size == 0:
+        return {"writer": "unknown", "hint": "截图失败"}
+    g = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    h, w = g.shape
+    lm = int(g[:, max(2, w // 8):w // 2 - 4].min())
+    rm = int(g[:, w // 2 + 4:w - max(2, w // 8)].min())
+    info = {"left_min": lm, "right_min": rm, "box": list(box)}
+    if lm <= 60 and lm + 30 <= rm:
+        return {"writer": "chat", **info}
+    if rm <= 60 and rm + 30 <= lm:
+        return {"writer": "work", **info}
+    return {"writer": "unknown",
+            "hint": "两侧文字深浅差不多，认不出哪个被选中（可能页面不在新聊天页）", **info}
+
+
+def choose_writer_gpt(s: Screen, key: str) -> dict:
+    """切模式。点击位置按左右半格算，切完轮询到读数变成目标为止（切换有动画）。"""
+    if key not in WRITER.writers:
+        return {"ok": False, "stage": "bad_arg", "want": key, "options": list(WRITER.writers)}
+    cur = read_writer_gpt(s)
+    if cur["writer"] == "unknown":
+        return {"ok": False, "stage": "unreadable", "hint": cur.get("hint", "")}
+    if cur["writer"] == key:
+        return {"ok": True, "stage": "already", "before": cur["writer"], "after": cur["writer"]}
+
+    x0, y0, w, h = cur["box"]
+    n = len(WRITER.writers)
+    idx = WRITER.writers[key]
+    x = x0 + w * (2 * idx + 1) // (2 * n)
+    y = y0 + h // 2
+    s.click_xy(x, y)
+
+    after, deadline = cur, time.time() + 5.0
+    while time.time() < deadline:
+        time.sleep(0.6)
+        s.move_to(x - 300, max(0, y - 400))
+        time.sleep(0.15)
+        after = read_writer_gpt(s)
+        if after["writer"] == key:
+            break
+    ok = after["writer"] == key
+    return {"ok": ok, "stage": "done" if ok else "unverified",
+            "before": cur["writer"], "after": after["writer"]}
 
 
 def main() -> int:
     name = os.path.basename(__file__)
-    args = sys.argv[1:]
+    idle_need, idle_wait, force, args = guard.parse_guard_args(list(sys.argv[1:]))
     want, tab, bad, writer, model = None, None, [], None, None
     do_list = "--list" in args or "-l" in args
     if "--effort" in args:
@@ -348,19 +463,21 @@ def main() -> int:
 
     lib = Library()
     need = ([cfg["chip"] for cfg in EFFORTS.values()]
-            + ["gpt_writer_tabs_chat", "gpt_writer_tabs_work"]
+            + ["gpt_writer_tabs_chat", "gpt_writer_tabs_work", "gpt_check"]
             + [tpl for items in MODELS.values() for _d, tpl in items.values()])
     print(lib.report(need))
     if lib.missing(need):
         return 3
 
+    if not guard.guard(idle_need, idle_wait, force):
+        return 4
     s = Screen()
     if not s.bring_to_front("Google Chrome", on_secondary=True):
         print("找不到浏览器窗口")
         return 1
     if tab:
         s.hotkey("ctrl", str(tab))
-        time.sleep(1.2)
+        time.sleep(1.8)
 
     if writer is not None:
         # 只有真要切模式才需要回新对话页——模式按钮只在那里
@@ -370,7 +487,7 @@ def main() -> int:
     if do_list:
         # 读状态不许改页面：不再顺手点「新聊天」，否则会把用户正在聊的会话重置掉
         out = dict(read_current(s))
-        out.update(read_writer(s, WRITER))
+        out.update(read_writer_gpt(s))
         if out.get("writer") in (None, "unknown"):
             out["note"] = "模式按钮只在新聊天页出现；这里不改页面，所以读不到模式。要读请先手动开新聊天。"
         else:
@@ -380,7 +497,7 @@ def main() -> int:
 
     rc = 0
     if writer is not None:
-        w = choose_writer(s, WRITER, writer)
+        w = choose_writer_gpt(s, writer)
         print(json.dumps(w, ensure_ascii=False))
         if not w.get("ok"):
             rc = 1
