@@ -72,7 +72,10 @@ EFFORT_ALIAS = {"default": "off", "none": "off", "medium": "high",
                 "mid": "high", "ultra": "max", "xhigh": "max"}
 
 # read_model 的模板库（没覆盖到的模型 read_model 返回 unknown，不影响 --model）
-MODELS = {}
+MODELS = {
+    "deepseek_v41_flash": "dsh_m_deepseek",
+    "gpt6_luna": "dsh_m_luna",
+}
 MODEL_THR = 0.90
 
 TEMPLATE_DIR = os.path.abspath(os.path.join(
@@ -443,13 +446,45 @@ def _band(win):
 def chip_chevron(d, win):
     """芯片右端那个 ⌄ 的中心（屏幕坐标），找不到返回 None。
 
-    用「发送键左边的那个 ⌄」来定：dsh 的芯片紧贴在蓝色发送键左边。
-    实测 ⌄ 在发送键左侧约 67px，且它是芯片这串文字里最靠右的字形。
+    **不靠模板**：⌄ 的颜色随芯片文字变（模型名是深色时 ⌄ 深，浅色时更浅，
+    实测 GPT-6 Luna 下就比 DeepSeek 那边淡一档），模板会匹不上。
+    改用几何：以蓝色发送键为右锚点，在它左边 80px 条带里找**最靠右的一撮
+    非白像素**——那就是 ⌄（它和左边的模型名之间隔着 10px 空白）。
     """
-    ch = d.find_all(TPL_CHEV, CHEV_THR, _band(win))
-    if not ch:
+    m = d.find(TPL_SEND, 0.80, _band(win))
+    if m is None:
         return None
-    return (ch[-1][0], ch[-1][1])
+    img = d.grab(_band(win))
+    if img.size == 0:
+        return None
+    g = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    top = win[1] + max(0, win[3] - BAND_H)
+    sx = m[0] - win[0]
+    sy = m[1] - top + m[3] // 2
+    x0, x1 = max(0, sx - 80), max(0, sx - 4)
+    y0, y1 = max(0, sy - 12), min(g.shape[0], sy + 12)
+    if x1 - x0 < 20 or y1 - y0 < 8:
+        return None
+    strip = g[y0:y1, x0:x1]
+    cols = (strip < 235).sum(axis=0)
+    groups, st = [], None
+    for i, c in enumerate(cols):
+        if c > 0 and st is None:
+            st = i
+        elif c == 0 and st is not None:
+            groups.append((x0 + st, x0 + i - 1))
+            st = None
+    if st is not None:
+        groups.append((x0 + st, x0 + len(cols) - 1))
+    if not groups:
+        return None
+    gl, gr = groups[-1]
+    if not (3 <= gr - gl + 1 <= 16):
+        return None
+    ys, xs = np.nonzero(strip[:, gl - x0:gr - x0 + 1] < 235)
+    if len(ys) == 0:
+        return None
+    return (win[0] + (gl + gr) // 2, top + y0 + int(round(ys.mean())))
 
 
 def menu_rows(d, win):
@@ -547,8 +582,9 @@ def read_effort(d, win):
         elif s > second:
             second = s
     if best is None or bs < 0.85 or bs - second < 0.03:
-        return {"effort": "unknown", "score": round(bs, 3)}
-    return {"effort": best, "label": EFFORT_LABEL[best], "score": round(bs, 3)}
+        return {"effort": "unknown", "effort_score": round(bs, 3)}
+    return {"effort": best, "label": EFFORT_LABEL[best],
+            "effort_score": round(bs, 3)}
 
 
 def read_model(d, win):
@@ -609,10 +645,15 @@ def set_model(d, win, name):
                 "hint": "回车后面板没关，可能没匹配到；看 debug_shot",
                 "debug_shot": dbg}
     got = read_model(d, win)
-    return {"ok": True, "verified": False, "want": name,
-            "after": got.get("model"), "score": got.get("score"),
-            "hint": "面板已关，但读不出芯片上的模型名（模板库没覆盖）——"
-                    "请用界面对一眼，别只看这个返回值"}
+    out = {"ok": True, "want": name, "after": got.get("model"),
+           "score": got.get("score")}
+    if got.get("model") == "unknown":
+        out.update({"verified": False,
+                    "hint": "面板已关，但读不出芯片上的模型名（模板库没覆盖）——"
+                            "请用界面对一眼，别只看这个返回值"})
+    else:
+        out.update({"verified": True})
+    return out
 
 
 def set_effort(d, win, key):
