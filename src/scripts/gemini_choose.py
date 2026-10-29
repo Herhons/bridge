@@ -48,15 +48,19 @@ CFG = Chooser(
     open_by_chip=True,
 )
 
-THINK = {"low": ("低 快速高效", "gem_tk_low"),
-         "mid": ("中 深度适中", "gem_tk_mid"),
-         "high": ("高 超级详尽", "gem_tk_high")}
-THINK_ENTRY = "gem_tk_entry"
-# 旧做法（对输入框 "+" 用固定偏移 600）已废弃，见 MIC_TO_CARET 的注释。
+# 思考等级（--think）**未实现**，相关代码和模板已删除。
+# 实测：子菜单只在鼠标真实悬停时展开，脚本点不开（点一下会把整个菜单关掉）。
+# 之前这里留着一整套 _open_think / read_think / set_think，但 --think 分支直接返回
+# not_supported，那些函数从来没被调用过，属于死代码，已清掉。
+
+
+def _win(s):
+    """目标窗口矩形。不限定就是在整个虚拟桌面里找，主屏上开着同款页面会先命中那边。"""
+    return s.window_rect(CFG.title_hint, on_secondary=CFG.on_secondary)
 
 
 def _items_visible(s) -> bool:
-    return any(s.find(f"gem_item_{k}", threshold=0.85) is not None for k in CFG.options)
+    return any(s.find(f"gem_item_{k}", threshold=0.85, region=_win(s)) is not None for k in CFG.options)
 
 
 # 芯片右端的下拉箭头相对**麦克风**的偏移。
@@ -75,7 +79,7 @@ def _open_model_menu(s) -> bool:
         return True
     s.press("esc")
     time.sleep(0.3)
-    base = s.find("gem_mic", threshold=0.85) or s.find("gem_send_on", threshold=0.85)
+    base = s.find("gem_mic", threshold=0.85, region=_win(s)) or s.find("gem_send_on", threshold=0.85, region=_win(s))
     if base is None:
         return False
     s.click(base, offset=MIC_TO_CARET)
@@ -94,7 +98,7 @@ def read_model(s) -> dict:
         return {"model": "unknown", "hint": "打不开模型菜单"}
     ink = {}
     for k in CFG.options:
-        m = s.find(f"gem_item_{k}", threshold=0.88)
+        m = s.find(f"gem_item_{k}", threshold=0.88, region=_win(s))
         if m is not None:
             band = s.grab((m.x - 45, m.y + 10, 26, 24))
             g = cv2.cvtColor(band, cv2.COLOR_BGR2GRAY)
@@ -115,75 +119,24 @@ def set_model(s, key: str) -> dict:
         return {"ok": True, "stage": "already", "before": cur, "after": cur}
     if not _open_model_menu(s):
         return {"ok": False, "stage": "menu_not_open", "before": cur}
-    m = s.find(f"gem_item_{key}", threshold=0.88)
+    m = s.find(f"gem_item_{key}", threshold=0.88, region=_win(s))
     if m is None:
         s.press("esc")
         return {"ok": False, "stage": "item_not_found", "before": cur, "want": key}
     s.click(m)
     time.sleep(1.2)
-    s.move_to(-1300, 700)
+    _w = _win(s)
+    if _w:
+        s.move_to(_w[0] + 60, _w[1] + 60)   # 移开鼠标，别压在菜单/芯片上
     time.sleep(0.4)
     after = read_model(s)["model"]
     return {"ok": after == key, "stage": "done" if after == key else "unverified",
             "before": cur, "after": after}
 
 
-def _open_think(s) -> bool:
-    """打开模型菜单 → 点「思考等级」→ 子菜单。"""
-    if not any(s.find(t, threshold=0.85) for _d, t in THINK.values()):
-        if s.find(THINK_ENTRY, threshold=0.85) is None:
-            if not _open_model_menu(s):
-                return False
-            time.sleep(0.4)
-        e = s.find(THINK_ENTRY, threshold=0.85)
-        if e is None:
-            return False
-        s.click(e)
-        time.sleep(0.9)
-    return any(s.find(t, threshold=0.85) for _d, t in THINK.values())
-
-
-def read_think(s) -> dict:
-    """读思考等级：子菜单里哪一行左边有勾。勾区墨量实测 34 / 0 / 0。"""
-    if not _open_think(s):
-        return {"think": "unknown", "hint": "打不开思考等级子菜单"}
-    ink = {}
-    for k, (_d, tpl) in THINK.items():
-        m = s.find(tpl, threshold=0.85)
-        if m is not None:
-            band = s.grab((m.x, m.y, 40, m.h))
-            g = cv2.cvtColor(band, cv2.COLOR_BGR2GRAY)
-            ink[k] = int((g > 140).sum())
-    s.press("esc"); time.sleep(0.3)
-    s.press("esc"); time.sleep(0.3)
-    if not ink:
-        return {"think": "unknown", "hint": "三个档位一个都没定位到"}
-    best = max(ink, key=ink.get)
-    return {"think": best if ink[best] > 10 else "unknown", "ink": ink}
-
-
-def set_think(s, key: str) -> dict:
-    if key not in THINK:
-        return {"ok": False, "stage": "bad_arg", "want": key, "options": list(THINK)}
-    cur = read_think(s)["think"]
-    if cur == key:
-        return {"ok": True, "stage": "already", "before": cur, "after": cur}
-    if not _open_think(s):
-        return {"ok": False, "stage": "menu_not_open", "before": cur}
-    m = s.find(THINK[key][1], threshold=0.85)
-    if m is None:
-        return {"ok": False, "stage": "item_not_found", "before": cur, "want": key}
-    s.click(m); time.sleep(1.2)
-    s.move_to(-1200, 700); time.sleep(0.4)
-    after = read_think(s)["think"]
-    return {"ok": after == key, "stage": "done" if after == key else "unverified",
-            "before": cur, "after": after}
-
-
 REQUIRED = ([f"gem_item_{k}" for k in CFG.options]
             + ["gem_mic"]
-            + list(CFG.writer_tabs)
-            + [THINK_ENTRY] + [t for _d, t in THINK.values()])
+            + list(CFG.writer_tabs))
 
 
 def main() -> int:

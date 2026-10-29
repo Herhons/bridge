@@ -34,6 +34,15 @@ class Site:
     on_secondary: bool = True          # 只认副屏上那个浏览器窗口
 
 
+def _win(s: Screen, site: Site):
+    """目标窗口矩形。所有 find 都必须限定在它里面。
+
+    不限定就是在整个虚拟桌面（-1440..2560）里找，主屏上开着同款页面时
+    会先命中主屏那份，然后拿着主屏的坐标去点——点的是用户的窗口。
+    """
+    return s.window_rect(site.title_hint, on_secondary=site.on_secondary)
+
+
 def _send_enabled(s: Screen, site: Site, m: Match) -> bool:
     if site.send_mode == "exists":
         return True
@@ -51,17 +60,22 @@ def _open_new_chat(s: Screen, site: Site) -> dict:
         return {"ok": True, "stage": "skipped"}
     names = (site.newchat,) if isinstance(site.newchat, str) else tuple(site.newchat)
 
+    win = _win(s, site)
+
     def _try() -> object:
         for nm in names:
-            hit = s.find(nm, threshold=0.85)
+            hit = s.find(nm, threshold=0.85, region=win)
             if hit is not None:
                 return hit
         return None
 
     hit = _try()
     if hit is None and site.sidebar:
-        if s.find(site.sidebar) is not None:
-            s.click(s.find(site.sidebar))
+        sb = s.find(site.sidebar, region=win)
+        if sb is not None:
+            # 必须把 find 的结果存下来再点。原来是 if s.find(...) 然后又 s.find(...) 一次，
+            # 第二次可能返回 None（页面正在变），s.click(None) 直接 AttributeError。
+            s.click(sb)
             time.sleep(0.7)
             hit = _try()
     if hit is None:
@@ -94,13 +108,14 @@ def _is_action_row(s: Screen, m: Match) -> bool:
 
 def _pick_copy_target(s: Screen, site: Site) -> tuple[Match | None, dict]:
     names = (site.actions,) if isinstance(site.actions, str) else tuple(site.actions)
+    win = _win(s, site)
     rows: list[Match] = []
     for nm in names:
-        rows += s.find_all(nm, threshold=0.88)
+        rows += s.find_all(nm, threshold=0.88, region=win)
     if not rows:
         time.sleep(0.5)                      # 动作条可能还在渐入
         for nm in names:
-            rows += s.find_all(nm, threshold=0.88)
+            rows += s.find_all(nm, threshold=0.88, region=win)
     if rows:
         row = max(rows, key=lambda m: m.y)      # 多轮会话取最靠下那排＝最新回答
         inner = s.find(site.copy, threshold=0.85, region=(row.x, row.y, row.w, row.h))
@@ -110,7 +125,7 @@ def _pick_copy_target(s: Screen, site: Site) -> tuple[Match | None, dict]:
         return Match(site.copy + "@row_offset", 1.0, row.x + 6, row.y + 6, 22, 22), {
             "rule": "actions_row_offset", "row": [row.x, row.y, row.w, row.h]}
 
-    hits = s.find_all(site.copy, threshold=0.85)
+    hits = s.find_all(site.copy, threshold=0.85, region=win)
     if not hits:
         hits = _hover_hunt(s, site)
     if not hits:
@@ -124,11 +139,20 @@ def _pick_copy_target(s: Screen, site: Site) -> tuple[Match | None, dict]:
 
 
 def _hover_hunt(s: Screen, site: Site) -> list[Match]:
-    vx, vy, vw, vh = s.bounds()
+    """找不到动作条时，把鼠标在页面里挪几个位置，让它 hover 出来。
+
+    **必须限定在目标窗口里**。原来用的是 s.bounds()（整个虚拟桌面 4000x2560），
+    x 算出来是 1040 —— 那是**主屏**，用户正在那儿看视频。鼠标会跑到主屏上晃，
+    正是"不许抢"明确禁止的行为。
+    """
+    win = s.window_rect(site.title_hint, on_secondary=site.on_secondary)
+    if win is None:
+        return []
+    x, y, w, h = win
     for frac in (0.55, 0.65, 0.75, 0.85):
-        s.move_to(vx + int(vw * 0.62), vy + int(vh * frac))
+        s.move_to(x + int(w * 0.62), y + int(h * frac))
         time.sleep(0.3)
-        hits = s.find_all(site.copy, threshold=0.85)
+        hits = s.find_all(site.copy, threshold=0.85, region=win)
         if hits:
             return hits
     return []
@@ -166,7 +190,8 @@ def ask(site: Site, prompt: str, *, mode: str = "new", timeout: float = 180.0,
                     "hint": pr.get("hint") or "准备步骤失败（切换模式/档位时复核没过）"}
 
     # 2. 写入
-    anchor = s.find(site.composer, threshold=0.80)
+    win = _win(s, site)
+    anchor = s.find(site.composer, threshold=0.80, region=win)
     if anchor is None:
         return {"ok": False, "stage": "composer_not_found", "elapsed": round(time.time() - t0, 1),
                 "hint": "找不到输入框锚点；确认页面在前台、没被遮挡、缩放没变"}
@@ -181,7 +206,7 @@ def ask(site: Site, prompt: str, *, mode: str = "new", timeout: float = 180.0,
         time.sleep(0.1)
         s.type_text(prompt)
         time.sleep(0.4)
-        cand = s.find(site.send, threshold=site.send_threshold)
+        cand = s.find(site.send, threshold=site.send_threshold, region=win)
         if cand is not None and _send_enabled(s, site, cand):
             send = cand
             break
@@ -198,8 +223,8 @@ def ask(site: Site, prompt: str, *, mode: str = "new", timeout: float = 180.0,
     # 4. 等生成结束
     generating_seen = False
     if site.stop:
-        generating_seen = s.wait_present(site.stop, timeout=12.0)
-        if generating_seen and not s.wait_gone(site.stop, timeout=timeout):
+        generating_seen = s.wait_present(site.stop, timeout=12.0, region=win)
+        if generating_seen and not s.wait_gone(site.stop, timeout=timeout, region=win):
             return {"ok": False, "stage": "timeout", "elapsed": round(time.time() - t0, 1),
                     "hint": "停止键一直没消失，生成超时"}
     if not generating_seen:

@@ -325,11 +325,18 @@ class Screen:
         img = self.grab((m.x, m.y, m.w, m.h))
         return (float(img[:, :, 0].mean()), float(img[:, :, 1].mean()), float(img[:, :, 2].mean()))
 
-    def find_all(self, name: str, *, threshold: float | None = None, limit: int = 10) -> list[Match]:
+    def find_all(self, name: str, *, threshold: float | None = None, limit: int = 10,
+                 region: tuple[int, int, int, int] | None = None) -> list[Match]:
+        """和 find 一样，但返回所有命中（按分数降序，去重）。
+
+        region 一定要传：不传就是在整个虚拟桌面（含主屏）里找，
+        主屏上开着同款页面/同款图标时会先命中那边，然后拿着主屏的坐标去点。
+        """
         th = self.threshold if threshold is None else threshold
-        hay = cv2.cvtColor(self.grab(), cv2.COLOR_BGR2GRAY)
+        hay = cv2.cvtColor(self.grab(region), cv2.COLOR_BGR2GRAY)
         tpl = self.template(name)
-        ox, oy = user32.GetSystemMetrics(SM_XVIRTUALSCREEN), user32.GetSystemMetrics(SM_YVIRTUALSCREEN)
+        ox, oy = (region[0], region[1]) if region else (
+            user32.GetSystemMetrics(SM_XVIRTUALSCREEN), user32.GetSystemMetrics(SM_YVIRTUALSCREEN))
         res = cv2.matchTemplate(hay, tpl, cv2.TM_CCOEFF_NORMED)
         ys, xs = np.where(res >= th)
         hits = [Match(name, float(res[y, x]), ox + int(x), oy + int(y), tpl.shape[1], tpl.shape[0])
@@ -344,10 +351,11 @@ class Screen:
         return kept
 
     def wait(self, name: str, *, timeout: float = 15.0, interval: float = 0.4,
-             appear: bool = True, threshold: float | None = None) -> Match | None:
+             appear: bool = True, threshold: float | None = None,
+             region: tuple[int, int, int, int] | None = None) -> Match | None:
         end = time.time() + timeout
         while time.time() < end:
-            m = self.find(name, threshold=threshold)
+            m = self.find(name, threshold=threshold, region=region)
             if (m is not None) == appear:
                 return m
             time.sleep(interval)
@@ -356,21 +364,23 @@ class Screen:
         return None
 
     def wait_present(self, name: str, *, timeout: float = 15.0, interval: float = 0.4,
-                     threshold: float | None = None) -> bool:
+                     threshold: float | None = None,
+                     region: tuple[int, int, int, int] | None = None) -> bool:
         """等这张图出现。返回 True/False，不返回 Match（避免和"超时"混淆）。"""
         end = time.time() + timeout
         while time.time() < end:
-            if self.find(name, threshold=threshold) is not None:
+            if self.find(name, threshold=threshold, region=region) is not None:
                 return True
             time.sleep(interval)
         return False
 
     def wait_gone(self, name: str, *, timeout: float = 60.0, interval: float = 0.4,
-                  threshold: float | None = None) -> bool:
+                  threshold: float | None = None,
+                  region: tuple[int, int, int, int] | None = None) -> bool:
         """等这张图消失。返回 True 表示确实消失了。"""
         end = time.time() + timeout
         while time.time() < end:
-            if self.find(name, threshold=threshold) is None:
+            if self.find(name, threshold=threshold, region=region) is None:
                 return True
             time.sleep(interval)
         return False
@@ -490,10 +500,11 @@ class Screen:
         _send(_INPUT(type=INPUT_MOUSE, mi=_MOUSEINPUT(0, 0, 0, MOUSEEVENTF_LEFTUP, 0, None)))
 
     def click_image(self, name: str, *, offset: tuple[int, int] = (0, 0),
-                    wait: float = 0.0, threshold: float | None = None) -> Match:
-        m = self.find(name, threshold=threshold)
+                    wait: float = 0.0, threshold: float | None = None,
+                    region: tuple[int, int, int, int] | None = None) -> Match:
+        m = self.find(name, threshold=threshold, region=region)
         if m is None and wait > 0:
-            m = self.wait(name, timeout=wait, threshold=threshold)
+            m = self.wait(name, timeout=wait, threshold=threshold, region=region)
         if m is None:
             raise LookupError(f"屏幕上找不到 {name}，没有点击（不猜位置）")
         self.click(m, offset=offset)

@@ -32,16 +32,28 @@ from qi import guard  # noqa: E402
 # 每个开关一张定位图（截"关"的样子即可，两态都能定位到）
 TEMPLATES = {"think": "ds_think", "search": "ds_search"}
 REQUIRED = list(TEMPLATES.values())
+TITLE = "Google Chrome"
+
+
+def _win(s: Screen):
+    """目标窗口矩形。不限定就是在整个虚拟桌面里找，主屏上开着同款页面会先命中那边。"""
+    return s.window_rect(TITLE, on_secondary=True)
+
+
 OFF_MIN = 25.0   # B-R 大于这个值算"关"（浅蓝描边）
 ON_MAX = 15.0    # 小于这个值算"开"（白底黑字）
 
 
 def _read(s: Screen, kind: str) -> dict:
-    m = s.find(TEMPLATES[kind])
+    m = s.find(TEMPLATES[kind], region=_win(s))
     if m is None:
         return {"state": "missing", "blue": None, "hit": None}
-    # 把鼠标移开再量，否则悬停态会被读成"开"
-    s.move_to(m.center[0], max(0, m.center[1] - 400))
+    # 把鼠标移开再量，否则悬停态会被读成"开"。
+    # 不能写 max(0, ...)：0 是虚拟桌面坐标里的一个"合法但随机"的点，
+    # 开关在屏幕上偏上时会正好落到别的元素上，反而触发新的悬停。改为夹在窗口内。
+    _w = _win(s)
+    ty = max(_w[1] + 20, m.center[1] - 400) if _w else max(0, m.center[1] - 400)
+    s.move_to(m.center[0], ty)
     time.sleep(0.35)
     b, _g, r = s.region_mean(m)
     blue = round(b - r, 1)
@@ -140,7 +152,7 @@ def main() -> int:
     if not guard.guard(need, wait, force):
         return 4
     s = Screen()
-    if not s.bring_to_front("Google Chrome", on_secondary=True):
+    if not s.bring_to_front(TITLE, on_secondary=True):
         print("找不到浏览器窗口")
         return 1
     if o.get("tab"):

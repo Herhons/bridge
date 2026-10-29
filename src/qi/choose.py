@@ -34,6 +34,15 @@ class Chooser:
     writers: dict[str, int] = field(default_factory=dict)  # 模式名 -> 第几格
 
 
+def _win(s: Screen, cfg: Chooser):
+    """目标窗口矩形。所有 find 都要限定在它里面。
+
+    不限定就是在整个虚拟桌面（含主屏）里找：主屏上开着同款页面时会先命中那边，
+    然后拿主屏的坐标去点、去读，表现是"点了没反应"或"状态读成 unknown"。
+    """
+    return s.window_rect(cfg.title_hint, on_secondary=cfg.on_secondary)
+
+
 # ------------------------------------------------------------------ 写入器模式
 def read_writer(s: Screen, cfg: Chooser) -> dict:
     """读当前写入器模式：逐像素差，不靠相似度。
@@ -50,7 +59,7 @@ def read_writer(s: Screen, cfg: Chooser) -> dict:
     # 只认第一张会在一态下直接归零（实测：chat 模板在工作态连 0.4 都不到）。
     loc = None
     for nm in cfg.writer_tabs:
-        loc = s.find(nm, threshold=0.62)
+        loc = s.find(nm, threshold=0.62, region=_win(s, cfg))
         if loc is not None:
             break
     if loc is None:
@@ -145,7 +154,7 @@ def _calm(s: Screen, cfg: Chooser) -> None:
 def read_current(s: Screen, cfg: Chooser) -> dict:
     _calm(s, cfg)
     for key in cfg.has_chip:
-        m = s.find(_chip(cfg, key))
+        m = s.find(_chip(cfg, key), region=_win(s, cfg))
         if m is not None:
             return {"state": key, "score": round(m.score, 3)}
     return {"state": "unknown",
@@ -156,7 +165,7 @@ def open_menu(s: Screen, cfg: Chooser) -> bool:
     if cfg.open_by_chip:
         opened = False
         for key in cfg.has_chip:
-            m = s.find(_chip(cfg, key), threshold=0.90)
+            m = s.find(_chip(cfg, key), threshold=0.90, region=_win(s, cfg))
             if m is not None:
                 s.click(m)
                 time.sleep(0.8)
@@ -165,13 +174,13 @@ def open_menu(s: Screen, cfg: Chooser) -> bool:
         if not opened:
             return False
     else:
-        a = s.find(cfg.anchor, threshold=0.85)
+        a = s.find(cfg.anchor, threshold=0.85, region=_win(s, cfg))
         if a is None:
             return False
         s.click(a, offset=cfg.open_offset)
         time.sleep(0.7)
     for key in cfg.options:
-        if s.find(_item(cfg, key), threshold=0.88) is not None:
+        if s.find(_item(cfg, key), threshold=0.88, region=_win(s, cfg)) is not None:
             return True
     return False
 
@@ -183,7 +192,7 @@ def choose(s: Screen, cfg: Chooser, key: str) -> dict:
     if not open_menu(s, cfg):
         return {"ok": False, "stage": "menu_not_open", "before": before,
                 "hint": "点不开菜单：确认页面在前台、芯片位置没变（换主题/缩放要重截模板）"}
-    hit = s.find(_item(cfg, key), threshold=0.88)
+    hit = s.find(_item(cfg, key), threshold=0.88, region=_win(s, cfg))
     if hit is None:
         return {"ok": False, "stage": "item_not_found", "before": before, "want": key,
                 "hint": f"菜单里找不到 {_item(cfg, key)}.png"}
@@ -195,7 +204,8 @@ def choose(s: Screen, cfg: Chooser, key: str) -> dict:
         ok = after["state"] == key
         return {"ok": ok, "stage": "done" if ok else "unverified",
                 "before": before, "after": after["state"], "chip_score": after.get("score")}
-    still = any(s.find(_item(cfg, k), threshold=0.90) is not None for k in cfg.options)
+    win = _win(s, cfg)
+    still = any(s.find(_item(cfg, k), threshold=0.90, region=win) is not None for k in cfg.options)
     return {"ok": not still, "stage": "done_no_chip" if not still else "menu_still_open",
             "before": before, "after": key, "verified_by": "menu_closed"}
 
