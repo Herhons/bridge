@@ -29,6 +29,7 @@ if _SRC not in sys.path:
 
 from qi import Library, Screen  # noqa: E402
 from qi import guard  # noqa: E402
+from qi.browser import ensure_site  # noqa: E402
 from qi.choose import Chooser, cli, open_menu, read_writer  # noqa: E402
 
 CFG = Chooser(
@@ -152,12 +153,14 @@ def main() -> int:
         key = argv[i + 1].strip().lower()
         rest = argv[:i] + argv[i + 2:]
         sc = Screen()
-        if not sc.bring_to_front(CFG.title_hint, on_secondary=CFG.on_secondary):
-            print("找不到浏览器窗口"); return 1
-        if "--tab" in rest:
-            j = rest.index("--tab")
-            if j + 1 < len(rest):
-                sc.hotkey("ctrl", rest[j + 1]); time.sleep(1.8)
+        hwnd = ensure_site("gemini")
+        if hwnd is None:
+            print("开不出浏览器窗口"); return 1
+        sc.bind(hwnd)
+        if not sc.focus():
+            print("窗口提不到前台"); return 1
+        time.sleep(1.2)
+        # --tab 不再生效：ensure_site 保证当前标签就是目标页
         r = set_model(sc, key)
         print(json.dumps(r, ensure_ascii=False))
         return 0 if r.get("ok") else 1
@@ -172,12 +175,14 @@ def main() -> int:
 
     if "--list" in argv:
         sc = Screen()
-        if not sc.bring_to_front(CFG.title_hint, on_secondary=CFG.on_secondary):
-            print("找不到浏览器窗口"); return 1
-        if "--tab" in argv:
-            j = argv.index("--tab")
-            if j + 1 < len(argv):
-                sc.hotkey("ctrl", argv[j + 1]); time.sleep(1.8)
+        hwnd = ensure_site("gemini")
+        if hwnd is None:
+            print("开不出浏览器窗口"); return 1
+        sc.bind(hwnd)
+        if not sc.focus():
+            print("窗口提不到前台"); return 1
+        time.sleep(1.2)
+        # --tab 不再生效：ensure_site 保证当前标签就是目标页
         # 读状态不改页面。模式按钮只在新对话页出现，会话页里读不到是正常的。
         w = read_writer(sc, CFG).get("writer")
         out = {"writer": w}
@@ -190,12 +195,14 @@ def main() -> int:
     if "--new" in argv:
         # 显式要求：先开新对话，再读/切模式
         sc = Screen()
-        if not sc.bring_to_front(CFG.title_hint, on_secondary=CFG.on_secondary):
-            print("找不到浏览器窗口"); return 1
-        if "--tab" in argv:
-            j = argv.index("--tab")
-            if j + 1 < len(argv):
-                sc.hotkey("ctrl", argv[j + 1]); time.sleep(1.8)
+        hwnd = ensure_site("gemini")
+        if hwnd is None:
+            print("开不出浏览器窗口"); return 1
+        sc.bind(hwnd)
+        if not sc.focus():
+            print("窗口提不到前台"); return 1
+        time.sleep(1.2)
+        # --tab 不再生效：ensure_site 保证当前标签就是目标页
         from qi.flow import Site, _open_new_chat
         site = Site(name="gemini", title_hint=CFG.title_hint, composer="gem_composer",
                     send="gem_send_on", actions="gem_actions", copy="gem_copy",

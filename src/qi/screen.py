@@ -174,12 +174,23 @@ class Screen:
         return (user32.GetSystemMetrics(SM_XVIRTUALSCREEN), user32.GetSystemMetrics(SM_YVIRTUALSCREEN),
                 user32.GetSystemMetrics(SM_CXVIRTUALSCREEN), user32.GetSystemMetrics(SM_CYVIRTUALSCREEN))
 
-    def window_rect(self, title_hint: str, *, on_secondary: bool = False) -> tuple[int, int, int, int] | None:
-        """按标题取窗口矩形。
+    def window_rect(self, title_hint: str | None = None, *,
+                    on_secondary: bool = False) -> tuple[int, int, int, int] | None:
+        """取窗口矩形。
 
-        用来把"颜色搜索"限定在目标窗口内——整块虚拟桌面里别的屏有视频、
-        图标也可能是同色，很容易抢先命中。
+        **bind() 过就优先用绑定句柄，不按标题搜。** 副屏同时开了好几个 Chrome 时，
+        按标题搜到哪个取决于 EnumWindows 顺序，等于随机选（2026-10-29 因此把按键
+        打到了错误的窗口上）。没绑定才退回按标题找。
+
+        按标题找的用途是把"找图/找色"限定在目标窗口内——整块虚拟桌面里别的屏
+        有视频、图标也可能是同色，很容易抢先命中。
         """
+        if self.target_hwnd and user32.IsWindow(self.target_hwnd):
+            r = wintypes.RECT()
+            user32.GetWindowRect(self.target_hwnd, ctypes.byref(r))
+            return (r.left, r.top, r.right - r.left, r.bottom - r.top)
+        if title_hint is None:
+            return None
         pw, ph = user32.GetSystemMetrics(0), user32.GetSystemMetrics(1)
         found = []
 
@@ -206,6 +217,35 @@ class Screen:
 
         user32.EnumWindows(_cb, 0)
         return found[0] if found else None
+
+    def bind(self, hwnd: int) -> bool:
+        """绑定一个窗口句柄。之后 window_rect / 前台校验都认它，不再按标题搜。"""
+        if not hwnd or not user32.IsWindow(int(hwnd)):
+            return False
+        self.target_hwnd = int(hwnd)
+        return True
+
+    def focus(self) -> bool:
+        """把自己**绑定的**窗口提到前台。没绑定就返回 False（不猜）。"""
+        hwnd = self.target_hwnd
+        if not hwnd:
+            return False
+        if user32.GetForegroundWindow() == hwnd:
+            return True
+        fg = user32.GetForegroundWindow()
+        tid_cur = kernel32.GetCurrentThreadId()
+        tid_fg = user32.GetWindowThreadProcessId(fg, None) if fg else 0
+        attached = False
+        if tid_fg and tid_fg != tid_cur:
+            attached = bool(user32.AttachThreadInput(tid_cur, tid_fg, True))
+        try:
+            user32.SetForegroundWindow(hwnd)
+            user32.BringWindowToTop(hwnd)
+        finally:
+            if attached:
+                user32.AttachThreadInput(tid_cur, tid_fg, False)
+        time.sleep(0.25)
+        return user32.GetForegroundWindow() == hwnd
 
     def bring_to_front(self, title_hint: str, *, on_secondary: bool = False) -> bool:
         """把标题含 title_hint 的已有窗口提到前台。
@@ -502,30 +542,33 @@ class Screen:
         """按住从 (x1,y1) 拖到 (x2,y2)。
 
         滑杆这类控件只点一下改不动（点了也弹回原位），必须按住拖。
+
+        每一步都用 SetCursorPos 而不是 SendInput 的绝对坐标：这个项目里
+        已经证实绝对坐标在这台机器上不可靠（move_to 曾经用 mouse_event
+        挪不动光标，改成 SetCursorPos 才好）。拖动更怕这个——坐标一偏，
+        按下和抬起就不在同一个控件上，表现是"拖了一下就失灵"。
         """
         self._assert_foreground()
-        vx, vy = user32.GetSystemMetrics(SM_XVIRTUALSCREEN), user32.GetSystemMetrics(SM_YVIRTUALSCREEN)
-        vw, vh = user32.GetSystemMetrics(SM_CXVIRTUALSCREEN), user32.GetSystemMetrics(SM_CYVIRTUALSCREEN)
-
-        def _abs(x: int, y: int) -> tuple[int, int]:
-            return (int(round((x - vx) * 65535 / max(1, vw - 1))),
-                    int(round((y - vy) * 65535 / max(1, vh - 1))))
-
-        ax, ay = _abs(x1, y1)
-        _send(_INPUT(type=INPUT_MOUSE,
-                     mi=_MOUSEINPUT(ax, ay, 0, MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK, 0, None)))
-        time.sleep(0.05)
-        _send(_INPUT(type=INPUT_MOUSE, mi=_MOUSEINPUT(0, 0, 0, MOUSEEVENTF_LEFTDOWN, 0, None)))
-        time.sleep(0.08)
+        user32.SetCursorPos(int(x1), int(y1))
+        time.sleep(0.06)
+        pt = wintypes.POINT()
+        user32.GetCursorPos(ctypes.byref(pt))
+        if abs(pt.x - int(x1)) > 2 or abs(pt.y - int(y1)) > 2:
+            raise RuntimeError(f"光标没能移到拖动起点 ({x1},{y1})，实际 ({pt.x},{pt.y})")
+        user32.mouse_event(0x0002, 0, 0, 0, 0)      # LEFTDOWN
+        time.sleep(0.10)
         for i in range(1, steps + 1):
             x = x1 + (x2 - x1) * i // steps
             y = y1 + (y2 - y1) * i // steps
-            ax, ay = _abs(x, y)
-            _send(_INPUT(type=INPUT_MOUSE,
-                         mi=_MOUSEINPUT(ax, ay, 0, MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK, 0, None)))
-            time.sleep(0.03)
-        time.sleep(0.05)
-        _send(_INPUT(type=INPUT_MOUSE, mi=_MOUSEINPUT(0, 0, 0, MOUSEEVENTF_LEFTUP, 0, None)))
+            user32.SetCursorPos(int(x), int(y))
+            time.sleep(0.04)
+        # 终点要"停住"：网页的 mousemove 处理有节流，松手前不多停一会儿，
+        # 控件会停在半路（实测拖 60px 只走了 33px）。这里在原位重复发同一坐标，
+        # 相当于按住不动等它跟上，再松手。
+        for _ in range(6):
+            user32.SetCursorPos(int(x2), int(y2))
+            time.sleep(0.05)
+        user32.mouse_event(0x0004, 0, 0, 0, 0)      # LEFTUP
 
     def click_image(self, name: str, *, offset: tuple[int, int] = (0, 0),
                     wait: float = 0.0, threshold: float | None = None,

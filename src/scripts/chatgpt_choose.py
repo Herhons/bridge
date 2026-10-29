@@ -1,26 +1,43 @@
-"""chatgpt 网页版：只做选择，不发提问。
+"""chatgpt 网页版：选模式、选模型、调推理强度。不发提问。
 
 用法：
-    python chatgpt_choose.py --list [--tab N]
+    python chatgpt_choose.py --list
     python chatgpt_choose.py --writer chat|work
     python chatgpt_choose.py --model gpt61_terra        （模型分模式，先定 --writer）
-    python chatgpt_choose.py --writer work --model gpt6_sol
+    python chatgpt_choose.py --effort low|mid|high|xhigh|max
+    python chatgpt_choose.py --model gpt6_sol --effort max
 
-打开「选择推理强度」弹层的正确方式是**快捷键 Ctrl+Shift+M**（芯片 tooltip 上写着），
-前提是输入框处于聚焦状态，所以链路是：点输入框空白 → 按快捷键 → 点弹层里的
-「GPT-…›」那一行 → 进模型列表。**全程不碰右下角那个橙色圆钮。**
+## 弹层是**两层**，不是一层（2026-10-29 用户指出，实测确认）
 
-为什么不能用"橙钮 + 偏移"去点芯片（2026-10-29 实测，踩了两次录音）：
-    · 橙钮左侧 43px 是**麦克风图标**，用 -40 / -44 各踩了一次，一点就开始录音；
-    · 橙钮左侧 74px 才是芯片箭头，但芯片文字长短会变（「选择推理强度」比
-      「GPT-6.1 Terra Max」宽一倍），右边有时还多一个刷新图标，偏移量追不上；
-    · 点 -110（文字中间）只让输入框获得焦点，弹层不出现。
-根因不是偏移量没调准，是**用参照物算坐标**这件事本身错：那个参照物自己在变
-（空箱是麦克风、有字是发送）。参照物只能用来"取坐标"，不能用来"算坐标"。
+    点芯片 / Ctrl+Shift+M
+        └─> effort 层：一条滑杆 + 一行「当前模型名 ›」
+                点那行模型名
+                    └─> models 层：模型列表（9 项）
+                选完模型
+                    └─> 自动退回 effort 层   ← 这里是调强度的位置
+    拖滑杆调档位 -> Esc 关闭 -> 强度才生效（芯片这时才显示「GPT-6 Astra 高」）
 
-本端只做到「选模式 + 选模型」。思考强度（instant/mid/high）还没做：
-滑杆的几何要重新量（老代码的 TRACK_DX 是挂在橙钮上的，已经不能用了），
-而且改强度会实际发请求，等页面空下来再补。
+旧版把这两层当成一层：选完模型就按 Esc 把整个弹层收掉，等于把第二步吃掉了。
+表现就是「选完 default 之后老断」「调不了强度」。
+
+## 位置都是量出来的，不是猜的
+
+    · 打开弹层：点输入框空白聚焦 -> Ctrl+Shift+M（芯片 tooltip 上写的快捷键）。
+      **不点芯片**：芯片就在橙钮左边 44~110px，麦克风在 43px，偏移量算错一次就录音
+      （-40 / -44 各踩过一次）。
+    · 滑杆：轨道 x=954..1239，滑块圆心 y = 橙钮 y + 94。
+      滑块圆心 x = 橙色块右端 - 16，这条对最低档（橙色只有滑块本身）也成立。
+    · 五档等分：981=轻度 1041=中 1102=高 1163=极高 1223=Max。
+    · 入口行在滑块圆心上方 38px，横向取轨道中点。
+
+## 判据
+
+    _layer() 分 closed / effort / models 三态：
+      models = 找到勾或 ≥2 个模型项
+      effort = _slider() 找到滑杆（橙色块在橙钮下方 60~140px、且在轨道 x 范围内）
+      closed = 都不是
+    旧版用「非背景块的外接矩形」判弹层，页面上任何文字都满足，弹层没开也返回坐标，
+    后面全链路都在错的前提上跑。
 """
 
 from __future__ import annotations
@@ -38,6 +55,7 @@ if _SRC not in sys.path:
     sys.path.insert(0, _SRC)
 
 from qi import ForegroundLost, Library, Screen, guard  # noqa: E402
+from qi.browser import ensure_site  # noqa: E402
 from qi.flow import Site, _open_new_chat  # noqa: E402
 
 TITLE = "Google Chrome"
@@ -278,6 +296,8 @@ def _items_visible(s: Screen, writer: str) -> bool:
     后面全盘读空）。判据：找到勾，或至少两项模型标题同时命中。
     """
     win = _win(s)
+    if win is None:
+        return False
     if s.find(CHECK, threshold=0.85, region=win) is not None:
         return True
     n = sum(1 for _n, tpl in MODELS.get(writer, {}).values()
@@ -285,19 +305,44 @@ def _items_visible(s: Screen, writer: str) -> bool:
     return n >= 2
 
 
-def _menu_entry_pos(s: Screen):
-    """算弹层里入口行（「GPT-6.1 Terra ›」）的坐标，**完全不看文字**。
+# ---------------------------------------------------------------- 强度滑杆
+# 2026-10-29 实测（窗口 1380x1340、副屏）：弹层里从上到下三样东西
+#   入口行「GPT-6 Astra ›」   ← 点它才进模型列表
+#   滑杆（轨道 x 954..1239）
+# 五档等分，滑块圆心 x 与档位的对应关系是量出来的，不是猜的：
+#   981=轻度 1041=中 1102=高 1163=极高 1223=Max
+EFFORTS = {
+    "low":   ("轻度", 981),
+    "mid":   ("中",   1041),
+    "high":  ("高",   1102),
+    "xhigh": ("极高", 1163),
+    "max":   ("Max",  1223),
+}
+EFFORT_ORDER = ["low", "mid", "high", "xhigh", "max"]
 
-    为什么不用文字模板：入口行写的是当前模型名，切一次模型就换一次字
-    （「GPT-6.1 Terra」→「GPT-6 Sol」），模板必然失效——实测切到 GPT-6 Sol 后
-    匹配分数掉到 0.71 以下，于是"打不开模型列表"。
+SLIDER_L, SLIDER_R = 954, 1239   # 轨道两端（窗口内 x）
+KNOB_R = 16                      # 滑块半径
+KNOB_DY = 94                     # 滑块圆心 y = 橙钮 y + 94
+ENTRY_DY = -38                   # 入口行 y = 滑块圆心 y - 38
+SLIDER_BAND = (60, 140)          # 滑杆纵向搜索带（相对橙钮 y）
+EFFORT_GAP = 14                  # 滑块离档位点超过这么多就认为没落在档上
 
-    改用几何：弹层里从上到下三样东西——档位字（轻度/中/高）、入口行、滑杆。
-    取"最上面那个块的上边"和"最下面那个块的下边"的中点，就是入口行的高度；
-    横向取所有块的外接范围的中心。
 
-    判据用**非背景**（灰度<210）而不是橙色：档位字笔画细，橙色像素只有 40 来个，
-    按橙色面积筛会把它滤掉，只剩滑杆一个块（实测因此返回 None、菜单打不开）。
+def _slider(s: Screen):
+    """强度滑杆的几何（窗口内坐标）。None = **强度层没开**。
+
+    这是"强度层开着"的唯一判据。原来那版用「非背景块的外接矩形」判断，
+    页面上任何文字都会满足，弹层没开也返回坐标（实测返回过窗口内 (1153,811)，
+    把「选择项目/文件/插件」那行当成了弹层），于是后面全链路都在错的前提上跑。
+
+    橙色判据的 x **必须限定在轨道附近**：全宽扫会抓到窗口右边外面的橙色
+    （实测返回 1363）和侧栏图标（x=44）。
+
+    滑块圆心 = 橙色块右端 - 16，这条对三个区段都成立：
+      · 最低档时橙色就是滑块自己（32px 宽），右端 - 16 仍是圆心
+      · 中间档是「填充段 + 滑块」连成一块，右端仍是滑块右缘
+      · 最高档填满整条，右端仍是滑块右缘
+    所以不需要橙色填充也能定位——这一点很关键，最低档时填充宽度是 0。
     """
     win = _win(s)
     v = _voice_center(s)
@@ -306,48 +351,65 @@ def _menu_entry_pos(s: Screen):
     img = s.grab(win)
     if img.size == 0:
         return None
-    g = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    mask = (g < 210).astype(np.uint8)
-    n, _lb, st, _c = cv2.connectedComponentsWithStats(mask, 8)
+    b = img[:, :, 0].astype(int)
+    r = img[:, :, 2].astype(int)
+    om = ((r - b > 40) & (r > 140)).astype(np.uint8)
     vx, vy = int(v[0]) - win[0], int(v[1]) - win[1]
-    x0s, y0s, x1s, y1s = [], [], [], []
-    for i in range(1, n):
-        x, y, w, h, a2 = (int(st[i][0]), int(st[i][1]), int(st[i][2]),
-                          int(st[i][3]), int(st[i][4]))
-        if a2 < 20:
-            continue
-        if not (vy + 15 <= y and y + h <= vy + 170):     # 弹层在橙钮下方这一段
-            continue
-        if not (vx - 480 <= x and x + w <= vx - 10):     # 整块在橙钮左边
-            continue
-        x0s.append(x)
-        y0s.append(y)
-        x1s.append(x + w)
-        y1s.append(y + h)
-    if len(x0s) < 2:
+    y0, y1 = vy + SLIDER_BAND[0], vy + SLIDER_BAND[1]
+    x0, x1 = SLIDER_L - 40, SLIDER_R + 40
+    band = om[y0:y1, x0:x1]
+    ys, xs = np.where(band)
+    if len(xs) < 80:
         return None
-
-    # 纵向：入口行夹在"最上面那一行"和"滑杆"之间
-    min_y = min(y0s)
-    top_bottom = max(y1 for y0, y1 in zip(y0s, y1s) if y0 <= min_y + 12)
-    lower_top = min((y0 for y0 in y0s if y0 > min_y + 20), default=None)
-    if lower_top is None:
+    knob = x0 + int(xs.max()) - KNOB_R
+    if not (SLIDER_L + KNOB_R - 12 <= knob <= SLIDER_R - KNOB_R + 12):
         return None
-    entry_y = (top_bottom + lower_top) // 2
+    return {"knob": knob, "cy": vy + KNOB_DY, "win": win}
 
-    # 横向：入口行和档位字同轴。但最上面那一行最左边还挂着一个菱形图标
-    # （实测 x=973，和档位字之间空 65px），不切掉会把中心拽偏 35px，点空。
-    top_blocks = sorted((x0, x1) for x0, y0, x1 in zip(x0s, y0s, x1s) if y0 <= min_y + 12)
-    cut = 0
-    best_gap = 0
-    for i in range(1, len(top_blocks)):
-        g = top_blocks[i][0] - top_blocks[i - 1][1]
-        if g > best_gap:
-            best_gap, cut = g, i
-    if best_gap > 40:
-        top_blocks = top_blocks[cut:]
-    entry_x = (top_blocks[0][0] + top_blocks[-1][1]) // 2
-    return (win[0] + entry_x, win[1] + entry_y)
+
+def _effort_of(knob: int):
+    """滑块圆心 x -> 档位。返回 (key, 距离)，取最近的一档。"""
+    best, bd = None, 10 ** 9
+    for k, (_name, px) in EFFORTS.items():
+        d = abs(knob - px)
+        if d < bd:
+            best, bd = k, d
+    return best, bd
+
+
+def _menu_entry_pos(s: Screen):
+    """入口行（点它进模型列表）的屏幕坐标。**必须先有滑杆**。
+
+    位置跟着滑杆走：入口行在滑块圆心上方 38px（实测 825 -> 787），
+    横向取轨道中点（实测入口行中心 1067、轨道中心 1096，差 29，
+    入口行整行可点，够用）。
+
+    为什么不用文字模板：入口行写的是当前模型名（「GPT-6.1 Terra」→「GPT-6 Sol」），
+    切一次模型模板就废一次（实测掉到 0.71）。
+    """
+    sl = _slider(s)
+    if sl is None:
+        return None
+    win = sl["win"]
+    cx = (SLIDER_L + SLIDER_R) // 2
+    return (win[0] + cx, win[1] + sl["cy"] + ENTRY_DY)
+
+
+def _layer(s: Screen, writer: str) -> str:
+    """弹层现在是哪一层。
+
+    用户指出的结构（2026-10-29）：
+      点芯片 -> effort 层（滑杆 + 当前模型名那一行）
+      在 effort 层点模型名 -> models 层（模型列表）
+      选完模型 -> **自动退回 effort 层**，这时可以调强度
+      调完关掉 -> 整个收起
+    所以这三层必须分开判，不能像原来那样把"列表没开"当成"弹层没开"。
+    """
+    if _items_visible(s, writer):
+        return "models"
+    if _slider(s) is not None:
+        return "effort"
+    return "closed"
 
 
 def focus_composer(s: Screen) -> bool:
@@ -363,31 +425,41 @@ def focus_composer(s: Screen) -> bool:
     return ok
 
 
-def open_menu(s: Screen, writer: str) -> bool:
-    """打开模型列表。
+def open_effort(s: Screen, writer: str) -> bool:
+    """打开强度层（第一步）。
 
-    链路：点输入框空白 → Ctrl+Shift+M 开强度弹层 → 点「GPT-…›」进模型列表。
+    链路：点输入框空白聚焦 -> Ctrl+Shift+M。
+    **不点芯片**：芯片就在橙钮左边 44~110px，麦克风在 43px，偏移量算错一次就录音
+    （2026-10-29 用 -40 / -44 各踩了一次）。快捷键是芯片 tooltip 上写的，等价且安全。
 
-    **不按 Esc**：上一个弹层（比如刚选完「默认」时那个「选择模型」层）在 Esc 之后
-    要过好几百毫秒才收完，这期间的第一次点击会被当成"点外部关闭"吃掉，
-    结果就是输入框没聚焦、快捷键没反应、整条链报 menu_not_open（实测连断两个）。
-    而"点输入框空白"这一下同时干两件事：关掉残留弹层 + 把键盘焦点给输入框。
-
-    只走一遍，不重试：重试不会让定位变准，只会把点击频率堆上去。
+    已经在 models 层时按一次 Esc 退回 effort 层，不重新走快捷键——
+    快捷键是 toggle，在弹层开着时按会把整层关掉（实测）。
     """
-    if _items_visible(s, writer):
+    lay = _layer(s, writer)
+    if lay == "effort":
         return True
+    if lay == "models":
+        s.press("esc")
+        time.sleep(0.7)
+        if _slider(s) is not None:
+            return True
     if page_kind(s) != "new":
-        return False
+        return False                    # 会话页没有模式按钮，也没有这个弹层
 
     if not focus_composer(s):
         return False
     time.sleep(0.5)
-
     s.hotkey(*CHIP_HOTKEY)
-    time.sleep(1.2)
+    time.sleep(1.3)
+    return _slider(s) is not None
+
+
+def enter_models(s: Screen, writer: str) -> bool:
+    """进模型列表（第二步）。已经开着就直接返回。"""
     if _items_visible(s, writer):
         return True
+    if not open_effort(s, writer):
+        return False
     pos = _menu_entry_pos(s)
     if pos is None:
         return False
@@ -398,28 +470,109 @@ def open_menu(s: Screen, writer: str) -> bool:
     return _items_visible(s, writer)
 
 
+def close_all(s: Screen, writer: str) -> None:
+    """把整个弹层收起，并等它真收完。
+
+    Esc 关闭会让强度设置生效（实测：拖完滑块芯片仍显示占位「选择推理强度」，
+    Esc 之后才变成「GPT-6 Astra 高」）。所以改强度后必须走这一步。
+
+    只 sleep 0.3s 的话，下一段逻辑的第一下点击会被残余的收起动画吃掉
+    （实测连断两个），所以轮询到真关掉为止。
+    """
+    for _ in range(3):
+        if _layer(s, writer) == "closed":
+            return
+        s.press("esc")
+        time.sleep(0.6)
+
+
+def _drag_knob(s: Screen, target_x: int, tries: int = 3) -> int | None:
+    """把滑块拖到 target_x（窗口内 x），返回最终位置。
+
+    实测拖动会"打折"：拖 60px 只走 34px（网页对 mousemove 有节流/惯性）。
+    所以不指望一次到位，读回实际位置反复逼近，最多 tries 次。
+    """
+    for _ in range(tries):
+        sl = _slider(s)
+        if sl is None:
+            return None
+        cur = sl["knob"]
+        if abs(cur - target_x) <= 3:
+            return cur
+        win = sl["win"]
+        y = win[1] + sl["cy"]
+        s.drag(win[0] + cur, y, win[0] + target_x, y, steps=18)
+        time.sleep(0.9)
+    sl = _slider(s)
+    return sl["knob"] if sl else None
+
+
+def read_effort(s: Screen, writer: str | None = None) -> dict:
+    """读当前强度。会开关一次弹层（Esc 不会改设置，只关）。"""
+    w = writer or read_writer(s).get("writer")
+    if w not in EFFORTS and w not in MODELS:
+        return {"effort": "unknown", "hint": "读不出当前模式"}
+    if not open_effort(s, w):
+        return {"effort": "unknown", "hint": "打不开强度弹层（只在新聊天页有）"}
+    sl = _slider(s)
+    close_all(s, w)
+    if sl is None:
+        return {"effort": "unknown", "hint": "弹层里没找到滑杆"}
+    key, d = _effort_of(sl["knob"])
+    out = {"effort": key, "label": EFFORTS[key][0], "knob": sl["knob"], "off": d}
+    if d > EFFORT_GAP:
+        out["hint"] = f"滑块停在 {sl['knob']}，离最近档位（{EFFORTS[key][0]}）差 {d}px，不在档上"
+    return out
+
+
+def set_effort(s: Screen, key: str, writer: str | None = None) -> dict:
+    """设强度。链路：开强度层 -> 拖滑块到目标档 -> Esc 关闭让它生效 -> 复核。"""
+    if key not in EFFORTS:
+        return {"ok": False, "stage": "bad_arg", "want": key,
+                "options": {k: v[0] for k, v in EFFORTS.items()}}
+    w = writer or read_writer(s).get("writer")
+    if w not in MODELS:
+        return {"ok": False, "stage": "no_writer",
+                "hint": "读不出当前是聊天还是工作，先用 --writer 定一下"}
+    if not open_effort(s, w):
+        return {"ok": False, "stage": "menu_not_open", "writer": w}
+
+    sl = _slider(s)
+    if sl is None:
+        return {"ok": False, "stage": "no_slider"}
+    before, _bd = _effort_of(sl["knob"])
+    target = EFFORTS[key][1]
+    final = _drag_knob(s, target)
+    after_sl = _slider(s)
+    moved_by = ("drag" if final is not None else "none")
+    if final is None:
+        after_sl = None
+
+    after, ad = _effort_of(after_sl["knob"]) if after_sl else (None, None)
+    close_all(s, w)                        # Esc 才会让强度生效
+    time.sleep(0.5)
+    ok = after == key
+    return {"ok": ok, "stage": "done" if ok else "unverified",
+            "before": before, "after": after, "want": key,
+            "knob": final, "off": ad, "by": moved_by}
+
+
 def _find_item(s: Screen, writer: str, tpl: str, scroll: bool = True):
     """找模型项；找不到就往下滚再找（工作模式 9 项，一屏放不下）。"""
     win = _win(s)
     m = s.find(tpl, threshold=0.85, region=win)
     if m is not None or not scroll:
         return m
-
-    import ctypes
-
-    # 滚轮滚的是鼠标底下那个东西：先把鼠标移到菜单里，否则滚的是整个页面
-    anchor = None
-    for _n, t in MODELS.get(writer, {}).values():
-        anchor = s.find(t, threshold=0.85, region=win)
-        if anchor is not None:
-            break
-    if anchor is not None:
-        s.move_to(*anchor.center)
-        time.sleep(0.25)
-
-    for _ in range(3):
-        ctypes.windll.user32.mouse_event(0x0800, 0, 0, -120, 0)   # wheel down
-        time.sleep(0.45)
+    # 列表内部的滚动条：把鼠标放到列表中间滚一下
+    cx = win[0] + win[2] // 2
+    cy = win[1] + win[3] // 2
+    try:
+        s.move_to(cx, cy)
+    except Exception:
+        return None
+    for _ in range(4):
+        s.scroll(-3)
+        time.sleep(0.35)
         m = s.find(tpl, threshold=0.85, region=win)
         if m is not None:
             return m
@@ -427,19 +580,19 @@ def _find_item(s: Screen, writer: str, tpl: str, scroll: bool = True):
 
 
 def chip_signature(s: Screen):
-    """截下芯片那一块的外观，只用来判断"模型换没换"。
+    """截下芯片那一块，用来判断"模型变没变"。
 
-    不用模板定位：芯片上的字随模型变（「GPT-6.1 Terra Max」/「选择推理强度」），
-    同一个模板不可能两种都匹上。用橙钮**取坐标**（只读位置，绝不点它），
-    窗口往左开得宽一点把整个芯片包进去。
+    用橙钮取坐标（只读位置，不点它）。切换后不重开菜单复核的情况下靠它判断，
+    快且不碰弹层。
     """
     v = _voice_center(s)
     if v is None:
         return None
-    img = s.grab((int(v[0]) - 240, int(v[1]) - 16, 210, 32))
+    box = (int(v[0]) - 300, int(v[1]) - 40, 240, 40)
+    img = s.grab(box)
     if img.size == 0:
         return None
-    return cv2.resize(img, (210, 32), interpolation=cv2.INTER_AREA)
+    return cv2.resize(img, (240, 40), interpolation=cv2.INTER_AREA)
 
 
 def _scan_model(s: Screen, writer: str):
@@ -466,7 +619,7 @@ def _scan_model(s: Screen, writer: str):
 
 
 def _pick_model(s: Screen, writer: str) -> dict:
-    """在**已经开着的**菜单里读当前模型。不负责开关菜单。
+    """在**已经开着的**列表里读当前模型。不负责开关菜单。
 
     单独拆出来是因为一次切换要读两次（切之前、切之后），如果读一次就开关一遍菜单，
     一次 --model 要开 3 遍菜单、点 7 下，直接把点击预算撞穿——超预算之后每一下都被
@@ -504,37 +657,25 @@ def _pick_model(s: Screen, writer: str) -> dict:
     return {"model": "unknown", "dist": dists, "hint": "勾落在两行之间，认不出"}
 
 
-def _close_menu(s: Screen, writer: str) -> None:
-    """关列表并**等它真收完**：只 sleep 0.3s 的话，下一段逻辑的第一下点击会被
-    残余的收起动画吃掉（实测连断两个）。"""
-    s.press("esc")
-    deadline = time.time() + 2.0
-    while time.time() < deadline:
-        time.sleep(0.2)
-        if not _items_visible(s, writer):
-            return
-
-
 def read_model(s: Screen, writer: str) -> dict:
-    """读当前模型（会开关一次菜单）。
-
-    勾是固定形状的小图标，用模板最稳。不能数深色像素：浅色主题下文字本身就是深色，
-    数出来的是字不是勾（实测把 GPT-6 Astra 误判成选中，实际是 GPT-6.1 Terra）。
-    """
+    """读当前模型。链路：开强度层 -> 进列表 -> 读勾 -> 全关。"""
     if not MODELS.get(writer):
         return {"model": None}
-    if not open_menu(s, writer):
+    if not enter_models(s, writer):
         return {"model": "unknown", "hint": "打不开模型列表"}
     out = _pick_model(s, writer)
-    _close_menu(s, writer)
+    close_all(s, writer)
     return out
 
 
 def set_model(s: Screen, key: str) -> dict:
-    """切模型。一次切换只开**两遍**菜单：切之前读一次、切之后复核一次。
+    """切模型。
 
-    之前是"read_model 开一遍 + set_model 再开一遍 + 复核又开一遍"，
-    一次调用点 7 下，撞穿 8 下的预算，超了以后每一下都被拒。
+    按用户指出的两步结构：开强度层 -> 进列表 -> 点目标 -> **自动退回强度层**。
+    不再像旧版那样在选完之后按 Esc 强行收弹层——那一层本来就是留给人调强度的，
+    收掉它等于把第二步吃掉了，也是「选完 default 之后老断」的原因之一。
+
+    点击次数：聚焦 1 + 入口行 1 + 目标项 1 + 复核再进列表 1 = 4 下，预算 8 够用。
     """
     w = read_writer(s)["writer"]
     if w not in MODELS:
@@ -546,22 +687,23 @@ def set_model(s: Screen, key: str) -> dict:
                 "options": list(models)}
 
     before_sig = chip_signature(s)
-    if not open_menu(s, w):
+    if not enter_models(s, w):
         return {"ok": False, "stage": "menu_not_open", "writer": w}
 
     cur = _pick_model(s, w)["model"]
     if cur == key:
-        _close_menu(s, w)
+        close_all(s, w)
         return {"ok": True, "stage": "already", "before": cur, "after": cur}
 
     m = _find_item(s, w, models[key][1])
     if m is None:
-        _close_menu(s, w)
+        close_all(s, w)
         return {"ok": False, "stage": "item_not_found", "before": cur, "want": key}
     ok, why = safe_click(s, m.center)
     if not ok:
-        _close_menu(s, w)
+        close_all(s, w)
         return {"ok": False, "stage": "click_blocked", "detail": why, "before": cur}
+    # 点完会**自动退回强度层**（这是正常行为，不是失败）
     time.sleep(1.4)
 
     win = _win(s)
@@ -572,16 +714,25 @@ def set_model(s: Screen, key: str) -> dict:
     time.sleep(0.4)
 
     if key in NO_READ:
-        still = _items_visible(s, w)
+        # 「默认（推荐模型集）」停不住：点下去解析成某个具体模型，芯片写的是那个名字，
+        # 永远复核不上。只按"退回强度层 + 芯片变了"验证。
+        back_to_effort = _slider(s) is not None
         after_sig = chip_signature(s)
         changed = (before_sig is not None and after_sig is not None and
                    float(np.abs(before_sig.astype(int) - after_sig.astype(int)).mean()) > 2.0)
-        ok2 = (not still) and changed
+        close_all(s, w)
+        ok2 = back_to_effort and changed
         return {"ok": ok2, "stage": "done_menu_closed" if ok2 else "unverified",
                 "before": cur, "after": "（推荐模型集→具体模型，不可读）",
-                "verified_by": "菜单关闭+芯片变化", "chip_changed": changed}
+                "verified_by": "退回强度层+芯片变化",
+                "back_to_effort": back_to_effort, "chip_changed": changed}
 
-    after = read_model(s, w)["model"]
+    # 复核：再进一次列表读勾（此时在强度层，进列表只要 1 下点击）
+    if not enter_models(s, w):
+        close_all(s, w)
+        return {"ok": False, "stage": "reverify_failed", "before": cur}
+    after = _pick_model(s, w)["model"]
+    close_all(s, w)
     return {"ok": after == key, "stage": "done" if after == key else "unverified",
             "before": cur, "after": after}
 
@@ -611,25 +762,31 @@ def main() -> int:
                 tab = int(raw)
             except ValueError:
                 bad.append("--tab 要数字")
+    want_effort = None
     if "--effort" in args:
-        bad.append("--effort 还没做（滑杆几何要重量，会实际发请求，等页面空下来再补）")
+        want_effort = take("--effort")
 
     if bad:
         print("参数有问题：", bad)
         return 2
-    if not do_list and want_model is None and want_writer is None:
+    if not do_list and want_model is None and want_writer is None and want_effort is None:
         print("用法：")
         print(f"  python {name} --list [--tab N]")
         print(f"  python {name} --writer chat|work")
         print(f"  python {name} --model <名字>      （模型分模式，先定 --writer）")
+        print(f"  python {name} --effort low|mid|high|xhigh|max")
+        print("    强度滑杆是单独一步：开弹层(滑杆+模型名) -> 点模型名进列表 -> 选完自动回滑杆 -> 拖档位 -> Esc 生效")
         print("  --tab N  先切到第 N 个标签页（左边数）")
         print("  --idle 2 / --wait 120 / --force   你正在用电脑时是否等待")
         for wr, items in MODELS.items():
             print(f"    [{wr}] " + ", ".join(f"{k}({d})" for k, (d, _t) in items.items()))
-        print("  说明：思考强度（instant/mid/high）暂未实现")
+        print("    强度档位：" + ", ".join(f"{k}({v[0]})" for k, v in EFFORTS.items()))
         return 2
     if want_writer is not None and want_writer not in TAB_WORDS:
         print(f"没有这个模式：{want_writer}；可选 {', '.join(TAB_WORDS)}")
+        return 2
+    if want_effort is not None and want_effort not in EFFORTS:
+        print(f"没有这个强度：{want_effort}；可选 {', '.join(EFFORTS)}")
         return 2
     if want_model is not None:
         known = set(MODELS["chat"]) | set(MODELS["work"])
@@ -650,12 +807,18 @@ def main() -> int:
     if not guard.guard(idle_need, idle_wait, force):
         return 4
     s = Screen()
-    if not s.bring_to_front(TITLE, on_secondary=True):
-        print("找不到副屏的浏览器窗口")
+    hwnd = ensure_site("chatgpt")
+    if hwnd is None:
+        print("开不出浏览器窗口（检查 Chrome 路径）")
         return 1
-    if tab:
-        s.hotkey("ctrl", str(tab))
-        time.sleep(1.8)
+    s.bind(hwnd)
+    if not s.focus():
+        print("窗口提不到前台")
+        return 1
+    time.sleep(1.2)
+    # --tab 不再生效：ensure_site 保证当前标签就是要操作的那个页面，
+    # 再切一下反而会把目标页切走。参数保留只为兼容旧命令。
+    _ = tab
 
     try:
         if want_writer is not None:
@@ -670,12 +833,15 @@ def main() -> int:
 
         if do_list:
             # 读状态不许改页面：这里不点「新聊天」，否则会把用户正在聊的会话重置掉
-            out = {"effort": "unknown", "effort_note": "思考强度未实现"}
+            out = {}
             out.update(read_writer(s))
             if out.get("writer") in (None, "unknown"):
                 out["note"] = "模式按钮只在新聊天页出现；这里不主动改页面，读不到就手动开个新聊天。"
             else:
                 out.update(read_model(s, out["writer"]))
+                eff = read_effort(s, out["writer"])
+                out["effort"] = eff.pop("effort")
+                out.update({f"effort_{k}": v for k, v in eff.items()})
             print(json.dumps(out, ensure_ascii=False))
             return 0
 
@@ -687,6 +853,14 @@ def main() -> int:
                 rc = 1
         if want_model is not None:
             r = set_model(s, want_model)
+            print(json.dumps(r, ensure_ascii=False))
+            rc = 0 if r.get("ok") else 1
+
+        if want_effort is not None:
+            # 顺序很重要：必须先选模型再调强度。
+            # 因为选完模型会自动退回强度层，正好是调强度的位置；
+            # 反过来先调强度再选模型，选完还得重开一次弹层。
+            r = set_effort(s, want_effort)
             print(json.dumps(r, ensure_ascii=False))
             rc = 0 if r.get("ok") else 1
     except ForegroundLost as e:

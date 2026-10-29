@@ -16,6 +16,7 @@ import time
 from dataclasses import dataclass, field
 
 from . import guard
+from .browser import ensure_site
 from .screen import ForegroundLost, Screen
 
 
@@ -275,12 +276,18 @@ def cli(cfg: Chooser, argv: list[str]) -> int:
     if not guard.guard(need, wait, force):
         return 4
     s = Screen()
-    if not s.bring_to_front(cfg.title_hint, on_secondary=cfg.on_secondary):
-        print("找不到浏览器窗口")
+    hwnd = ensure_site(cfg.name)
+    if hwnd is None:
+        print("开不出浏览器窗口（检查 Chrome 路径）")
         return 1
-    if tab:
-        s.hotkey("ctrl", str(tab))
-        time.sleep(1.8)
+    s.bind(hwnd)
+    if not s.focus():
+        print("窗口提不到前台")
+        return 1
+    time.sleep(1.2)
+    # --tab 不再生效：ensure_site 保证当前标签就是要操作的那个页面，
+    # 再切一下反而会把目标页切走。参数保留只为兼容旧命令。
+    _ = tab
 
     if do_list:
         out = dict(read_current(s, cfg))

@@ -27,6 +27,7 @@ if _SRC not in sys.path:
     sys.path.insert(0, _SRC)
 
 from qi import ForegroundLost, Library, Screen  # noqa: E402
+from qi.browser import ensure_site  # noqa: E402
 from qi import guard  # noqa: E402
 
 # 每个开关一张定位图（截"关"的样子即可，两态都能定位到）
@@ -152,12 +153,16 @@ def main() -> int:
     if not guard.guard(need, wait, force):
         return 4
     s = Screen()
-    if not s.bring_to_front(TITLE, on_secondary=True):
-        print("找不到浏览器窗口")
+    hwnd = ensure_site("deepseek")
+    if hwnd is None:
+        print("开不出浏览器窗口（检查 Chrome 路径）")
         return 1
-    if o.get("tab"):
-        s.hotkey("ctrl", str(o["tab"]))
-        time.sleep(1.8)
+    s.bind(hwnd)
+    if not s.focus():
+        print("窗口提不到前台")
+        return 1
+    time.sleep(1.2)
+    # --tab 不再生效：ensure_site 保证当前标签就是目标页
     try:
         if o["list"]:
             print(json.dumps(list_state(s), ensure_ascii=False))

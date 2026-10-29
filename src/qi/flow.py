@@ -13,6 +13,7 @@ import time
 from dataclasses import dataclass
 
 from . import guard
+from .browser import ensure_site
 from .screen import ForegroundLost, Match, Screen
 
 
@@ -167,12 +168,18 @@ def ask(site: Site, prompt: str, *, mode: str = "new", timeout: float = 180.0,
     t0 = time.time()
     s = Screen(verbose=verbose)
 
-    if not s.bring_to_front(site.title_hint, on_secondary=site.on_secondary):
+    hwnd = ensure_site(site.name, verbose=verbose)
+    if hwnd is None:
+        return {"ok": False, "stage": "no_window", "elapsed": round(time.time() - t0, 1),
+                "hint": "开不出浏览器窗口（检查 Chrome 路径）"}
+    s.bind(hwnd)
+    if not s.focus():
         return {"ok": False, "stage": "page_not_front", "elapsed": round(time.time() - t0, 1),
-                "hint": f"没找到标题含 {site.title_hint!r} 的窗口"}
-    if tab:
-        s.hotkey("ctrl", str(tab))
-        time.sleep(1.8)
+                "hint": "窗口提不到前台"}
+    time.sleep(1.5)          # 新窗口要等标签页加载；复用窗口时这 1.5s 也无害
+    # --tab 不再生效：ensure_site 保证当前标签就是要操作的那个页面，
+    # 再切一下反而会把目标页切走。参数保留只为兼容旧命令。
+    _ = tab
 
     # 1. 新对话
     if mode == "new":
