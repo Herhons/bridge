@@ -1,0 +1,189 @@
+"""桌面端内核：按**进程名**找窗口，启动/复用，置前。
+
+为什么不用窗口标题：
+    · codex 桌面端的进程是 `ChatGPT.exe`、窗口标题也是 `ChatGPT`，
+      而 Chrome 里开着 chatgpt.com 时窗口标题是 `ChatGPT - Google Chrome`，
+      按标题子串匹配会抓错（v0.0.8 的 bench 里 codex 那条基线就是这么废掉的）。
+    · dsh 的标题会变成会话名（`List sessions command — DeepSeek Harness`），
+      前缀不固定。
+所以一律走 GetWindowThreadProcessId + 进程可执行文件名。
+
+四端共同的界面结构（2026-10-29 实测截图确认）：
+    左：+ 按钮        中/右：模型芯片 ∨   麦克风   发送圆钮
+    发送键颜色：codex 橙 / dsh 蓝 / opencode 灰 / workbuddy 黑
+"""
+
+from __future__ import annotations
+
+import ctypes
+import subprocess
+import time
+from ctypes import wintypes
+
+user32 = ctypes.windll.user32
+kernel32 = ctypes.windll.kernel32
+psapi = ctypes.windll.psapi
+
+PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+SWP_NOACTIVATE = 0x0010
+SWP_SHOWWINDOW = 0x0040
+
+# 每端：进程可执行文件名 + 启动用的 shell 目标（已安装应用的 AppID）
+APPS: dict[str, dict] = {
+    "codex": {
+        "proc": "ChatGPT.exe",
+        "title_hint": "ChatGPT",
+        "launch": r"shell:AppsFolder\OpenAI.Codex_2p2nqsd0c76g0!App",
+    },
+    "dsh": {
+        "proc": "DeepSeek Harness.exe",
+        "title_hint": "DeepSeek Harness",
+        "launch": r"shell:AppsFolder\electron.app.DeepSeek Harness",
+    },
+    "opencode": {
+        "proc": "OpenCode.exe",
+        "title_hint": "OpenCode",
+        "launch": r"shell:AppsFolder\ai.opencode.desktop",
+    },
+    "workbuddy": {
+        "proc": "WorkBuddy.exe",
+        "title_hint": "WorkBuddy",
+        "launch": None,          # 就是当前这个应用，通常已经开着
+    },
+}
+
+
+def _pid_of(hwnd: int) -> int:
+    pid = wintypes.DWORD()
+    user32.GetWindowThreadProcessId(int(hwnd), ctypes.byref(pid))
+    return int(pid.value)
+
+
+def _proc_name(pid: int) -> str:
+    """pid -> 可执行文件名（不含路径）。取不到返回空串。"""
+    h = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid))
+    if not h:
+        return ""
+    try:
+        buf = ctypes.create_unicode_buffer(1024)
+        size = wintypes.DWORD(1024)
+        if not kernel32.QueryFullProcessImageNameW(h, 0, buf, ctypes.byref(size)):
+            return ""
+        return buf.value.rsplit("\\", 1)[-1]
+    finally:
+        kernel32.CloseHandle(h)
+
+
+def _visible_windows() -> list[tuple[int, str, tuple[int, int, int, int]]]:
+    out: list[tuple[int, str, tuple[int, int, int, int]]] = []
+
+    @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    def cb(hwnd, _):
+        if not user32.IsWindowVisible(hwnd):
+            return True
+        n = user32.GetWindowTextLengthW(hwnd)
+        title = ""
+        if n > 0:
+            b = ctypes.create_unicode_buffer(n + 1)
+            user32.GetWindowTextW(hwnd, b, n + 1)
+            title = b.value
+        r = wintypes.RECT()
+        user32.GetWindowRect(hwnd, ctypes.byref(r))
+        out.append((int(hwnd), title,
+                    (r.left, r.top, r.right - r.left, r.bottom - r.top)))
+        return True
+
+    user32.EnumWindows(cb, 0)
+    return out
+
+
+def find_app(name: str, *, min_size: tuple[int, int] = (400, 300)) -> int | None:
+    """按进程名找一个该应用的**可见主窗口**，多个时取面积最大的。
+
+    桌面应用常带几个隐藏的辅助窗口（Electron 的 message window 之类），
+    所以要求「可见 + 有尺寸 + 面积最大」。
+    """
+    spec = APPS.get(name)
+    if spec is None:
+        raise KeyError(f"未知的桌面端: {name}")
+    want = spec["proc"].lower()
+    best, area = None, 0
+    for hwnd, _title, (x, y, w, h) in _visible_windows():
+        if w < min_size[0] or h < min_size[1]:
+            continue
+        if _proc_name(_pid_of(hwnd)).lower() != want:
+            continue
+        a = w * h
+        if a > area:
+            area, best = a, hwnd
+    return best
+
+
+def running(name: str) -> bool:
+    return find_app(name) is not None
+
+
+def launch(name: str) -> bool:
+    """启动应用（用 shell:AppsFolder，MSIX 和普通 exe 都适用）。"""
+    spec = APPS[name]
+    if not spec.get("launch"):
+        return False
+    subprocess.Popen(["explorer.exe", spec["launch"]])
+    return True
+
+
+def ensure_app(name: str, *, wait: float = 25.0, verbose: bool = True) -> int | None:
+    """没有就启动，然后等窗口出现。返回 hwnd 或 None。"""
+    hwnd = find_app(name)
+    if hwnd is not None:
+        if verbose:
+            print(f"  复用已有 {name} 窗口 hwnd={hwnd}")
+        return hwnd
+    if not launch(name):
+        return None
+    if verbose:
+        print(f"  启动 {name} …")
+    end = time.time() + wait
+    while time.time() < end:
+        time.sleep(1.0)
+        hwnd = find_app(name)
+        if hwnd is not None:
+            if verbose:
+                print(f"  起来了 hwnd={hwnd}")
+            return hwnd
+    return None
+
+
+def activate(hwnd: int, *, topmost_flash: bool = True) -> None:
+    """把窗口提到前台。
+
+    先用 SetForegroundWindow；被系统拒绝时（前台锁），用一次 topmost 闪一下
+    再取消，这是不需要 UIA / AttachThreadInput 的常见做法。
+    """
+    if user32.GetForegroundWindow() == int(hwnd):
+        return
+    user32.SetForegroundWindow(int(hwnd))
+    time.sleep(0.3)
+    if user32.GetForegroundWindow() == int(hwnd):
+        return
+    if topmost_flash:
+        user32.SetWindowPos(int(hwnd), -1, 0, 0, 0, 0, 0x0001 | 0x0002)
+        time.sleep(0.25)
+        user32.SetWindowPos(int(hwnd), -2, 0, 0, 0, 0, 0x0001 | 0x0002)
+        time.sleep(0.25)
+
+
+def place(hwnd: int, pos: tuple[int, int], size: tuple[int, int]) -> None:
+    """挪窗口到指定位置和尺寸（不激活）。"""
+    user32.SetWindowPos(int(hwnd), 0, int(pos[0]), int(pos[1]),
+                        int(size[0]), int(size[1]),
+                        SWP_NOACTIVATE | SWP_SHOWWINDOW)
+
+
+def rect_of(hwnd: int) -> tuple[int, int, int, int] | None:
+    r = wintypes.RECT()
+    if not user32.GetWindowRect(int(hwnd), ctypes.byref(r)):
+        return None
+    if r.right - r.left <= 0:
+        return None
+    return (r.left, r.top, r.right - r.left, r.bottom - r.top)
