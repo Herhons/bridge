@@ -203,11 +203,35 @@ def main() -> int:
             j = argv.index("--tab")
             if j + 1 < len(argv):
                 sc.hotkey("ctrl", argv[j + 1]); time.sleep(1.2)
-        out = {"writer": read_writer(sc, CFG).get("writer"),
-               "model": "unknown", "note": "模型/思考等级未支持，请在网页上手动选"}
-
+        # 读状态不改页面。模式按钮只在新对话页出现，会话页里读不到是正常的。
+        w = read_writer(sc, CFG).get("writer")
+        out = {"writer": w, "model": "unknown", "note": "模型/思考等级未支持，请在网页上手动选"}
+        if w in (None, "unknown"):
+            out["note"] = "模式按钮只在新对话页出现（当前在会话页）。用 --new 先开新对话再读；本命令不替你重置会话。"
         print(json.dumps(out, ensure_ascii=False))
         return 0
+
+    if "--new" in argv:
+        # 显式要求：先开新对话，再读/切模式
+        sc = Screen()
+        if not sc.bring_to_front(CFG.title_hint, on_secondary=CFG.on_secondary):
+            print("找不到浏览器窗口"); return 1
+        if "--tab" in argv:
+            j = argv.index("--tab")
+            if j + 1 < len(argv):
+                sc.hotkey("ctrl", argv[j + 1]); time.sleep(1.2)
+        from qi.flow import Site, _open_new_chat
+        site = Site(name="gemini", title_hint=CFG.title_hint, composer="gem_composer",
+                    send="gem_send_on", actions="gem_actions", copy="gem_copy",
+                    composer_offset=(200, 0), newchat="gem_newchat")
+        r = _open_new_chat(sc, site)
+        time.sleep(1.2)
+        rest = [a for a in argv if a != "--new"]
+        if not any(a.startswith("--model") or a.startswith("--writer") for a in rest):
+            print(json.dumps({"newchat": r, "writer": read_writer(sc, CFG).get("writer")},
+                             ensure_ascii=False))
+            return 0 if r.get("ok") else 1
+        return cli(CFG, rest)
 
     lib = Library()
     print(lib.report(REQUIRED))

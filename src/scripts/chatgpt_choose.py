@@ -362,15 +362,19 @@ def main() -> int:
         s.hotkey("ctrl", str(tab))
         time.sleep(1.2)
 
-    if writer is not None or do_list:
-        # 先回到新对话页，否则模式按钮根本不在页面上
+    if writer is not None:
+        # 只有真要切模式才需要回新对话页——模式按钮只在那里
         _open_new_chat(s, _NEWCHAT)
         time.sleep(1.0)
 
     if do_list:
+        # 读状态不许改页面：不再顺手点「新聊天」，否则会把用户正在聊的会话重置掉
         out = dict(read_current(s))
         out.update(read_writer(s, WRITER))
-        out.update(read_model(s, out.get("writer") or "chat"))
+        if out.get("writer") in (None, "unknown"):
+            out["note"] = "模式按钮只在新聊天页出现；这里不改页面，所以读不到模式。要读请先手动开新聊天。"
+        else:
+            out.update(read_model(s, out["writer"]))
         print(json.dumps(out, ensure_ascii=False))
         return 0
 

@@ -21,7 +21,7 @@ class Site:
     title_hint: str            # 窗口标题关键词，用来提到前台
     composer: str              # 输入框锚点模板名
     send: str                  # 发送键（可用态）模板名
-    actions: str               # 回答动作条整排模板名
+    actions: str | tuple[str, ...]     # 回答动作条整排模板（对话/任务可能不是同一排，可给多个）
     copy: str                  # 动作条内复制键模板名
     composer_offset: tuple[int, int]   # 从锚点中心到文字区的偏移
     newchat: str | tuple[str, ...] | None = None   # 新对话按钮（可多个候选：整条 / 收起后的图标）
@@ -92,15 +92,20 @@ def _is_action_row(s: Screen, m: Match) -> bool:
 
 
 def _pick_copy_target(s: Screen, site: Site) -> tuple[Match | None, dict]:
-    rows = s.find_all(site.actions, threshold=0.88)
+    names = (site.actions,) if isinstance(site.actions, str) else tuple(site.actions)
+    rows: list[Match] = []
+    for nm in names:
+        rows += s.find_all(nm, threshold=0.88)
     if not rows:
         time.sleep(0.5)                      # 动作条可能还在渐入
-        rows = s.find_all(site.actions, threshold=0.88)
+        for nm in names:
+            rows += s.find_all(nm, threshold=0.88)
     if rows:
         row = max(rows, key=lambda m: m.y)      # 多轮会话取最靠下那排＝最新回答
         inner = s.find(site.copy, threshold=0.85, region=(row.x, row.y, row.w, row.h))
         if inner is not None:
-            return inner, {"rule": "actions_row", "row": [row.x, row.y, row.w, row.h]}
+            return inner, {"rule": "actions_row", "row": [row.x, row.y, row.w, row.h],
+                           "tpl": row.name.split("@")[0]}
         return Match(site.copy + "@row_offset", 1.0, row.x + 6, row.y + 6, 22, 22), {
             "rule": "actions_row_offset", "row": [row.x, row.y, row.w, row.h]}
 
@@ -129,7 +134,11 @@ def _hover_hunt(s: Screen, site: Site) -> list[Match]:
 
 
 def ask(site: Site, prompt: str, *, mode: str = "new", timeout: float = 180.0,
-        verbose: bool = True, tab: int | None = None) -> dict:
+        verbose: bool = True, tab: int | None = None, prepare=None) -> dict:
+    """prepare(s) -> dict：新对话之后、写输入之前要做的准备（比如切任务模式）。
+
+    顺序不能反：Gemini 点「新对话」会重置模式，先切后点等于白切。
+    """
     t0 = time.time()
     s = Screen(verbose=verbose)
 
@@ -146,6 +155,14 @@ def ask(site: Site, prompt: str, *, mode: str = "new", timeout: float = 180.0,
         if not r["ok"]:
             return {"ok": False, "stage": r["stage"], "elapsed": round(time.time() - t0, 1),
                     "hint": r.get("hint", "")}
+
+    # 1b. 准备（切模式等）。必须在点完新对话之后——否则会被重置。
+    if prepare is not None:
+        pr = prepare(s)
+        if not pr.get("ok"):
+            return {"ok": False, "stage": "prepare_failed", "elapsed": round(time.time() - t0, 1),
+                    "prepare": pr,
+                    "hint": pr.get("hint") or "准备步骤失败（切换模式/档位时复核没过）"}
 
     # 2. 写入
     anchor = s.find(site.composer, threshold=0.80)
@@ -222,7 +239,7 @@ def ask(site: Site, prompt: str, *, mode: str = "new", timeout: float = 180.0,
             "prompt_len": len(prompt), "generating_seen": generating_seen}
 
 
-def cli(site: Site, argv: list[str]) -> int:
+def cli(site: Site, argv: list[str], *, prepare=None, extra_help: str = "") -> int:
     mode, timeout, words, bad, tab = "new", 180.0, [], [], None
     i = 0
     while i < len(argv):
@@ -257,14 +274,18 @@ def cli(site: Site, argv: list[str]) -> int:
     if bad:
         print("参数有问题：", bad)
         print(f'用法: python {name} "你的提问" [--new|--continue] [--timeout 180] [--tab N]')
+        if extra_help:
+            print(extra_help)
         return 2
     if not prompt.strip():
         print(f'用法: python {name} "你的提问" [--new|--continue] [--timeout 180] [--tab N]')
         print("  --new       先点新对话再发（默认）")
         print("  --continue  直接发在当前对话里")
+        if extra_help:
+            print(extra_help)
         return 2
 
-    result = ask(site, prompt, mode=mode, timeout=timeout, tab=tab)
+    result = ask(site, prompt, mode=mode, timeout=timeout, tab=tab, prepare=prepare)
     if result.get("ok"):
         print("=== 回答 ===")
         print(result.pop("reply"))

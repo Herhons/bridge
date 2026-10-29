@@ -2,15 +2,17 @@
 
 用法：
     python gemini_use.py "只回复两个字：收到"
+    python gemini_use.py "帮我把这批文件按日期归类" --task      ← 任务（计划）模式
     python gemini_use.py "..." --continue
 
 本端要点（都是实测量出来的）：
 - 输入框锚点是左下角固定的「+」，按偏移 (200,0) 点进文字行。
-- 空输入时右侧只有麦克风；输入文字后才出现**蓝色圆形发送键**，
+- 空输入时右侧只有麦克风；输入文字后才出现**紫色圆形发送键**，
   所以"发送键出现了"就代表写进去了。
 - 回答动作条是 赞/踩/重新生成/**复制**/更多 —— 复制在**第 4 个**，不在第一个。
-  所以不能按"排内最左"点，必须用 gem_copy 图在排内精定位。
 - 页面是深色主题，模板也是深色下截的，换主题要重截。
+- **点「发起新对话」会把模式重置回对话**，所以要用任务模式必须"先新对话、再切任务"。
+  顺序反了等于白切（这是之前的 bug）。
 """
 
 from __future__ import annotations
@@ -23,6 +25,7 @@ if _SRC not in sys.path:
     sys.path.insert(0, _SRC)
 
 from qi import Library  # noqa: E402
+from qi.choose import Chooser, choose_writer  # noqa: E402
 from qi.flow import Site, cli  # noqa: E402
 
 SITE = Site(
@@ -30,7 +33,7 @@ SITE = Site(
     title_hint="Google Chrome",
     composer="gem_composer",
     send="gem_send_on",
-    actions="gem_actions",
+    actions=("gem_actions", "gem_actions_task"),   # 对话 6 个图标 / 任务 4 个图标，两排模板
     copy="gem_copy",
     composer_offset=(200, 0),
     newchat="gem_newchat",
@@ -39,18 +42,54 @@ SITE = Site(
     send_threshold=0.88,
 )
 
-REQUIRED = ["gem_composer", "gem_send_on", "gem_actions", "gem_copy"]
+# 模式切换用（对话 / 任务）。模板是"整组按钮"各一张，读法见 qi/choose.py。
+WRITER = Chooser(
+    name="gemini",
+    anchor="gem_composer",
+    open_offset=(0, 0),
+    prefix="gem_",
+    writer_tabs=("gem_writer_tabs_dialog", "gem_writer_tabs_task"),
+    writers={"dialog": 0, "task": 1},
+)
+
+REQUIRED = ["gem_composer", "gem_send_on", "gem_actions", "gem_actions_task", "gem_copy"]
+
+
+def _mk_prepare(want: str):
+    def fn(s):
+        return choose_writer(s, WRITER, want)
+    return fn
 
 
 def main() -> int:
+    argv = list(sys.argv[1:])
+    want = None
+    if "--task" in argv:
+        argv.remove("--task")
+        want = "task"
+    elif "--chat" in argv:
+        argv.remove("--chat")
+        want = "dialog"
+
+    # 模式按钮只在新对话页出现，所以用 --task/--chat 时强制先回新对话页
+    if want is not None and "--continue" in argv:
+        argv.remove("--continue")
+
     lib = Library()
-    need = list(REQUIRED)
-    if "--new" in sys.argv[1:] or not any(a.startswith("--") for a in sys.argv[1:]):
+    need = list(REQUIRED) + list(WRITER.writer_tabs)
+    if "--new" in argv or not any(a.startswith("--") for a in argv) or want:
         need.append("gem_newchat")
     print(lib.report(need))
     if lib.missing(need):
         return 3
-    return cli(SITE, sys.argv[1:])
+
+    prepare = _mk_prepare(want) if want else None
+    return cli(
+        SITE, argv,
+        prepare=prepare,
+        extra_help="  --task      发到「任务（计划）」模式：先新对话，再切任务，然后提交\n"
+                   "  --chat      发到「对话」模式（默认）",
+    )
 
 
 if __name__ == "__main__":
