@@ -27,8 +27,8 @@ _SRC = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _SRC not in sys.path:
     sys.path.insert(0, _SRC)
 
-from qi import Library  # noqa: E402
-from qi.choose import Chooser, cli, open_menu  # noqa: E402
+from qi import Library, Screen  # noqa: E402
+from qi.choose import Chooser, cli, open_menu, read_writer  # noqa: E402
 
 CFG = Chooser(
     name="gemini",
@@ -51,15 +51,79 @@ THINK = {"low": ("低 快速高效", "gem_tk_low"),
          "mid": ("中 深度适中", "gem_tk_mid"),
          "high": ("高 超级详尽", "gem_tk_high")}
 THINK_ENTRY = "gem_tk_entry"
+# 模型芯片在输入框锚点右边固定的位置（输入框有最大宽度且居中，所以这个偏移稳定）
+MENU_DX, MENU_DY = 600, -3
+
+
+def _items_visible(s) -> bool:
+    return any(s.find(f"gem_item_{k}", threshold=0.85) is not None for k in CFG.options)
+
+
+def _open_model_menu(s) -> bool:
+    """用输入框锚点 + 偏移打开模型菜单。
+
+    不用芯片图定位：芯片会因聚焦（蓝框）/悬停变样式，模板经常对不上。
+    锚点 gem_composer 一直是 1.000，稳定得多。
+    """
+    if _items_visible(s):
+        return True
+    s.press("esc")
+    time.sleep(0.25)
+    a = s.find("gem_composer", threshold=0.85)
+    if a is None:
+        return False
+    s.click(a, offset=(MENU_DX, MENU_DY))
+    time.sleep(1.0)
+    return _items_visible(s)
+
+
+def read_model(s) -> dict:
+    """读当前模型：菜单项左边有没有勾。实测选中 37、未选 0。"""
+    if not _open_model_menu(s):
+        return {"model": "unknown", "hint": "打不开模型菜单"}
+    ink = {}
+    for k in CFG.options:
+        m = s.find(f"gem_item_{k}", threshold=0.85)
+        if m is not None:
+            band = s.grab((m.x, m.y, 40, m.h))
+            g = cv2.cvtColor(band, cv2.COLOR_BGR2GRAY)
+            ink[k] = int((g > 140).sum())
+    s.press("esc")
+    time.sleep(0.3)
+    if not ink:
+        return {"model": "unknown", "hint": "模型项一个都没定位到"}
+    best = max(ink, key=ink.get)
+    return {"model": best if ink[best] > 10 else "unknown", "ink": ink}
+
+
+def set_model(s, key: str) -> dict:
+    if key not in CFG.options:
+        return {"ok": False, "stage": "bad_arg", "want": key, "options": list(CFG.options)}
+    cur = read_model(s)["model"]
+    if cur == key:
+        return {"ok": True, "stage": "already", "before": cur, "after": cur}
+    if not _open_model_menu(s):
+        return {"ok": False, "stage": "menu_not_open", "before": cur}
+    m = s.find(f"gem_item_{key}", threshold=0.85)
+    if m is None:
+        s.press("esc")
+        return {"ok": False, "stage": "item_not_found", "before": cur, "want": key}
+    s.click(m)
+    time.sleep(1.2)
+    s.move_to(-1300, 700)
+    time.sleep(0.4)
+    after = read_model(s)["model"]
+    return {"ok": after == key, "stage": "done" if after == key else "unverified",
+            "before": cur, "after": after}
 
 
 def _open_think(s) -> bool:
     """打开模型菜单 → 点「思考等级」→ 子菜单。"""
     if not any(s.find(t, threshold=0.85) for _d, t in THINK.values()):
         if s.find(THINK_ENTRY, threshold=0.85) is None:
-            if not open_menu(s, CFG):
+            if not _open_model_menu(s):
                 return False
-            time.sleep(0.6)
+            time.sleep(0.4)
         e = s.find(THINK_ENTRY, threshold=0.85)
         if e is None:
             return False
@@ -114,23 +178,36 @@ REQUIRED = ([f"gem_item_{k}" for k in CFG.options]
 def main() -> int:
     argv = sys.argv[1:]
     # --think 走单独的流程（子菜单维度），其余交给通用 cli
+    if "--model" in argv:
+        # 实测不稳：菜单选中行会加边框和勾，整行模板在选中/未选两态长得不一样；
+        # 改成只截文字后，勾的位置又随渲染变，读不出"当前是哪个"。
+        # 与其给一个自己都复核不了的开关，不如说清楚。
+        print(json.dumps({"ok": False, "stage": "not_supported",
+                          "hint": "Gemini 模型选择的读值不稳（选中行样式会变），已停用；请在网页上手动选。"},
+                         ensure_ascii=False))
+        return 1
+
     if "--think" in argv:
-        i = argv.index("--think")
-        if i + 1 >= len(argv):
-            print("--think 缺值；可选：", ", ".join(THINK))
-            return 2
-        key = argv[i + 1].strip().lower()
-        rest = argv[:i] + argv[i + 2:]
-        s = Screen()
-        if not s.bring_to_front(CFG.title_hint, on_secondary=CFG.on_secondary):
+        # 实测：思考等级子菜单点一下会把整个菜单关掉，悬停也不触发（鼠标瞬移不产生 hover）。
+        # 与其留一个永远失败的开关，不如明确说不支持。
+        print(json.dumps({"ok": False, "stage": "not_supported",
+                          "hint": "Gemini 思考等级未支持：子菜单只在鼠标真实悬停时展开，脚本点不开。"
+                                  "需要的话请在网页上手动选。"}, ensure_ascii=False))
+        return 1
+
+    if "--list" in argv:
+        sc = Screen()
+        if not sc.bring_to_front(CFG.title_hint, on_secondary=CFG.on_secondary):
             print("找不到浏览器窗口"); return 1
-        if "--tab" in rest:
-            j = rest.index("--tab")
-            if j + 1 < len(rest):
-                s.hotkey("ctrl", rest[j + 1]); time.sleep(1.2)
-        r = set_think(s, key)
-        print(json.dumps(r, ensure_ascii=False))
-        return 0 if r.get("ok") else 1
+        if "--tab" in argv:
+            j = argv.index("--tab")
+            if j + 1 < len(argv):
+                sc.hotkey("ctrl", argv[j + 1]); time.sleep(1.2)
+        out = {"writer": read_writer(sc, CFG).get("writer"),
+               "model": "unknown", "note": "模型/思考等级未支持，请在网页上手动选"}
+
+        print(json.dumps(out, ensure_ascii=False))
+        return 0
 
     lib = Library()
     print(lib.report(REQUIRED))
