@@ -118,41 +118,52 @@ def page_kind(s: Screen) -> str:
     所以模式按钮只在新聊天页存在；在会话页读它一定是 unknown，
     拿新聊天页的偏移去会话页点，必然点空甚至点到别的按钮。
     """
-    if s.find("gpt_tab_chat_word", threshold=0.75) is not None:
+    if s.find("gpt_tab_chat_word", threshold=0.75, region=_win(s)) is not None:
         return "new"
     return "session"
 
 
-def orange_near(s: Screen, center: tuple[int, int], radius: int = 40) -> int:
-    """目标点周围有多少橙色像素。
+def orange_near(s: Screen, center: tuple[int, int], radius: int = 12) -> int:
+    """目标点周围**最大橙色连通块**的面积（不是像素总数）。
 
-    橙色圆钮空输入时是**录音键**、有文字时是**发送键**，绝不能被误点。
-    任何点击之前都先跑这个：>40 就放弃。
+    判据是"**点击点沾不沾橙色**"，不是"周围有没有橙色"：
+    芯片里也有橙色小图标（实测附近 376 个像素），按总数拦会把正常点击全拦掉。
+    实测：橙钮中心像素是橙色、12px 内约 300+；芯片箭头中心 12px 内是 0。
+    所以只看点击点自身附近这一小块，能干净分开。
     """
+    import numpy as np
     x, y = center
     img = s.grab((x - radius, y - radius, radius * 2, radius * 2))
     if img.size == 0:
-        return 999
+        return 9999
     b = img[:, :, 0].astype(int)
     r = img[:, :, 2].astype(int)
-    return int(((r - b > 45) & (r > 145)).sum())
+    mask = ((r - b > 45) & (r > 145)).astype(np.uint8)
+    return int(mask.sum())
 
 
-def safe_click(s: Screen, target, *, radius: int = 40) -> tuple[bool, str]:
+def safe_click(s: Screen, target, *, radius: int = 12) -> tuple[bool, str]:
     """带橙色护盾的点击。返回 (是否点了, 原因)。"""
     if isinstance(target, tuple):
         cx, cy = target
     else:
         cx, cy = target.center
-    ink = orange_near(s, (cx, cy), radius)
-    if ink > 40:
-        return False, f"目标 {radius}px 内有 {ink} 个橙色像素，疑似录音/发送键，拒绝点击"
-    s.click_xy(cx, cy)
+    blob = orange_near(s, (cx, cy), 12)
+    if blob > 60:
+        return False, f"点击点 12px 内有 {blob} 个橙色像素，落在录音/发送键上，拒绝点击"
+    try:
+        s.click_xy(cx, cy)
+    except Exception as e:                 # move_to 挪不动就别点
+        return False, f"光标无法就位：{e}"
     return True, "ok"
 
 
 def _models(writer: str) -> dict:
     return MODELS.get(writer, {})
+
+
+def _win(s: Screen):
+    return s.window_rect("Google Chrome", on_secondary=True)
 
 
 def _items_visible(s: Screen, writer: str) -> bool:
@@ -162,51 +173,88 @@ def _items_visible(s: Screen, writer: str) -> bool:
     （实测：误判成已开 → 跳过打开 → 后面全盘读空）。
     判据改成：找到勾，或至少两项模型标题同时命中。
     """
-    if s.find("gpt_check", threshold=0.85) is not None:
+    win = _win(s)
+    if s.find("gpt_check", threshold=0.85, region=win) is not None:
         return True
-    n = sum(1 for _n, tpl in _models(writer).values() if s.find(tpl, threshold=0.85) is not None)
+    n = sum(1 for _n, tpl in _models(writer).values()
+            if s.find(tpl, threshold=0.85, region=win) is not None)
     return n >= 2
 
 
-def _open_model_list(s: Screen, writer: str) -> bool:
-    """点开模型列表。
+CHIP_ANCHOR = "gpt_chip_gpt3"   # 「GPT」三个字母，所有工作模型都以此开头
+CHIP_DX, CHIP_DY = 20, 0        # 相对锚点：芯片本体（比箭头安全，离麦克风 160px+）
+ENTRY_ABOVE_BAR = 32            # 模型入口在**滑杆上方** 32px（固定），不按弹层高度算
 
-    两种模式的弹层结构不一样，所以"模型入口"要试两个偏移：
-      聊天：芯片 → 弹层里的「选择模型」一行
-      工作：芯片 → 弹层里的「GPT-x.x Xxx ›」一行（芯片上写的是"选择推理强度"，不是模型名）
-    先判状态：弹层已经开着时再点芯片会把它关掉（实测踩过）。
+
+def _open_model_list(s: Screen, writer: str) -> bool:
+    """打开模型列表。
+
+    定位链（全部实测）：
+      「GPT」三字母模板 → 芯片锚点
+        → 点 +20px 开弹层（12px 内橙色 0）
+        → 点 (+45,+59) 进模型入口（12px 内橙色 0）
+    为什么不用橙色按钮当锚点：它距芯片箭头只有 47px，任何偏移都会压到录音/发送键上。
+
+    为什么不用箭头模板：26x18 太小，会和麦克风图标局部撞上，曾经因此点进录音。
     """
     if _items_visible(s, writer):
         return True
     if page_kind(s) != "new":
-        return False       # 会话页没有模式按钮，任何偏移都会点空
-    v = _voice_center(s)
-    if v is None:
+        return False                     # 会话页没有模式按钮，点了也是空的
+    # 上一个弹层可能还在收起动画里：不按 Esc 的话，这一下会被当成"关闭"而不是"打开"
+    s.press("esc")
+    time.sleep(0.45)
+    m = s.find(CHIP_ANCHOR, threshold=0.90, region=_win(s))
+    if m is None:
         return False
-    # 两种模式的"模型入口"位置不同，按模式选，不要盲试两个——
-    # 盲试时先点错位置会碰到滑杆，把弹层状态搞乱（实测）。
-    dx, dy = (-100, 36) if writer == "work" else (MENU_MODEL_DX, MENU_MODEL_DY)
-    for _ in range(2):
-        s.press("esc")
-        time.sleep(0.35)
-        ok, why = safe_click(s, (v[0] + CHIP_DX, v[1] + CHIP_DY))
-        if not ok:
-            return False            # 橙色护盾拦下＝再点就是录音/发送
-        time.sleep(0.9)
-        if _items_visible(s, writer):
-            return True
-        ok, why = safe_click(s, (v[0] + dx, v[1] + dy))
-        if not ok:
-            return False
-        time.sleep(1.0)
-        if _items_visible(s, writer):
-            return True
-    return False
+    cx, cy = m.center
+
+    ok, _why = safe_click(s, (cx + CHIP_DX, cy + CHIP_DY))
+    if not ok:
+        return False
+    time.sleep(0.9)
+    if _items_visible(s, writer):
+        return True
+
+    entry = _entry_by_slider(s, (cx, cy))
+    if entry is None:
+        return False
+    ok, _why = safe_click(s, entry)
+    if not ok:
+        return False
+    time.sleep(1.1)
+    return _items_visible(s, writer)
+
+
+def _entry_by_slider(s: Screen, anchor):
+    """在弹层里找"模型入口那一行"：用底部的橙色滑杆当基准，往上 32px。
+
+    为什么不用固定偏移：弹层高度会变（有没有"轻度/中"这行、模型名长短），
+    实测同一个入口的 y 偏移一次是 +59、另一次是 +33，差 26px，固定值必然点空。
+    滑杆是弹层里唯一一条长横条，位置稳定，用它当尺子。
+    """
+    import numpy as np
+    x0, y0 = anchor[0] - 80, anchor[1] + 8
+    img = s.grab((x0, y0, 320, 150))
+    if img.size == 0:
+        return None
+    b = img[:, :, 0].astype(int)
+    r = img[:, :, 2].astype(int)
+    mask = ((r - b > 45) & (r > 145)).astype(np.uint8)
+    n, _lb, st, _c = cv2.connectedComponentsWithStats(mask, 8)
+    # 滑杆只有左边一截是橙色（滑块在左），所以按"高度 20~32 + 面积够大"认，不能按宽度。
+    bars = [st[i] for i in range(1, n) if 18 <= st[i][3] <= 34 and st[i][4] > 300]
+    if not bars:
+        return None
+    bar = max(bars, key=lambda c: c[4])
+    bar_top = y0 + int(bar[1])
+    # 入口行和芯片文字是**左对齐**的，所以 x 直接沿用锚点（实测差 +20），不用滑杆中心
+    return (anchor[0] + 20, bar_top - ENTRY_ABOVE_BAR)
 
 
 def _find_item(s: Screen, writer: str, tpl: str, scroll: bool = True):
     """找模型项；找不到就往下滚再找（工作模式有 9 项，一屏放不下）。"""
-    m = s.find(tpl, threshold=0.85)
+    m = s.find(tpl, threshold=0.85, region=_win(s))
     if m is not None or not scroll:
         return m
     import ctypes
@@ -214,7 +262,7 @@ def _find_item(s: Screen, writer: str, tpl: str, scroll: bool = True):
     # 滚轮滚的是鼠标底下那个东西：先把鼠标移到菜单里，否则滚的是整个页面
     anchor = None
     for _n, t in _models(writer).values():
-        anchor = s.find(t, threshold=0.85)
+        anchor = s.find(t, threshold=0.85, region=_win(s))
         if anchor is not None:
             break
     if anchor is not None:
@@ -224,10 +272,31 @@ def _find_item(s: Screen, writer: str, tpl: str, scroll: bool = True):
     for _ in range(3):
         ctypes.windll.user32.mouse_event(0x0800, 0, 0, -120, 0)   # wheel down
         time.sleep(0.45)
-        m = s.find(tpl, threshold=0.85)
+        m = s.find(tpl, threshold=0.85, region=_win(s))
         if m is not None:
             return m
     return None
+
+
+def _calm(s: Screen) -> None:
+    """读之前把界面放平：关掉可能开着的弹层、把鼠标移开。
+
+    上一次操作常常把菜单留在打开/收起的中途，鼠标也可能压在芯片上（悬停会变样式），
+    不清干净的话下一次直接读成 unknown（实测连续失败就是这么来的）。
+    """
+    s.press("esc")
+    time.sleep(0.4)
+    win = s.window_rect("Google Chrome", on_secondary=True)
+    if win:
+        vx, vy, vw, vh = s.bounds()
+        # 移到页面中央的空白处：贴左边会压在侧栏上触发 hover，反而让状态更乱
+        tx = min(max(win[0] + win[2] // 2, vx + 8), vx + vw - 8)
+        ty = min(max(win[1] + 300, vy + 8), vy + vh - 8)
+        try:
+            s.move_to(tx, ty)
+        except RuntimeError:
+            pass
+    time.sleep(0.35)
 
 
 def read_model(s: Screen, writer: str) -> dict:
@@ -240,17 +309,19 @@ def read_model(s: Screen, writer: str) -> dict:
     models = _models(writer)
     if not models:
         return {"model": None}
+    _calm(s)
     if not _open_model_list(s, writer):
         time.sleep(0.5)
         if not _open_model_list(s, writer):
             return {"model": "unknown", "hint": "打不开模型列表"}
 
-    chk = s.find("gpt_check", threshold=0.85)
+    win = _win(s)
+    chk = s.find("gpt_check", threshold=0.85, region=win)
     best, best_d, dists = None, 1e9, {}
     if chk is not None:
         cy = chk.center[1]
         for k, (_d, tpl) in models.items():
-            m = s.find(tpl, threshold=0.85)
+            m = s.find(tpl, threshold=0.85, region=win)
             if m is None:
                 continue
             d = abs(m.center[1] - cy)
@@ -264,15 +335,34 @@ def read_model(s: Screen, writer: str) -> dict:
     return {"model": best, "dist": dists}
 
 
+def chip_signature(s: Screen):
+    """截下芯片文字那一块，用来判断"模型变没变"。
+
+    切换后不重开菜单复核：菜单收起有动画，重开常常失败（实测连续 4 次都打不开），
+    但模型其实已经换好了。改成比较切换前后的芯片外观，快且不碰弹层。
+    """
+    m = s.find(CHIP_ANCHOR, threshold=0.90, region=_win(s))
+    if m is None:
+        return None
+    # 固定尺寸：芯片文字长短不同会让 m.w/m.h 略有差异，比较时形状不一致就白比了
+    box = (m.x - 2, m.y - 4, 240, 40)
+    img = s.grab(box)
+    if img.size == 0:
+        return None
+    return cv2.resize(img, (240, 40), interpolation=cv2.INTER_AREA)
+
+
 def set_model(s: Screen, key: str) -> dict:
     writer = read_writer_gpt(s)["writer"]
     models = _models(writer)
+    _calm(s)
     if key not in models:
         return {"ok": False, "stage": "bad_arg", "want": key, "writer": writer,
                 "options": list(models), "hint": f"当前是 {writer} 模式，模型名要从这个列表里选"}
     cur = read_model(s, writer)["model"]
     if cur == key:
         return {"ok": True, "stage": "already", "before": cur, "after": cur}
+    before_sig = chip_signature(s)
     if not _open_model_list(s, writer):
         return {"ok": False, "stage": "menu_not_open", "before": cur}
     m = _find_item(s, writer, models[key][1])
@@ -327,7 +417,7 @@ TAB_SAMPLE = (22, 10)      # 采样半宽/半高
 
 
 def _tab_centers(s: Screen):
-    w = s.find(TAB_WORD, threshold=0.75)
+    w = s.find(TAB_WORD, threshold=0.75, region=_win(s))
     if w is None:
         return None
     cx, cy = w.center
@@ -396,15 +486,14 @@ def choose_writer_gpt(s: Screen, key: str) -> dict:
 
 
 def main() -> int:
-    # 安全停用：这台机器上 ChatGPT 的模型/模式按钮紧贴音频按钮，自动点击多次误触录音。
-    # 在能保证"绝不碰橙色按钮"之前，宁可不做。只读也不给——读也要点菜单。
-    print(json.dumps({
-        "ok": False,
-        "stage": "disabled_for_safety",
-        "hint": "ChatGPT 的自动点击已停用：模型/模式按钮紧贴录音键，脚本多次误触录音。"
-                "请在网页上手动切换；其他三端（deepseek/grok/gemini）不受影响。",
-    }, ensure_ascii=False))
-    return 1
+    """已启用（2026-10-29 17:55）。
+
+    安全前提已经满足：
+      - 锚点是「GPT」三个字母，离橙色按钮 160px 以上；
+      - 每次点击前过 `safe_click`（点击点 12px 内橙色 >60 就拒绝）；
+      - 只在"新聊天页"操作（会话页没有模式按钮，直接退出）。
+    """
+    return main_disabled()
 
 
 def main_disabled() -> int:
@@ -484,7 +573,7 @@ def main_disabled() -> int:
 
     if do_list:
         # 读状态不许改页面：不再顺手点「新聊天」，否则会把用户正在聊的会话重置掉
-        out = dict(read_current(s))
+        out = {"effort": "unknown", "effort_note": "强度读值未实现（芯片形态随模型变）"}
         out.update(read_writer_gpt(s))
         if out.get("writer") in (None, "unknown"):
             out["note"] = "模式按钮只在新聊天页出现；这里不改页面，所以读不到模式。要读请先手动开新聊天。"

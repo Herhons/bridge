@@ -429,12 +429,26 @@ class Screen:
 
     # ---------------------------------------------------------------- 动作
     def move_to(self, x: int, y: int) -> None:
-        vx, vy = user32.GetSystemMetrics(SM_XVIRTUALSCREEN), user32.GetSystemMetrics(SM_YVIRTUALSCREEN)
-        vw, vh = user32.GetSystemMetrics(SM_CXVIRTUALSCREEN), user32.GetSystemMetrics(SM_CYVIRTUALSCREEN)
-        ax = int(round((x - vx) * 65535 / max(1, vw - 1)))
-        ay = int(round((y - vy) * 65535 / max(1, vh - 1)))
-        _send(_INPUT(type=INPUT_MOUSE,
-                     mi=_MOUSEINPUT(ax, ay, 0, MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK, 0, None)))
+        """把光标移到屏幕坐标 (x, y)。
+
+        以前用 mouse_event + MOUSEEVENTF_ABSOLUTE 归一化到 65535。这个接口在
+        多显示器/混合 DPI 下**有时被系统忽略**：调用返回后光标仍在原处，
+        于是后续 click 点在"上一次的位置"——这正是误触录音键的根因
+        （实测请求 (-495,243)，光标实际停在 (-442,288)）。
+        SetCursorPos 是直接定位，实测偏差 0，改用它。
+        移动后再读一次确认，不达标就重试一次。
+        """
+        user32.SetCursorPos.argtypes = [ctypes.c_int, ctypes.c_int]
+        user32.SetCursorPos.restype = wintypes.BOOL
+        for _ in range(2):
+            user32.SetCursorPos(int(x), int(y))
+            time.sleep(0.02)
+            pt = wintypes.POINT()
+            user32.GetCursorPos(ctypes.byref(pt))
+            if abs(pt.x - int(x)) <= 1 and abs(pt.y - int(y)) <= 1:
+                return
+        # 两次都没到位：至少别让调用方以为点到了
+        raise RuntimeError(f"光标没能移到 ({x},{y})，实际停在 ({pt.x},{pt.y})")
 
     def click_xy(self, x: int, y: int) -> None:
         self.move_to(x, y)
