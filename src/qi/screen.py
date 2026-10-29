@@ -36,6 +36,7 @@ VK = {
     "tab": 0x09, "space": 0x20, "backspace": 0x08, "delete": 0x2E,
     "up": 0x26, "down": 0x28, "left": 0x25, "right": 0x27, "home": 0x24, "end": 0x23,
     "a": 0x41, "c": 0x43, "v": 0x56, "x": 0x58,
+    **{str(d): 0x30 + d for d in range(10)},
 }
 
 CF_UNICODETEXT = 13
@@ -95,6 +96,8 @@ def _init() -> str:
     user32.IsWindowVisible.argtypes = [wintypes.HWND]
     user32.GetWindowTextLengthW.argtypes = [wintypes.HWND]
     user32.GetWindowTextW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+    user32.GetWindowRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
+    user32.GetWindowRect.restype = wintypes.BOOL
     kernel32.GetCurrentThreadId.restype = wintypes.DWORD
     return level
 
@@ -158,12 +161,26 @@ class Screen:
         return (user32.GetSystemMetrics(SM_XVIRTUALSCREEN), user32.GetSystemMetrics(SM_YVIRTUALSCREEN),
                 user32.GetSystemMetrics(SM_CXVIRTUALSCREEN), user32.GetSystemMetrics(SM_CYVIRTUALSCREEN))
 
-    def bring_to_front(self, title_hint: str) -> bool:
+    def bring_to_front(self, title_hint: str, *, on_secondary: bool = False) -> bool:
         """把标题含 title_hint 的已有窗口提到前台。
 
         截图只能看到屏幕上露出来的东西，被别的窗口压住就找不到任何图。
         这里只"提到前台"，不新建、不移动、不改大小。
+
+        为什么需要 on_secondary：浏览器标签标题会随会话名变
+        （ChatGPT 开个会话后窗口标题就变成"回复收到"，不再是"ChatGPT"）。
+        所以对网页端只能按"浏览器 + 在哪块屏"来认，不能按站点名认。
         """
+        pw = user32.GetSystemMetrics(0)
+        ph = user32.GetSystemMetrics(1)
+
+        def _on_secondary_center(hwnd: int) -> bool:
+            r = wintypes.RECT()
+            user32.GetWindowRect(hwnd, ctypes.byref(r))
+            cx, cy = (r.left + r.right) // 2, (r.top + r.bottom) // 2
+            # 主屏原点固定 (0,0)，用屏幕尺寸判断中心是否落在主屏上
+            return not (0 <= cx < pw and 0 <= cy < ph)
+
         found = []
 
         @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
@@ -176,6 +193,8 @@ class Screen:
             buf = ctypes.create_unicode_buffer(n + 1)
             user32.GetWindowTextW(hwnd, buf, n + 1)
             if title_hint.lower() in buf.value.lower():
+                if on_secondary and not _on_secondary_center(hwnd):
+                    return True
                 found.append(int(hwnd))
             return True
 

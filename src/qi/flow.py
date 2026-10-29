@@ -1,0 +1,249 @@
+"""通用「提问 → 收回答」流程。四个网页端共用这一份，差异全部压进 Site 配置。
+
+v0.0.8 的教训是同一套流程抄 8 遍，改一处要落 8 次。这里只有一份：
+    找新对话（侧栏没开就先开）→ 点输入框 → 全选→输入 → 点发送
+    → 等生成结束（停止键/画面静止）→ 找动作条 → 点排内复制 → 读剪贴板
+"""
+
+from __future__ import annotations
+
+import json
+import sys
+import time
+from dataclasses import dataclass
+
+from .screen import Match, Screen
+
+
+@dataclass(frozen=True)
+class Site:
+    name: str                  # 端点名（用于日志）
+    title_hint: str            # 窗口标题关键词，用来提到前台
+    composer: str              # 输入框锚点模板名
+    send: str                  # 发送键（可用态）模板名
+    actions: str               # 回答动作条整排模板名
+    copy: str                  # 动作条内复制键模板名
+    composer_offset: tuple[int, int]   # 从锚点中心到文字区的偏移
+    newchat: str | None = None         # 新对话按钮
+    sidebar: str | None = None         # 侧栏折叠/展开按钮（侧栏没开时先点它）
+    stop: str | None = None            # 生成中的停止键
+    send_mode: str = "color"           # color=靠颜色判断可用；exists=出现即可用
+    send_blue_min: float = 100.0       # B-R 大于它算可点
+    send_threshold: float = 0.92
+    on_secondary: bool = True          # 只认副屏上那个浏览器窗口
+
+
+def _send_enabled(s: Screen, site: Site, m: Match) -> bool:
+    if site.send_mode == "exists":
+        return True
+    b, _g, r = s.region_mean(m)
+    return (b - r) > site.send_blue_min
+
+
+def _open_new_chat(s: Screen, site: Site) -> dict:
+    """点新对话。侧栏没开就先点侧栏开关再试一次——这是实际会遇到的场景。"""
+    if not site.newchat:
+        return {"ok": True, "stage": "skipped"}
+    hit = s.find(site.newchat, threshold=0.85)
+    if hit is None and site.sidebar:
+        if s.find(site.sidebar) is not None:
+            s.click(s.find(site.sidebar))
+            time.sleep(0.6)
+            hit = s.find(site.newchat, threshold=0.85)
+    if hit is None:
+        return {"ok": False, "stage": "newchat_not_found",
+                "hint": "找不到新对话按钮；如果侧栏是收起的，先补一张侧栏开关图"}
+    s.click(hit)
+    time.sleep(0.9)
+    return {"ok": True, "stage": "clicked"}
+
+
+def _is_action_row(s: Screen, m: Match) -> bool:
+    """复制键右侧还有没有同伴图标。回答动作条是一排，提问上那个是孤立的。"""
+    import cv2
+    import numpy as np
+
+    strip = s.grab((m.x + m.w + 4, m.y - 3, 190, m.h + 6))
+    if strip.size == 0:
+        return False
+    g = cv2.cvtColor(strip, cv2.COLOR_BGR2GRAY)
+    mask = (g < 210).astype(np.uint8)
+    n, _lab, st, _c = cv2.connectedComponentsWithStats(mask, 8)
+    peers = 0
+    for i in range(1, n):
+        _x, _y, w, h, area = st[i]
+        if 6 <= w <= 26 and 6 <= h <= 26 and 30 <= area <= 400:
+            peers += 1
+    return peers >= 2
+
+
+def _pick_copy_target(s: Screen, site: Site) -> tuple[Match | None, dict]:
+    rows = s.find_all(site.actions, threshold=0.88)
+    if not rows:
+        time.sleep(0.5)                      # 动作条可能还在渐入
+        rows = s.find_all(site.actions, threshold=0.88)
+    if rows:
+        row = max(rows, key=lambda m: m.y)      # 多轮会话取最靠下那排＝最新回答
+        inner = s.find(site.copy, threshold=0.85, region=(row.x, row.y, row.w, row.h))
+        if inner is not None:
+            return inner, {"rule": "actions_row", "row": [row.x, row.y, row.w, row.h]}
+        return Match(site.copy + "@row_offset", 1.0, row.x + 6, row.y + 6, 22, 22), {
+            "rule": "actions_row_offset", "row": [row.x, row.y, row.w, row.h]}
+
+    hits = s.find_all(site.copy, threshold=0.85)
+    if not hits:
+        hits = _hover_hunt(s, site)
+    if not hits:
+        return None, {"rule": "none"}
+    rows2 = [h for h in hits if _is_action_row(s, h)]
+    if rows2:
+        return max(rows2, key=lambda m: m.y), {"rule": "peer", "candidates": len(rows2)}
+    left = min(h.x for h in hits)
+    lefts = [h for h in hits if h.x <= left + 40]
+    return max(lefts, key=lambda m: m.y), {"rule": "leftmost", "total": len(hits)}
+
+
+def _hover_hunt(s: Screen, site: Site) -> list[Match]:
+    vx, vy, vw, vh = s.bounds()
+    for frac in (0.55, 0.65, 0.75, 0.85):
+        s.move_to(vx + int(vw * 0.62), vy + int(vh * frac))
+        time.sleep(0.3)
+        hits = s.find_all(site.copy, threshold=0.85)
+        if hits:
+            return hits
+    return []
+
+
+def ask(site: Site, prompt: str, *, mode: str = "new", timeout: float = 180.0,
+        verbose: bool = True) -> dict:
+    t0 = time.time()
+    s = Screen(verbose=verbose)
+
+    if not s.bring_to_front(site.title_hint, on_secondary=site.on_secondary):
+        return {"ok": False, "stage": "page_not_front", "elapsed": round(time.time() - t0, 1),
+                "hint": f"没找到标题含 {site.title_hint!r} 的窗口"}
+
+    # 1. 新对话
+    if mode == "new":
+        r = _open_new_chat(s, site)
+        if not r["ok"]:
+            return {"ok": False, "stage": r["stage"], "elapsed": round(time.time() - t0, 1),
+                    "hint": r.get("hint", "")}
+
+    # 2. 写入
+    anchor = s.find(site.composer, threshold=0.80)
+    if anchor is None:
+        return {"ok": False, "stage": "composer_not_found", "elapsed": round(time.time() - t0, 1),
+                "hint": "找不到输入框锚点；确认页面在前台、没被遮挡、缩放没变"}
+    send = None
+    for attempt in range(2):
+        s.click(anchor, offset=site.composer_offset)
+        time.sleep(0.25)
+        if attempt == 0:
+            s.click(anchor, offset=site.composer_offset)   # 首次点击常只用于激活窗口
+            time.sleep(0.2)
+        s.hotkey("ctrl", "a")
+        time.sleep(0.1)
+        s.type_text(prompt)
+        time.sleep(0.4)
+        cand = s.find(site.send, threshold=site.send_threshold)
+        if cand is not None and _send_enabled(s, site, cand):
+            send = cand
+            break
+    if send is None:
+        return {"ok": False, "stage": "write_not_visible", "elapsed": round(time.time() - t0, 1),
+                "hint": "输入后发送键没变成可用态：焦点没进输入框，或键被拦"}
+
+    # 3. 提交：只点发送键，不按 Enter
+    s.click(send)
+
+    # 4. 等生成结束
+    generating_seen = False
+    if site.stop:
+        generating_seen = s.wait_present(site.stop, timeout=12.0)
+        if generating_seen and not s.wait_gone(site.stop, timeout=timeout):
+            return {"ok": False, "stage": "timeout", "elapsed": round(time.time() - t0, 1),
+                    "hint": "停止键一直没消失，生成超时"}
+    if not generating_seen:
+        page = s.monitor_rect(*anchor.center)
+        if not s.wait_quiet(timeout=timeout, region=page):
+            return {"ok": False, "stage": "timeout", "elapsed": round(time.time() - t0, 1),
+                    "hint": "等画面静止超时，生成可能还没结束"}
+
+    # 5. 复制
+    target, pick = None, {}
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        target, pick = _pick_copy_target(s, site)
+        if target is not None:
+            break
+        time.sleep(1.0)
+    if target is None:
+        return {"ok": False, "stage": "copy_not_found", "elapsed": round(time.time() - t0, 1),
+                "pick": pick,
+                "hint": f"没找到动作条：确认 {site.actions}.png 是整排，且页面没被遮挡"}
+
+    sentinel = f"__QI_EMPTY_{int(time.time() * 1000)}__"
+    s.set_clipboard(sentinel)
+    s.click(target)
+    reply = ""
+    for _ in range(20):
+        time.sleep(0.2)
+        reply = s.clipboard()
+        if reply and reply != sentinel:
+            break
+    if not reply or reply == sentinel:
+        return {"ok": False, "stage": "copy_failed", "elapsed": round(time.time() - t0, 1),
+                "pick": pick, "hint": "点了复制键但剪贴板没变"}
+    if reply.strip() == prompt.strip():
+        return {"ok": False, "stage": "copied_prompt", "elapsed": round(time.time() - t0, 1),
+                "pick": pick, "hint": "复制到的是提问本身，动作条可能还没渲染"}
+
+    return {"ok": True, "stage": "done", "reply": reply, "elapsed": round(time.time() - t0, 1),
+            "basis": "copied", "pick": pick, "score": round(target.score, 3),
+            "at": [target.center[0], target.center[1]], "mode": mode,
+            "prompt_len": len(prompt), "generating_seen": generating_seen}
+
+
+def cli(site: Site, argv: list[str]) -> int:
+    mode, timeout, words, bad = "new", 180.0, [], []
+    i = 0
+    while i < len(argv):
+        a = argv[i]
+        if a == "--new":
+            mode = "new"
+        elif a == "--continue":
+            mode = "continue"
+        elif a == "--timeout":
+            if i + 1 < len(argv):
+                i += 1
+                timeout = float(argv[i])
+            else:
+                bad.append("--timeout 缺值")
+        elif a.startswith("-"):
+            bad.append(a)
+        else:
+            words.append(a)
+        i += 1
+    prompt = " ".join(words)
+    name = f"{site.name}_use.py"
+
+    if bad:
+        print("参数有问题：", bad)
+        print(f'用法: python {name} "你的提问" [--new|--continue] [--timeout 180]')
+        return 2
+    if not prompt.strip():
+        print(f'用法: python {name} "你的提问" [--new|--continue] [--timeout 180]')
+        print("  --new       先点新对话再发（默认）")
+        print("  --continue  直接发在当前对话里")
+        return 2
+
+    result = ask(site, prompt, mode=mode, timeout=timeout)
+    if result.get("ok"):
+        print("=== 回答 ===")
+        print(result.pop("reply"))
+        print("=== 元数据 ===")
+        print(json.dumps(result, ensure_ascii=False))
+        return 0
+    print("失败:", json.dumps(result, ensure_ascii=False))
+    return 1
