@@ -49,16 +49,24 @@ def read_writer(s: Screen, cfg: Chooser) -> dict:
     if loc is None:
         return {"writer": "unknown", "hint": "找不到模式按钮组：可能不在新对话页，或换了主题/缩放"}
 
-    live = s.grab((loc.x, loc.y, loc.w, loc.h))
+    # 多抓一圈，好在 ±4px 内对齐：逐像素差对位置偏移极敏感，差 1~2px 就会误判
+    pad = 4
+    big = s.grab((loc.x - pad, loc.y - pad, loc.w + 2 * pad, loc.h + 2 * pad))
     best, best_d, scores = None, 1e9, {}
     for i, name in enumerate(cfg.writer_tabs):
         tpl = cv2.imread(str(s.library / (name if name.endswith(".png") else name + ".png")))
-        if tpl is None or tpl.shape != live.shape:
+        if tpl is None or tpl.shape[0] > big.shape[0] or tpl.shape[1] > big.shape[1]:
             continue
-        d = float(np.abs(live.astype(int) - tpl.astype(int)).mean())
-        scores[name] = round(d, 2)
-        if d < best_d:
-            best, best_d = i, d
+        d_best = 1e9
+        for dy in range(0, big.shape[0] - tpl.shape[0] + 1):
+            for dx in range(0, big.shape[1] - tpl.shape[1] + 1):
+                patch = big[dy:dy + tpl.shape[0], dx:dx + tpl.shape[1]]
+                d = float(np.abs(patch.astype(int) - tpl.astype(int)).mean())
+                if d < d_best:
+                    d_best = d
+        scores[name] = round(d_best, 2)
+        if d_best < best_d:
+            best, best_d = i, d_best
     if best is None or best_d > 12.0:
         return {"writer": "unknown", "diff": scores,
                 "hint": "两种模式都差得远：可能换了主题/缩放，需要重截整组图"}
