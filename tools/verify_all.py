@@ -24,7 +24,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SCRIPTS = os.path.join(ROOT, "src", "scripts")
 PY = sys.executable
 
-TABS = {"grok": 1, "chatgpt": 2, "gemini": 3, "deepseek": 8}
+TABS = {"grok": 1, "chatgpt": 1, "gemini": 3, "deepseek": 8}
 
 # gemini 任务模式的模型列表与对话模式不同（实测：任务只有 Flash / Argon）
 GEMINI_MODELS = {

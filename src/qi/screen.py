@@ -38,6 +38,8 @@ VK = {
     "a": 0x41, "c": 0x43, "v": 0x56, "x": 0x58,
     **{str(d): 0x30 + d for d in range(10)},
 }
+# 补齐 a-z：快捷键经常用到（Ctrl+Shift+O 之类），缺一个就 KeyError
+VK.update({chr(c): c - 32 for c in range(ord("a"), ord("z") + 1)})
 
 CF_UNICODETEXT = 13
 GMEM_MOVEABLE = 0x0002

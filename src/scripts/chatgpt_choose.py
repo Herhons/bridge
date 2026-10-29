@@ -82,83 +82,31 @@ ALL_MODEL_KEYS = {k: v[0] for m in MODELS.values() for k, v in m.items()}
 TRACK_DX, TRACK_W, TRACK_DY = -200, 230, -46
 
 
-def _voice_center(s: Screen) -> tuple[int, int] | None:
-    """右下角橙色语音键的中心（屏幕坐标）。找不到返回 None。
+def _voice_center(s: Screen):
+    """右下角橙色语音键的中心（屏幕坐标）。
 
-    只在**副屏**里找：整块虚拟桌面扫的话，主屏上的橙色元素（视频、图标）会抢先命中。
+    之前的写法按"面积最大的橙色块"取，结果抓到侧栏里的橙色头像/图标（实测返回了
+    窗口 x=334 的位置，完全不对）。改成只认**近似正方形的小块**（20~60px、面积>400），
+    再取**最靠右下**的那个——语音键永远在输入框最右侧。
     """
     win = s.window_rect("Google Chrome", on_secondary=True)
     if win is None:
         return None
-    band = s.grab(win)
-    h = band.shape[0]
-    b = band[:, :, 0].astype(int)
-    r = band[:, :, 2].astype(int)
-    orange = ((r - b > 80) & (r > 200)).astype(np.uint8)
-    n, _lb, st, _ce = cv2.connectedComponentsWithStats(orange, 8)
+    img = s.grab(win)
+    if img.size == 0:
+        return None
+    b = img[:, :, 0].astype(int)
+    r = img[:, :, 2].astype(int)
+    orange = ((r - b > 45) & (r > 145)).astype(np.uint8)
+    n, _lb, st, _c = cv2.connectedComponentsWithStats(orange, 8)
     cands = [(st[i][4], st[i][0], st[i][1], st[i][2], st[i][3]) for i in range(1, n)
-             if 800 < st[i][4] < 3000]
+             if 20 <= st[i][2] <= 60 and 20 <= st[i][3] <= 60 and st[i][4] > 400]
     if not cands:
         return None
-    _a, x, y, w, hh = max(cands)
-    return (win[0] + x + w // 2, win[1] + y + hh // 2)
+    _a, x, y, w, h = max(cands, key=lambda c: c[1] + c[2])   # 最靠右下
+    return (win[0] + x + w // 2, win[1] + y + h // 2)
 
 
-def _calm(s: Screen) -> None:
-    """读之前先把界面"放平"：关掉可能开着的弹层、把鼠标移开。
-
-    不这么做会踩两个坑：弹层开着会盖住芯片；鼠标停在芯片上会变成另一种底色。
-    这两种状态下模板都对不上，读出来就是 unknown。
-    """
-    s.press("esc")
-    time.sleep(0.3)
-    s.move_to(-700, 300)
-    time.sleep(0.35)
-
-
-def read_current(s: Screen) -> dict:
-    """读当前强度：匹配芯片图。
-
-    已知不稳：芯片形态会变（有时显示「5.6 中」，有时只显示「思考强度」），
-    换模型或改版都要重截 gpt_chip_*。读不出来就说 unknown，不猜。
-    """
-    for key, cfg in EFFORTS.items():
-        m = s.find(cfg["chip"], threshold=0.90)
-        if m is not None:
-            return {"effort": key, "score": round(m.score, 3)}
-    return {"effort": "unknown",
-            "hint": "当前芯片和 instant/mid/high 三张图都对不上（芯片形态或主题变了，需重截）"}
-
-
-def set_effort(s: Screen, key: str) -> dict:
-    cur = read_current(s)
-    if cur["effort"] == "unknown":
-        return {"ok": False, "stage": "unreadable", "hint": cur["hint"]}
-
-    v = _voice_center(s)
-    if v is None:
-        return {"ok": False, "stage": "no_voice_button",
-                "hint": "找不到橙色语音键；输入框里可能有文字了（清空后再试）"}
-    vx, vy = v
-
-    s.click_xy(vx + CHIP_DX, vy + CHIP_DY)          # 打开弹层
-    time.sleep(0.8)
-    # 滑杆必须按住拖：单击只会让把手弹回原位（实测右侧单击永远改不动）
-    target_x = int(vx + TRACK_DX + EFFORTS[key]["frac"] * TRACK_W)
-    s.drag(vx + TRACK_DX + TRACK_W // 2, vy + TRACK_DY, target_x, vy + TRACK_DY)
-    time.sleep(0.6)
-    s.press("esc")
-    time.sleep(0.5)
-    s.move_to(vx - 400, vy - 500)                   # 移开鼠标，避免 hover 影响判读
-    time.sleep(0.4)
-
-    after = read_current(s)
-    ok = after["effort"] == key
-    return {"ok": ok, "stage": "done" if ok else "unverified",
-            "before": cur["effort"], "after": after["effort"]}
-
-
-# ------------------------------------------------------------------ 模型
 def _models(writer: str) -> dict:
     return MODELS.get(writer, {})
 
@@ -320,63 +268,50 @@ def set_effort(s: Screen, key: str) -> dict:
 
 # 模式按钮组相对窗口左上角的横向范围是固定的，**纵向会移动**（实测两次差 22px），
 # 所以 y 每次现扫，不能写死。
-TABS_DX, TABS_W, TABS_H = 612, 234, 30
-TABS_SCAN_DY, TABS_SCAN_H = 110, 110
+# 模式按钮用「聊天」两个字的文字模板定位，不写死坐标。
+# 归一化相关对亮度不敏感，所以黑字（选中）和灰字（未选）都能匹配同一张模板（实测切完仍 1.000）。
+# 两个按钮中心相距 114px，宽度固定，所以右按钮 = 左按钮 + 114。
+TAB_WORD = "gpt_tab_chat_word"
+TAB_GAP = 114
+TAB_SAMPLE = (22, 10)      # 采样半宽/半高
 
 
-def _tabs_box(s: Screen, win) -> tuple[int, int, int, int] | None:
-    """在窗口顶部 150px 内扫出按钮组那一行，返回外扩后的框。"""
-    x0, y0 = win[0] + TABS_DX, win[1] + TABS_SCAN_DY
-    img = s.grab((x0, y0, TABS_W, TABS_SCAN_H))
-    if img.size == 0:
+def _tab_centers(s: Screen):
+    w = s.find(TAB_WORD, threshold=0.75)
+    if w is None:
         return None
-    g = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    ink = (g < 120).mean(axis=1)
-    segs, start = [], None
-    for i, v in enumerate(ink):
-        if v > 0.02 and start is None:
-            start = i
-        elif v <= 0.02 and start is not None:
-            segs.append((start, i))
-            start = None
-    if start is not None:
-        segs.append((start, len(ink)))
-    if not segs:
-        return None
-    top, bot = segs[-1]        # 最靠下的一段＝按钮文字行（上方是书签栏残留，不去碰）
-    cy = y0 + (top + bot) // 2
-    return (x0, cy - TABS_H // 2 + 12, TABS_W, TABS_H)   # +12：扫描命中文字上沿，框要往下压
+    cx, cy = w.center
+    return (cx, cy), (cx + TAB_GAP, cy)
 
 
 def read_writer_gpt(s: Screen) -> dict:
-    """读当前是聊天还是工作。
+    """读当前是聊天还是工作：比两边文字的墨色。
 
     不用像素差比整组：这按钮的边框样式会随页面变（有时白胶囊、有时白胶囊+黑边框），
     模板两态都截不全，diff 常在 10~12 之间，等于读不出来（实测）。
+    也不写死坐标：按钮随侧栏/窗口变化，之前固定 x 一改窗口就废。
 
-    更稳的判据是**两侧文字的墨色**：选中那个字是纯黑（min≈13），未选是灰（min≈93），
-    差 80，非常干净。只看"哪一边更黑"就够，跟边框、hover 都无关。
+    判据是**文字深浅**：选中那个字是纯黑（min≈13），未选是灰（min≈93），差 80。
     """
-    win = s.window_rect("Google Chrome", on_secondary=True)
-    if win is None:
-        return {"writer": "unknown", "hint": "找不到浏览器窗口"}
-    box = _tabs_box(s, win)
-    if box is None:
-        return {"writer": "unknown", "hint": "窗口顶部找不到模式按钮行"}
-    img = s.grab(box)
-    if img.size == 0:
-        return {"writer": "unknown", "hint": "截图失败"}
-    g = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    h, w = g.shape
-    lm = int(g[:, max(2, w // 8):w // 2 - 4].min())
-    rm = int(g[:, w // 2 + 4:w - max(2, w // 8)].min())
-    info = {"left_min": lm, "right_min": rm, "box": list(box)}
+    centers = _tab_centers(s)
+    if centers is None:
+        return {"writer": "unknown", "hint": "找不到「聊天/工作」按钮（可能不在新聊天页）"}
+    (lx, ly), (rx, ry) = centers
+    hw, hh = TAB_SAMPLE
+
+    def darkest(cx, cy):
+        img = s.grab((cx - hw, cy - hh, hw * 2, hh * 2))
+        if img.size == 0:
+            return 255
+        return int(cv2.cvtColor(img, cv2.COLOR_BGR2GRAY).min())
+
+    lm, rm = darkest(lx, ly), darkest(rx, ry)
+    info = {"left_min": lm, "right_min": rm, "at": [lx, ly, rx, ry]}
     if lm <= 60 and lm + 30 <= rm:
         return {"writer": "chat", **info}
     if rm <= 60 and rm + 30 <= lm:
         return {"writer": "work", **info}
-    return {"writer": "unknown",
-            "hint": "两侧文字深浅差不多，认不出哪个被选中（可能页面不在新聊天页）", **info}
+    return {"writer": "unknown", "hint": "两侧文字深浅差不多，认不出哪个被选中", **info}
 
 
 def choose_writer_gpt(s: Screen, key: str) -> dict:
@@ -389,11 +324,10 @@ def choose_writer_gpt(s: Screen, key: str) -> dict:
     if cur["writer"] == key:
         return {"ok": True, "stage": "already", "before": cur["writer"], "after": cur["writer"]}
 
-    x0, y0, w, h = cur["box"]
-    n = len(WRITER.writers)
-    idx = WRITER.writers[key]
-    x = x0 + w * (2 * idx + 1) // (2 * n)
-    y = y0 + h // 2
+    centers = _tab_centers(s)
+    if centers is None:
+        return {"ok": False, "stage": "tabs_not_found", "before": cur["writer"]}
+    x, y = centers[0] if key == "chat" else centers[1]
     s.click_xy(x, y)
 
     after, deadline = cur, time.time() + 5.0
@@ -410,6 +344,18 @@ def choose_writer_gpt(s: Screen, key: str) -> dict:
 
 
 def main() -> int:
+    # 安全停用：这台机器上 ChatGPT 的模型/模式按钮紧贴音频按钮，自动点击多次误触录音。
+    # 在能保证"绝不碰橙色按钮"之前，宁可不做。只读也不给——读也要点菜单。
+    print(json.dumps({
+        "ok": False,
+        "stage": "disabled_for_safety",
+        "hint": "ChatGPT 的自动点击已停用：模型/模式按钮紧贴录音键，脚本多次误触录音。"
+                "请在网页上手动切换；其他三端（deepseek/grok/gemini）不受影响。",
+    }, ensure_ascii=False))
+    return 1
+
+
+def main_disabled() -> int:
     name = os.path.basename(__file__)
     idle_need, idle_wait, force, args = guard.parse_guard_args(list(sys.argv[1:]))
     want, tab, bad, writer, model = None, None, [], None, None

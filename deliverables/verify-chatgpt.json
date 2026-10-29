@@ -2,76 +2,80 @@
   {
     "kind": "writer",
     "target": "chat",
-    "rc": 0,
-    "ok": true,
-    "detail": "after=chat",
-    "sec": 5.5,
+    "rc": 1,
+    "ok": false,
+    "detail": "after=None",
+    "sec": 4.1,
     "raw": {
-      "ok": true,
-      "stage": "done",
-      "before": "work",
-      "after": "chat",
-      "_sec": 5.5
+      "ok": false,
+      "stage": "unreadable",
+      "hint": "找不到「聊天/工作」按钮（可能不在新聊天页）",
+      "_sec": 4.1
     }
   },
   {
     "kind": "model",
     "target": "chat+gpt6",
-    "rc": 0,
-    "ok": true,
-    "detail": "after=gpt6",
-    "sec": 28.5,
+    "rc": 1,
+    "ok": false,
+    "detail": "after=None",
+    "sec": 2.4,
     "raw": {
-      "ok": true,
-      "stage": "done",
-      "before": "gpt56",
-      "after": "gpt6",
-      "_sec": 28.5
+      "ok": false,
+      "stage": "bad_arg",
+      "want": "gpt6",
+      "writer": "unknown",
+      "options": [],
+      "hint": "当前是 unknown 模式，模型名要从这个列表里选",
+      "_sec": 2.4
     }
   },
   {
     "kind": "model",
     "target": "chat+gpt56",
-    "rc": 0,
-    "ok": true,
-    "detail": "after=gpt56",
-    "sec": 28.4,
+    "rc": 1,
+    "ok": false,
+    "detail": "after=None",
+    "sec": 2.4,
     "raw": {
-      "ok": true,
-      "stage": "done",
-      "before": "gpt6",
-      "after": "gpt56",
-      "_sec": 28.4
+      "ok": false,
+      "stage": "bad_arg",
+      "want": "gpt56",
+      "writer": "unknown",
+      "options": [],
+      "hint": "当前是 unknown 模式，模型名要从这个列表里选",
+      "_sec": 2.4
     }
   },
   {
     "kind": "writer",
     "target": "work",
-    "rc": 0,
-    "ok": true,
-    "detail": "after=work",
-    "sec": 7.1,
+    "rc": 1,
+    "ok": false,
+    "detail": "after=None",
+    "sec": 4.1,
     "raw": {
-      "ok": true,
-      "stage": "done",
-      "before": "chat",
-      "after": "work",
-      "_sec": 7.1
+      "ok": false,
+      "stage": "unreadable",
+      "hint": "找不到「聊天/工作」按钮（可能不在新聊天页）",
+      "_sec": 4.1
     }
   },
   {
     "kind": "model",
     "target": "work+default",
-    "rc": 0,
-    "ok": true,
-    "detail": "after=default",
-    "sec": 13.3,
+    "rc": 1,
+    "ok": false,
+    "detail": "after=None",
+    "sec": 2.4,
     "raw": {
-      "ok": true,
-      "stage": "already",
-      "before": "default",
-      "after": "default",
-      "_sec": 13.3
+      "ok": false,
+      "stage": "bad_arg",
+      "want": "default",
+      "writer": "unknown",
+      "options": [],
+      "hint": "当前是 unknown 模式，模型名要从这个列表里选",
+      "_sec": 2.4
     }
   },
   {
@@ -80,7 +84,7 @@
     "rc": 1,
     "ok": false,
     "detail": "after=None",
-    "sec": 3.8,
+    "sec": 2.4,
     "raw": {
       "ok": false,
       "stage": "bad_arg",
@@ -88,7 +92,7 @@
       "writer": "unknown",
       "options": [],
       "hint": "当前是 unknown 模式，模型名要从这个列表里选",
-      "_sec": 3.8
+      "_sec": 2.4
     }
   },
   {
@@ -97,7 +101,7 @@
     "rc": 1,
     "ok": false,
     "detail": "after=None",
-    "sec": 2.2,
+    "sec": 2.4,
     "raw": {
       "ok": false,
       "stage": "bad_arg",
@@ -105,7 +109,7 @@
       "writer": "unknown",
       "options": [],
       "hint": "当前是 unknown 模式，模型名要从这个列表里选",
-      "_sec": 2.2
+      "_sec": 2.4
     }
   },
   {
@@ -114,7 +118,7 @@
     "rc": 1,
     "ok": false,
     "detail": "after=None",
-    "sec": 2.2,
+    "sec": 2.4,
     "raw": {
       "ok": false,
       "stage": "bad_arg",
@@ -122,7 +126,7 @@
       "writer": "unknown",
       "options": [],
       "hint": "当前是 unknown 模式，模型名要从这个列表里选",
-      "_sec": 2.2
+      "_sec": 2.4
     }
   },
   {
@@ -131,7 +135,7 @@
     "rc": 1,
     "ok": false,
     "detail": "after=None",
-    "sec": 2.2,
+    "sec": 2.4,
     "raw": {
       "ok": false,
       "stage": "bad_arg",
@@ -139,7 +143,7 @@
       "writer": "unknown",
       "options": [],
       "hint": "当前是 unknown 模式，模型名要从这个列表里选",
-      "_sec": 2.2
+      "_sec": 2.4
     }
   },
   {
@@ -148,7 +152,7 @@
     "rc": 1,
     "ok": false,
     "detail": "after=None",
-    "sec": 2.2,
+    "sec": 2.4,
     "raw": {
       "ok": false,
       "stage": "bad_arg",
@@ -156,7 +160,7 @@
       "writer": "unknown",
       "options": [],
       "hint": "当前是 unknown 模式，模型名要从这个列表里选",
-      "_sec": 2.2
+      "_sec": 2.4
     }
   },
   {
@@ -165,7 +169,7 @@
     "rc": 1,
     "ok": false,
     "detail": "after=None",
-    "sec": 2.2,
+    "sec": 2.4,
     "raw": {
       "ok": false,
       "stage": "bad_arg",
@@ -173,7 +177,7 @@
       "writer": "unknown",
       "options": [],
       "hint": "当前是 unknown 模式，模型名要从这个列表里选",
-      "_sec": 2.2
+      "_sec": 2.4
     }
   },
   {
@@ -182,7 +186,7 @@
     "rc": 1,
     "ok": false,
     "detail": "after=None",
-    "sec": 2.2,
+    "sec": 2.4,
     "raw": {
       "ok": false,
       "stage": "bad_arg",
@@ -190,7 +194,7 @@
       "writer": "unknown",
       "options": [],
       "hint": "当前是 unknown 模式，模型名要从这个列表里选",
-      "_sec": 2.2
+      "_sec": 2.4
     }
   },
   {
@@ -199,7 +203,7 @@
     "rc": 1,
     "ok": false,
     "detail": "after=None",
-    "sec": 2.2,
+    "sec": 2.4,
     "raw": {
       "ok": false,
       "stage": "bad_arg",
@@ -207,7 +211,7 @@
       "writer": "unknown",
       "options": [],
       "hint": "当前是 unknown 模式，模型名要从这个列表里选",
-      "_sec": 2.2
+      "_sec": 2.4
     }
   },
   {
@@ -216,12 +220,10 @@
     "rc": 1,
     "ok": false,
     "detail": "after=None",
-    "sec": 2.9,
+    "sec": 2.2,
     "raw": {
-      "ok": false,
-      "stage": "unreadable",
-      "hint": "当前芯片和 instant/mid/high 三张图都对不上（芯片形态或主题变了，需重截）",
-      "_sec": 2.9
+      "_raw": "资源库就绪：17/17 张",
+      "_sec": 2.2
     }
   },
   {
@@ -230,57 +232,10 @@
     "rc": 1,
     "ok": false,
     "detail": "after=None",
-    "sec": 2.8,
+    "sec": 2.2,
     "raw": {
-      "ok": false,
-      "stage": "unreadable",
-      "hint": "当前芯片和 instant/mid/high 三张图都对不上（芯片形态或主题变了，需重截）",
-      "_sec": 2.8
-    }
-  },
-  {
-    "kind": "random",
-    "target": "work+default",
-    "rc": 0,
-    "ok": true,
-    "detail": "writer=work, after=default",
-    "sec": 11.8,
-    "raw": {
-      "ok": true,
-      "stage": "already",
-      "before": "default",
-      "after": "default",
-      "_sec": 11.8
-    }
-  },
-  {
-    "kind": "random",
-    "target": "work",
-    "rc": 0,
-    "ok": true,
-    "detail": "after=work",
-    "sec": 6.2,
-    "raw": {
-      "ok": true,
-      "stage": "already",
-      "before": "work",
-      "after": "work",
-      "_sec": 6.2
-    }
-  },
-  {
-    "kind": "random",
-    "target": "chat",
-    "rc": 0,
-    "ok": true,
-    "detail": "after=chat",
-    "sec": 5.4,
-    "raw": {
-      "ok": true,
-      "stage": "done",
-      "before": "work",
-      "after": "chat",
-      "_sec": 5.4
+      "_raw": "资源库就绪：17/17 张",
+      "_sec": 2.2
     }
   }
 ]
