@@ -1,0 +1,829 @@
+"""opencode（OpenCode 桌面端 / OpenCode.exe）：选模型 + 调强度 + 读当前状态。
+
+**单文件，只依赖 cv2 / numpy / ctypes，不 import 本项目的任何模块。**
+
+用法：
+    python opencode_choose.py --list                      读当前模型和强度
+    python opencode_choose.py --model "Claude Opus 5.5"   只切模型（名字给够精确）
+    python opencode_choose.py --effort max                只调强度
+    python opencode_choose.py --model "Gemini 4 Argon" --effort low
+    python opencode_choose.py --probe                     只报模板命中，不点击
+
+## 界面结构（2026-10-29 实测，窗口 1380x1340 / 也验过 1380x1196）
+
+输入框底部一行：
+
+    ＋    OpenCode / DeepSeek V4.1 Flash Free ⌄     High ⌄        [↑]
+
+**模型和强度是两个独立芯片**，各自带一个 ⌄：
+    · 点第 1 个 ⌄ -> 模型面板（顶部有「🔍 搜索模型」搜索框 + Recent/供应商分组 + 可滚列表）
+    · 点第 2 个 ⌄ -> 强度小菜单（Default / Low / High / Max，四行，右侧打勾）
+
+注意：**不是每个模型都有强度芯片**。实测 Claude Opus 5.5 没有 variant，
+第二个 ⌄ 直接不出现（这时 --effort 会明确报 no_effort_chip）。
+
+## 选模型为什么走搜索框
+
+模型列表有 30+ 项、分组重复（Recent 和正式分组里都有 Claude Haiku 5.5 等），
+靠模板逐行找会串味、还得滚动。而面板自带搜索框：
+    点芯片 -> 点搜索框 -> 输入名字 -> Enter
+过滤后只剩匹配项，Enter 直接选中第一项。所以 --model 传的名字**要够精确**
+（"Claude Opus 5.5" 而不是 "Claude"），否则选中的是过滤后第一条。
+
+## 定位方式
+
+    oc_chevron      芯片右端那个 ⌄（8x10）。底部行里按 x 排序：
+                    第 1 个 = 模型芯片，第 2 个 = 强度芯片（可能没有）
+    oc_e_default    强度菜单四行的文字，也用来读芯片上的档位
+    oc_e_low
+    oc_e_high
+    oc_e_max
+    oc_placeholder  输入框占位文字，命中 = 输入框是空的
+    oc_send         发送键（深色圆角方块 + 白↑）。**形状一样、灰度不同**：
+                    输入框空时是浅灰禁用态，有内容才变深色。
+                    所以判"能不能发"要看这块的平均亮度，不能只看模板分数
+                    （CCOEFF 对整体亮度平移不敏感，浅灰态也能匹到 0.999）。
+"""
+
+from __future__ import annotations
+
+import argparse
+import ctypes
+import json
+import os
+import subprocess
+import sys
+import time
+from ctypes import wintypes
+
+import cv2
+import numpy as np
+
+# ============================================================ 常量
+
+PROC = "OpenCode.exe"
+LAUNCH = r"shell:AppsFolder\ai.opencode.desktop"
+
+TPL_CHEV = "oc_chevron"
+TPL_SEND = "oc_send"
+TPL_PH = "oc_placeholder"
+TPL_CHECK = "oc_check"
+TPL_E = {k: "oc_e_" + k for k in ("default", "low", "high", "max")}
+
+TPL_THR = 0.90
+BAND_H = 170            # 底部工具条带：距底 170px
+CHEV_THR = 0.85
+
+EFFORTS = ["default", "low", "high", "max"]
+EFFORT_LABEL = {"default": "Default", "low": "Low", "high": "High", "max": "Max"}
+EFFORT_ALIAS = {"mid": "high", "medium": "high", "ultra": "max", "xhigh": "max"}
+
+# read_model 的模板库：key = 给调用方看的名字，value = 模板名
+# 只覆盖裁过图的模型；没覆盖到的 read_model 返回 unknown（不影响 --model，它走搜索）
+MODELS = {
+    "deepseek_v41_flash_free": "oc_m_deepseek41free",
+    "claude_opus_55": "oc_m_claude_opus55",
+}
+MODEL_THR = 0.90
+
+TEMPLATE_DIR = os.path.abspath(os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "..", "assets", "library"))
+DEBUG_DIR = os.path.abspath(os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "..", "..", "evidence"))
+
+# ============================================================ Win32
+
+user32 = ctypes.windll.user32
+kernel32 = ctypes.windll.kernel32
+gdi32 = ctypes.windll.gdi32
+
+
+def _init_dpi() -> str:
+    try:
+        if user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4)):
+            return "per-monitor-v2"
+    except Exception:
+        pass
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)
+        return "per-monitor"
+    except Exception:
+        pass
+    try:
+        user32.SetProcessDPIAware()
+        return "system"
+    except Exception:
+        return "none"
+
+
+DPI_LEVEL = _init_dpi()
+
+SWP_NOACTIVATE, SWP_SHOWWINDOW = 0x0010, 0x0040
+PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+
+VK = {"ctrl": 0x11, "shift": 0x10, "alt": 0x12, "esc": 0x1B, "enter": 0x0D,
+      "tab": 0x09, "delete": 0x2E, "left": 0x25, "up": 0x26, "right": 0x27,
+      "down": 0x28, "space": 0x20, "backspace": 0x08}
+for _i in range(26):
+    VK[chr(ord("a") + _i)] = 0x41 + _i
+for _i in range(10):
+    VK[str(_i)] = 0x30 + _i
+
+
+class _LII(ctypes.Structure):
+    _fields_ = [("cbSize", ctypes.c_uint), ("dwTime", ctypes.c_uint)]
+
+
+def idle_seconds():
+    lii = _LII(ctypes.sizeof(_LII), 0)
+    user32.GetLastInputInfo(ctypes.byref(lii))
+    return (kernel32.GetTickCount() - lii.dwTime) / 1000.0
+
+
+def _pid_of(hwnd):
+    pid = wintypes.DWORD()
+    user32.GetWindowThreadProcessId(int(hwnd), ctypes.byref(pid))
+    return int(pid.value)
+
+
+def _proc_name(pid):
+    h = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid))
+    if not h:
+        return ""
+    try:
+        buf = ctypes.create_unicode_buffer(1024)
+        size = wintypes.DWORD(1024)
+        if not kernel32.QueryFullProcessImageNameW(h, 0, buf, ctypes.byref(size)):
+            return ""
+        return buf.value.rsplit("\\", 1)[-1]
+    finally:
+        kernel32.CloseHandle(h)
+
+
+def _windows():
+    out = []
+
+    def cb(hwnd, _):
+        out.append(int(hwnd))
+        return True
+
+    user32.EnumWindows(ctypes.WINFUNCTYPE(
+        wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)(cb), 0)
+    return out
+
+
+def find_window():
+    """按进程名找主窗口（Electron 的标题会变成会话名，不能按标题找）。"""
+    best = None
+    for hwnd in _windows():
+        if not user32.IsWindowVisible(hwnd):
+            continue
+        if _proc_name(_pid_of(hwnd)) != PROC:
+            continue
+        r = rect_of(hwnd)
+        if r is None or r[2] < 400 or r[3] < 300:
+            continue
+        if best is None or r[2] * r[3] > rect_of(best)[2] * rect_of(best)[3]:
+            best = hwnd
+    return best
+
+
+def rect_of(hwnd):
+    if not hwnd:
+        return None
+    r = wintypes.RECT()
+    if not user32.GetWindowRect(int(hwnd), ctypes.byref(r)):
+        return None
+    return (int(r.left), int(r.top), int(r.right - r.left), int(r.bottom - r.top))
+
+
+def place(hwnd, pos, size):
+    user32.SetWindowPos(int(hwnd), 0, int(pos[0]), int(pos[1]), int(size[0]),
+                        int(size[1]), SWP_NOACTIVATE | SWP_SHOWWINDOW)
+
+
+def activate(hwnd, tries=3):
+    """把窗口提到前台。前台锁会让 SetForegroundWindow 静默失败，所以附加到前台线程。"""
+    if user32.GetForegroundWindow() == int(hwnd):
+        return True
+    for _ in range(tries):
+        user32.SetForegroundWindow(int(hwnd))
+        if user32.GetForegroundWindow() == int(hwnd):
+            return True
+        fg = user32.GetForegroundWindow()
+        t1 = user32.GetWindowThreadProcessId(fg, None)
+        t2 = kernel32.GetCurrentThreadId()
+        if t1 and t1 != t2:
+            user32.AttachThreadInput(t2, t1, True)
+            user32.SetForegroundWindow(int(hwnd))
+            user32.SetFocus(int(hwnd))
+            user32.AttachThreadInput(t2, t1, False)
+        if user32.GetForegroundWindow() == int(hwnd):
+            return True
+        time.sleep(0.3)
+    return user32.GetForegroundWindow() == int(hwnd)
+
+
+class Desk:
+    """窗口截图 + 点击 + 按键。截图用 PrintWindow，被遮挡也能拿到完整画面。"""
+
+    CLICK_MAX, CLICK_GAP = 16, 0.35
+
+    def __init__(self, hwnd):
+        self.hwnd = int(hwnd)
+        self._cache = (0.0, None)
+        self._pw_ok = True
+        self._clicks = []
+
+    # ---------------- 截图
+    def _printwindow(self):
+        r = rect_of(self.hwnd)
+        if r is None:
+            return None
+        w, h = r[2], r[3]
+        if w <= 0 or h <= 0:
+            return None
+        hdc = user32.GetWindowDC(self.hwnd)
+        if not hdc:
+            return None
+        mdc = gdi32.CreateCompatibleDC(hdc)
+        bmp = gdi32.CreateCompatibleBitmap(hdc, w, h)
+        gdi32.SelectObject(mdc, bmp)
+        ok = user32.PrintWindow(self.hwnd, mdc, 2)      # PW_RENDERFULLCONTENT
+        img = None
+        if ok:
+            img = self._dib(mdc, bmp, w, h)
+        gdi32.DeleteObject(bmp)
+        gdi32.DeleteDC(mdc)
+        user32.ReleaseDC(self.hwnd, hdc)
+        return img
+
+    @staticmethod
+    def _dib(mdc, bmp, w, h):
+        class BMI(ctypes.Structure):
+            _fields_ = [("biSize", ctypes.c_uint), ("biWidth", ctypes.c_long),
+                        ("biHeight", ctypes.c_long), ("biPlanes", ctypes.c_ushort),
+                        ("biBitCount", ctypes.c_ushort), ("biCompression", ctypes.c_uint),
+                        ("biSizeImage", ctypes.c_uint), ("biXPelsPerMeter", ctypes.c_long),
+                        ("biYPelsPerMeter", ctypes.c_long), ("biClrUsed", ctypes.c_uint),
+                        ("biClrImportant", ctypes.c_uint)]
+        bi = BMI()
+        bi.biSize = ctypes.sizeof(BMI)
+        bi.biWidth = w
+        bi.biHeight = -h
+        bi.biPlanes = 1
+        bi.biBitCount = 32
+        buf = ctypes.create_string_buffer(w * h * 4)
+        if not gdi32.GetDIBits(mdc, bmp, 0, h, buf, ctypes.byref(bi), 0):
+            return None
+        arr = np.frombuffer(buf, dtype=np.uint8).reshape(h, w, 4)
+        return arr[:, :, :3].copy()
+
+    def _screen_grab(self, region):
+        x, y, w, h = region
+        hdc = user32.GetDC(0)
+        mdc = gdi32.CreateCompatibleDC(hdc)
+        bmp = gdi32.CreateCompatibleBitmap(hdc, w, h)
+        gdi32.SelectObject(mdc, bmp)
+        gdi32.BitBlt(mdc, 0, 0, w, h, hdc, x, y, 0x00CC0020)
+        img = self._dib(mdc, bmp, w, h)
+        gdi32.DeleteObject(bmp)
+        gdi32.DeleteDC(mdc)
+        user32.ReleaseDC(0, hdc)
+        return img if img is not None else np.zeros((0, 0, 3), np.uint8)
+
+    def grab(self, region=None, *, fresh=False):
+        wr = rect_of(self.hwnd)
+        if region is None:
+            region = wr
+        if region is None:
+            return np.zeros((0, 0, 3), np.uint8)
+        x, y, w, h = (int(v) for v in region)
+        if w <= 0 or h <= 0:
+            return np.zeros((0, 0, 3), np.uint8)
+        if self._pw_ok:
+            full = None
+            ts, cached = self._cache
+            if not fresh and cached is not None and time.time() - ts < 0.25:
+                full = cached
+            else:
+                full = self._printwindow()
+                if full is None:
+                    self._pw_ok = False
+                else:
+                    self._cache = (time.time(), full)
+            if full is not None:
+                dx, dy = x - wr[0], y - wr[1]
+                sub = full[max(0, dy):dy + h, max(0, dx):dx + w]
+                if sub.shape[0] == h and sub.shape[1] == w:
+                    return sub
+        return self._screen_grab(region)
+
+    # ---------------- 输入
+    def _invalidate(self):
+        self._cache = (0.0, None)
+
+    def _assert_fg(self):
+        if user32.GetForegroundWindow() == self.hwnd:
+            return
+        if activate(self.hwnd, tries=2) and user32.GetForegroundWindow() == self.hwnd:
+            return
+        raise RuntimeError(f"目标窗口不在前台（前台={user32.GetForegroundWindow()}），已中止")
+
+    def click(self, x, y):
+        self._assert_fg()
+        now = time.time()
+        self._clicks = [t for t in self._clicks if now - t < 60]
+        if len(self._clicks) >= self.CLICK_MAX:
+            raise RuntimeError(f"60 秒内已点 {len(self._clicks)} 下，超过上限")
+        if self._clicks:
+            gap = self.CLICK_GAP - (now - self._clicks[-1])
+            if gap > 0:
+                time.sleep(gap)
+        user32.SetCursorPos(int(x), int(y))
+        time.sleep(0.03)
+        pt = wintypes.POINT()
+        user32.GetCursorPos(ctypes.byref(pt))
+        if abs(pt.x - int(x)) > 2 or abs(pt.y - int(y)) > 2:
+            raise RuntimeError(f"光标没能移到 ({x},{y})，实际 ({pt.x},{pt.y})")
+        user32.mouse_event(0x0002, 0, 0, 0, 0)
+        time.sleep(0.05)
+        user32.mouse_event(0x0004, 0, 0, 0, 0)
+        self._clicks.append(time.time())
+        self._invalidate()
+
+    def press(self, key, times=1):
+        self._assert_fg()
+        vk = VK[key.lower()]
+        for _ in range(times):
+            user32.keybd_event(vk, 0, 0, 0)
+            time.sleep(0.02)
+            user32.keybd_event(vk, 0, 2, 0)
+            time.sleep(0.05)
+        self._invalidate()
+
+    def hotkey(self, *keys):
+        self._assert_fg()
+        codes = [VK[k.lower()] for k in keys]
+        for c in codes:
+            user32.keybd_event(c, 0, 0, 0)
+            time.sleep(0.02)
+        for c in reversed(codes):
+            user32.keybd_event(c, 0, 2, 0)
+            time.sleep(0.02)
+        self._invalidate()
+
+    def type_text(self, text, interval=0.004):
+        self._assert_fg()
+
+        class _M(ctypes.Structure):
+            _fields_ = [("dx", ctypes.c_long), ("dy", ctypes.c_long),
+                        ("mouseData", ctypes.c_uint), ("dwFlags", ctypes.c_uint),
+                        ("time", ctypes.c_uint), ("dwExtraInfo", ctypes.c_size_t)]
+
+        class _K(ctypes.Structure):
+            _fields_ = [("wVk", ctypes.c_ushort), ("wScan", ctypes.c_ushort),
+                        ("dwFlags", ctypes.c_uint), ("time", ctypes.c_uint),
+                        ("dwExtraInfo", ctypes.c_size_t)]
+
+        class _H(ctypes.Structure):
+            _fields_ = [("uMsg", ctypes.c_uint), ("wParamL", ctypes.c_ushort),
+                        ("wParamH", ctypes.c_ushort)]
+
+        class _U(ctypes.Union):
+            _fields_ = [("mi", _M), ("ki", _K), ("hi", _H)]
+
+        class _IN(ctypes.Structure):
+            _anonymous_ = ("u",)
+            _fields_ = [("type", ctypes.c_uint), ("u", _U)]
+
+        for ch in text:
+            code = ord(ch)
+            inp = _IN(1, _U(ki=_K(0, code, 0x0004, 0, 0)))
+            user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(_IN))
+            time.sleep(interval)
+            inp = _IN(1, _U(ki=_K(0, code, 0x0004 | 0x0002, 0, 0)))
+            user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(_IN))
+            time.sleep(interval)
+        self._invalidate()
+
+    # ---------------- 模板
+    def tpl(self, name):
+        p = os.path.join(TEMPLATE_DIR, name + ".png")
+        img = cv2.imread(p, cv2.IMREAD_GRAYSCALE)
+        if img is None:
+            raise FileNotFoundError(f"缺模板 {p}")
+        return img
+
+    def find(self, name, threshold=TPL_THR, region=None):
+        """返回 (屏幕x, 屏幕y, w, h, score) 或 None。"""
+        img = self.grab(region)
+        if img.size == 0:
+            return None
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        t = self.tpl(name)
+        if t.shape[0] > gray.shape[0] or t.shape[1] > gray.shape[1]:
+            return None
+        res = cv2.matchTemplate(gray, t, cv2.TM_CCOEFF_NORMED)
+        _mn, mx, _ml, ml = cv2.minMaxLoc(res)
+        if mx < threshold:
+            return None
+        ox, oy = (region[0], region[1]) if region else (0, 0)
+        return (ox + ml[0], oy + ml[1], t.shape[1], t.shape[0], float(mx))
+
+    def find_all(self, name, threshold=0.85, region=None, nms=6):
+        """返回所有超过阈值的位置（按 x 排序），用简单 NMS 去重。"""
+        img = self.grab(region)
+        if img.size == 0:
+            return []
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        t = self.tpl(name)
+        if t.shape[0] > gray.shape[0] or t.shape[1] > gray.shape[1]:
+            return []
+        res = cv2.matchTemplate(gray, t, cv2.TM_CCOEFF_NORMED)
+        ys, xs = np.nonzero(res >= threshold)
+        cand = sorted(((float(res[y, x]), int(x), int(y)) for y, x in zip(ys, xs)),
+                      reverse=True)
+        out = []
+        for sc, x, y in cand:
+            # 去重要用 or：同一行上左右两个 ⌄ 的 y 相同，
+            # 用 and 会把第二个当成重复直接丢掉（实测强度芯片的 ⌄ 就是这样消失的）
+            if all(abs(x - ox) > nms or abs(y - oy) > nms for _, ox, oy in out):
+                out.append((sc, x, y))
+        ox, oy = (region[0], region[1]) if region else (0, 0)
+        return sorted(((ox + x + t.shape[1] // 2, oy + y + t.shape[0] // 2, sc)
+                       for sc, x, y in out), key=lambda p: p[0])
+
+
+# ============================================================ 定位
+
+def _band(win):
+    x, y, w, h = win
+    top = y + max(0, h - BAND_H)
+    return (x, top, w, min(BAND_H, h))
+
+
+def chevrons(d, win):
+    """底部行里所有 ⌄ 的中心（屏幕坐标），按 x 排序。
+
+    第 1 个 = 模型芯片，第 2 个 = 强度芯片（没有 variant 的模型只有一个）。
+    """
+    return d.find_all(TPL_CHEV, CHEV_THR, _band(win))
+
+
+def panel_bbox(d, win):
+    """模型面板的白色区域（屏幕坐标），没开返回 None。
+
+    面板是窗口中央一整块纯白（实测 480x448），比逐行找文字稳。
+    """
+    x0 = win[0] + win[2] // 4
+    y0 = win[1] + max(0, win[3] // 6)
+    reg = (x0, y0, win[2] // 2, int(win[3] * 0.6))
+    img = d.grab(reg)
+    if img.size == 0:
+        return None
+    g = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    white = (g > 250).astype(np.uint8)
+    n, _lab, st, _c = cv2.connectedComponentsWithStats(white, 8)
+    best = None
+    for i in range(1, n):
+        x, y, w, h, a = (int(v) for v in st[i][:5])
+        # 尺寸要卡住：页面进入全选状态时白色会连成一大片（实测 690x655），
+        # 不卡就会把整页当成面板，然后往页面中间点"搜索框"
+        if 380 <= w <= 600 and 350 <= h <= 600 and a > 50000:
+            if best is None or a > best[4]:
+                best = (x, y, w, h, a)
+    if best is None:
+        return None
+    return (reg[0] + best[0], reg[1] + best[1], best[2], best[3])
+
+
+def open_model_panel(d, win):
+    """打开模型面板，已开则直接返回 True。"""
+    if panel_bbox(d, win) is not None:
+        return True
+    ch = chevrons(d, win)
+    if not ch:
+        return False
+    d.click(ch[0][0], ch[0][1])
+    time.sleep(1.4)
+    return panel_bbox(d, win) is not None
+
+
+def close_panel(d, win):
+    d.press("esc")
+    time.sleep(0.5)
+    return panel_bbox(d, win) is None
+
+
+def effort_menu_open(d, win):
+    """强度小菜单开着吗 = 四档文字里有 ≥2 个能同时匹到。"""
+    row = _band(win)
+    hit = 0
+    for k in EFFORTS:
+        if d.find(TPL_E[k], 0.85, row) is not None:
+            hit += 1
+            if hit >= 2:
+                return True
+    return False
+
+
+def open_effort_menu(d, win):
+    """点第 2 个 ⌄ 打开强度菜单。没有第 2 个 ⌄ = 这个模型没有强度可选。"""
+    if effort_menu_open(d, win):
+        return "open"
+    if panel_bbox(d, win) is not None:
+        close_panel(d, win)
+    ch = chevrons(d, win)
+    if len(ch) < 2:
+        return "no_chip"
+    d.click(ch[1][0], ch[1][1])
+    time.sleep(1.3)
+    return "open" if effort_menu_open(d, win) else "fail"
+
+
+# ============================================================ 读 / 选
+
+def read_effort(d, win):
+    """读强度：芯片上那个词（Default/Low/High/Max）。"""
+    if len(chevrons(d, win)) < 2:
+        return {"effort": "none", "hint": "这个模型没有强度芯片"}
+    row = _band(win)
+    best, bs = None, 0.0
+    for k in EFFORTS:
+        m = d.find(TPL_E[k], 0.0, row)
+        s = m[4] if m else 0.0
+        if s > bs:
+            bs, best = s, k
+    if best is None or bs < 0.85:
+        return {"effort": "unknown", "score": round(bs, 3)}
+    return {"effort": best, "label": EFFORT_LABEL[best], "score": round(bs, 3)}
+
+
+def read_model(d, win):
+    """读模型名。只在模板库覆盖到的模型上可靠（未覆盖返回 unknown）。"""
+    row = _band(win)
+    best, bs = None, 0.0
+    for k, tpl in MODELS.items():
+        m = d.find(tpl, 0.0, row)
+        s = m[4] if m else 0.0
+        if s > bs:
+            bs, best = s, k
+    if best is None or bs < MODEL_THR:
+        return {"model": "unknown", "score": round(bs, 3),
+                "hint": "模板库没覆盖这个模型名；--model 仍可用（走搜索框）"}
+    return {"model": best, "score": round(bs, 3)}
+
+
+def _search_box(panel):
+    """面板顶部搜索框的点击点。
+
+    实测面板顶 y=354、搜索框 366..400，中心在 panel.y+30。
+    写成 +46 会点到搜索框下边缘外面 —— 焦点留在页面上，
+    后面的 Ctrl+A 就变成"全选整页文字"（实测把回答全选、还弹出 Quote 按钮）。
+    """
+    x, y, w, h = panel
+    return (x + w // 2, y + 30)
+
+
+def set_model(d, win, name):
+    """切模型：开面板 -> 搜索框输入名字 -> Enter。
+
+    **名字要给够精确**：Enter 选的是"过滤后的第一项"，
+    传 "Claude" 会选到 Claude 系列里排最前的那个。
+    """
+    if not name:
+        return {"ok": False, "stage": "bad_arg"}
+    if not open_model_panel(d, win):
+        return {"ok": False, "stage": "panel_not_open"}
+    panel = panel_bbox(d, win)
+    if panel is None:
+        return {"ok": False, "stage": "panel_bbox_none"}
+    d.click(*_search_box(panel))
+    time.sleep(0.4)
+    d.hotkey("ctrl", "a")
+    time.sleep(0.1)
+    d.press("delete")
+    time.sleep(0.2)
+    d.type_text(name)
+    time.sleep(0.9)
+    # 确认字真的进了搜索框：占位文字「🔍 搜索模型」应该消失。
+    # 不确认的话，焦点一旦留在页面上，Ctrl+A 会全选整页、字打进页面（实测踩过）。
+    if d.find("oc_search_ph", 0.85, panel) is not None:
+        dbg = os.path.join(DEBUG_DIR, "opencode_search_not_focused.png")
+        cv2.imwrite(dbg, d.grab(win, fresh=True))
+        close_panel(d, win)
+        return {"ok": False, "stage": "search_not_focused",
+                "hint": "字没进搜索框（占位文字还在），已放弃，没有回车",
+                "debug_shot": dbg}
+    d.press("enter")
+    time.sleep(1.5)
+    if panel_bbox(d, win) is not None:       # 没关上 = 没选中
+        dbg = os.path.join(DEBUG_DIR, "opencode_model_fail.png")
+        cv2.imwrite(dbg, d.grab(win, fresh=True))
+        close_panel(d, win)
+        return {"ok": False, "stage": "not_selected", "want": name,
+                "hint": "回车后面板没关，可能没匹配到；看 debug_shot",
+                "debug_shot": dbg}
+    got = read_model(d, win)
+    out = {"want": name, "after": got.get("model"), "score": got.get("score")}
+    if got.get("model") == "unknown":
+        out.update({"ok": True, "verified": False,
+                    "hint": "面板已关（说明选中了），但模板库读不出名字"})
+    else:
+        out.update({"ok": True, "verified": True})
+    return out
+
+
+def set_effort(d, win, key):
+    """调强度：点第 2 个 ⌄ -> 点对应那行 -> 复核芯片。"""
+    key = EFFORT_ALIAS.get(key, key)
+    if key not in EFFORTS:
+        return {"ok": False, "stage": "bad_arg", "options": EFFORTS}
+    before = read_effort(d, win)
+    st = open_effort_menu(d, win)
+    if st == "no_chip":
+        return {"ok": False, "stage": "no_effort_chip",
+                "hint": "这个模型的芯片行只有一个 ⌄（没有 variant），换模型再调"}
+    if st != "open":
+        return {"ok": False, "stage": "menu_not_open"}
+    m = d.find(TPL_E[key], 0.85, _band(win))
+    if m is None:
+        close_panel(d, win)
+        return {"ok": False, "stage": "item_not_found", "want": key}
+    d.click(m[0] + m[2] // 2, m[1] + m[3] // 2)
+    time.sleep(1.2)
+    if effort_menu_open(d, win):
+        d.press("esc")
+        time.sleep(0.4)
+    after = read_effort(d, win)
+    ok = after.get("effort") == key
+    return {"ok": ok, "before": before.get("effort"), "want": key,
+            "after": after.get("effort"), "stage": "done" if ok else "unverified"}
+
+
+def list_state(d, win):
+    out = {}
+    out.update(read_model(d, win))
+    out.update(read_effort(d, win))
+    out["chevrons"] = len(chevrons(d, win))
+    return out
+
+
+# ============================================================ 提问
+
+def send_state(d, win):
+    """发送键状态：ready / disabled / missing。
+
+    **不能只看模板分数**：禁用态（浅灰）和启用态（深色）是同一个形状，
+    CCOEFF 对整体亮度平移不敏感，浅灰也能匹到 0.999。要看这块的平均亮度。
+    """
+    m = d.find(TPL_SEND, 0.80, _band(win))
+    if m is None:
+        return "missing"
+    img = d.grab(_band(win))
+    if img.size == 0:
+        return "missing"
+    x0 = m[0] - win[0]
+    y0 = m[1] - band_top(win)
+    patch = img[max(0, y0):y0 + m[3], max(0, x0):x0 + m[2]]
+    if patch.size == 0:
+        return "missing"
+    mean = float(cv2.cvtColor(patch, cv2.COLOR_BGR2GRAY).mean())
+    return "ready" if mean < 120 else "disabled"
+
+
+def band_top(win):
+    return win[1] + max(0, win[3] - BAND_H)
+
+
+def ask(d, win, prompt, timeout=180.0):
+    """发一条消息。**只确认发出去了，不取回答**（取回答还差复制按钮模板）。"""
+    ph = d.find(TPL_PH, 0.85, _band(win))
+    if ph is None:
+        return {"ok": False, "stage": "composer_not_found",
+                "hint": "找不到输入框占位文字（可能输入框里已经有内容）"}
+    d.click(ph[0] + ph[2] // 2, ph[1] + ph[3] // 2)
+    time.sleep(0.4)
+    d.hotkey("ctrl", "a")
+    time.sleep(0.1)
+    d.press("delete")
+    time.sleep(0.2)
+    d.type_text(prompt)
+    time.sleep(0.8)
+    st = send_state(d, win)
+    if st != "ready":
+        dbg = os.path.join(DEBUG_DIR, "opencode_send_not_ready.png")
+        cv2.imwrite(dbg, d.grab(win, fresh=True))
+        return {"ok": False, "stage": "send_not_ready", "state": st,
+                "hint": "输入后发送键没变深色（还是禁用态），没敢点",
+                "debug_shot": dbg}
+    m = d.find(TPL_SEND, 0.80, _band(win))
+    d.click(m[0] + m[2] // 2, m[1] + m[3] // 2)
+    t0 = time.time()
+    while time.time() - t0 < 15:
+        time.sleep(0.6)
+        if send_state(d, win) != "ready":
+            break
+    else:
+        return {"ok": False, "stage": "not_sent", "hint": "点了发送但没离开发送态"}
+    return {"ok": False, "stage": "no_copy_template", "sent": True,
+            "hint": "消息已发出，但取回答还没接（缺复制按钮模板）"}
+
+
+# ============================================================ CLI
+
+def probe(d, win):
+    band = _band(win)
+    rows = []
+    for name in (TPL_CHEV, TPL_SEND, TPL_PH) + tuple(TPL_E.values()):
+        m = d.find(name, 0.30, band)
+        rows.append({"name": name, "score": None if m is None else round(m[4], 4),
+                     "at_window": None if m is None else (m[0] - win[0], m[1] - win[1])})
+    pan = panel_bbox(d, win)
+    return {"window": list(win), "templates": rows,
+            "chevrons": [(x - win[0], y - win[1]) for x, y, _s in chevrons(d, win)],
+            "panel": None if pan is None else
+            (pan[0] - win[0], pan[1] - win[1], pan[2], pan[3])}
+
+
+def main():
+    ap = argparse.ArgumentParser(add_help=True)
+    ap.add_argument("--list", "-l", action="store_true")
+    ap.add_argument("--model", default=None)
+    ap.add_argument("--effort", default=None)
+    ap.add_argument("--probe", action="store_true")
+    ap.add_argument("--wait", type=float, default=120.0)
+    ap.add_argument("--idle", type=float, default=2.0)
+    ap.add_argument("--force", action="store_true")
+    a = ap.parse_args()
+
+    if not (a.list or a.model or a.effort or a.probe):
+        print(__doc__)
+        print("可选强度：" + ", ".join(EFFORTS))
+        return 2
+
+    if not a.force:
+        end = time.time() + a.wait
+        while time.time() < end:
+            if idle_seconds() >= a.idle:
+                break
+            time.sleep(0.2)
+        else:
+            print(json.dumps({"ok": False, "stage": "user_busy",
+                              "hint": f"{a.wait}s 内你一直在用电脑"}, ensure_ascii=False))
+            return 4
+
+    hwnd = find_window()
+    if hwnd is None:
+        print("启动 opencode …")
+        subprocess.Popen(["explorer.exe", LAUNCH])
+        end = time.time() + 40
+        while time.time() < end and hwnd is None:
+            time.sleep(1.0)
+            hwnd = find_window()
+    if hwnd is None:
+        print(json.dumps({"ok": False, "stage": "no_window"}, ensure_ascii=False))
+        return 1
+
+    win = rect_of(hwnd)
+    d = Desk(hwnd)
+
+    if a.probe:
+        print(json.dumps(probe(d, win), ensure_ascii=False, indent=1))
+        return 0
+
+    if not activate(hwnd):
+        print(json.dumps({"ok": False, "stage": "not_foreground",
+                          "hint": "窗口提不到前台，已退出，不硬点"}, ensure_ascii=False))
+        return 4
+    time.sleep(0.7)
+    d.grab(win, fresh=True)
+    win = rect_of(hwnd)
+    rc = 0
+
+    try:
+        if a.list:
+            out = list_state(d, win)
+            print(json.dumps(out, ensure_ascii=False))
+            if panel_bbox(d, win) is not None:
+                close_panel(d, win)
+            return 0
+
+        if a.model:
+            r = set_model(d, win, a.model)
+            print(json.dumps(r, ensure_ascii=False))
+            rc = 0 if r.get("ok") else 1
+        if a.effort:
+            r = set_effort(d, win, a.effort)
+            print(json.dumps(r, ensure_ascii=False))
+            rc = 0 if r.get("ok") else 1
+    except RuntimeError as e:
+        print(json.dumps({"ok": False, "stage": "aborted", "hint": str(e)},
+                         ensure_ascii=False))
+        return 4
+    return rc
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
