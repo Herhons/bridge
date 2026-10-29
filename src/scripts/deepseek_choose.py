@@ -26,7 +26,7 @@ _SRC = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _SRC not in sys.path:
     sys.path.insert(0, _SRC)
 
-from qi import Library, Screen  # noqa: E402
+from qi import ForegroundLost, Library, Screen  # noqa: E402
 from qi import guard  # noqa: E402
 
 # 每个开关一张定位图（截"关"的样子即可，两态都能定位到）
@@ -158,21 +158,26 @@ def main() -> int:
     if o.get("tab"):
         s.hotkey("ctrl", str(o["tab"]))
         time.sleep(1.8)
-    if o["list"]:
-        print(json.dumps(list_state(s), ensure_ascii=False))
-        return 0
+    try:
+        if o["list"]:
+            print(json.dumps(list_state(s), ensure_ascii=False))
+            return 0
 
-    todo = {k: v for k, v in (("think", o["think"]), ("search", o["search"])) if v}
-    if not todo:
-        usage(name)
-        return 2
-    rc = 0
-    for kind, want in todo.items():
-        r = set_state(s, kind, want)
-        print(json.dumps(r, ensure_ascii=False))
-        if not r.get("ok"):
-            rc = 1
-    return rc
+        todo = {k: v for k, v in (("think", o["think"]), ("search", o["search"])) if v}
+        if not todo:
+            usage(name)
+            return 2
+        rc = 0
+        for kind, want in todo.items():
+            r = set_state(s, kind, want)
+            print(json.dumps(r, ensure_ascii=False))
+            if not r.get("ok"):
+                rc = 1
+        return rc
+    except ForegroundLost as e:
+        print("失败:", json.dumps({"ok": False, "stage": "user_took_over",
+                                  "hint": str(e)}, ensure_ascii=False))
+        return 4
 
 
 if __name__ == "__main__":

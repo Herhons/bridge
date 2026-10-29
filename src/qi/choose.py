@@ -16,7 +16,7 @@ import time
 from dataclasses import dataclass, field
 
 from . import guard
-from .screen import Screen
+from .screen import ForegroundLost, Screen
 
 
 @dataclass(frozen=True)
@@ -290,13 +290,18 @@ def cli(cfg: Chooser, argv: list[str]) -> int:
         return 0
 
     rc = 0
-    if writer is not None:
-        w = choose_writer(s, cfg, writer)
-        print(json.dumps(w, ensure_ascii=False))
-        if not w.get("ok"):
-            rc = 1
-    if want is not None:
-        r = choose(s, cfg, want)
-        print(json.dumps(r, ensure_ascii=False))
-        rc = 0 if r.get("ok") else 1
+    try:
+        if writer is not None:
+            w = choose_writer(s, cfg, writer)
+            print(json.dumps(w, ensure_ascii=False))
+            if not w.get("ok"):
+                rc = 1
+        if want is not None:
+            r = choose(s, cfg, want)
+            print(json.dumps(r, ensure_ascii=False))
+            rc = 0 if r.get("ok") else 1
+    except ForegroundLost as e:
+        print("失败:", json.dumps({"ok": False, "stage": "user_took_over",
+                                  "hint": str(e)}, ensure_ascii=False))
+        return 4
     return rc

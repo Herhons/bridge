@@ -37,7 +37,7 @@ _SRC = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _SRC not in sys.path:
     sys.path.insert(0, _SRC)
 
-from qi import Library, Screen, guard  # noqa: E402
+from qi import ForegroundLost, Library, Screen, guard  # noqa: E402
 from qi.flow import Site, _open_new_chat  # noqa: E402
 
 TITLE = "Google Chrome"
@@ -172,6 +172,8 @@ def safe_click(s: Screen, target, *, voice=None) -> tuple[bool, str]:
 
     try:
         s.click_xy(cx, cy)
+    except ForegroundLost:
+        raise                                 # 前台丢了是全局状态，交给上层中止，不当成"点歪了"
     except Exception as e:                    # 光标挪不过去就别点
         return False, f"光标无法就位：{e}"
     _click["n"] += 1
@@ -655,37 +657,43 @@ def main() -> int:
         s.hotkey("ctrl", str(tab))
         time.sleep(1.8)
 
-    if want_writer is not None:
-        # 模式按钮只在新对话页出现，所以切模式前先确保在新页
-        _NEWCHAT = Site(name="chatgpt", title_hint=TITLE, composer="gpt_composer",
-                        send="gpt_send_on", actions="gpt_actions", copy="gpt_copy",
-                        composer_offset=(240, -5),
-                        newchat=("gpt_newchat", "gpt_newchat_icon"), sidebar="gpt_sidebar",
-                        send_mode="exists")
-        _open_new_chat(s, _NEWCHAT)
-        time.sleep(1.0)
+    try:
+        if want_writer is not None:
+            # 模式按钮只在新对话页出现，所以切模式前先确保在新页
+            _NEWCHAT = Site(name="chatgpt", title_hint=TITLE, composer="gpt_composer",
+                            send="gpt_send_on", actions="gpt_actions", copy="gpt_copy",
+                            composer_offset=(240, -5),
+                            newchat=("gpt_newchat", "gpt_newchat_icon"), sidebar="gpt_sidebar",
+                            send_mode="exists")
+            _open_new_chat(s, _NEWCHAT)
+            time.sleep(1.0)
 
-    if do_list:
-        # 读状态不许改页面：这里不点「新聊天」，否则会把用户正在聊的会话重置掉
-        out = {"effort": "unknown", "effort_note": "思考强度未实现"}
-        out.update(read_writer(s))
-        if out.get("writer") in (None, "unknown"):
-            out["note"] = "模式按钮只在新聊天页出现；这里不主动改页面，读不到就手动开个新聊天。"
-        else:
-            out.update(read_model(s, out["writer"]))
-        print(json.dumps(out, ensure_ascii=False))
-        return 0
+        if do_list:
+            # 读状态不许改页面：这里不点「新聊天」，否则会把用户正在聊的会话重置掉
+            out = {"effort": "unknown", "effort_note": "思考强度未实现"}
+            out.update(read_writer(s))
+            if out.get("writer") in (None, "unknown"):
+                out["note"] = "模式按钮只在新聊天页出现；这里不主动改页面，读不到就手动开个新聊天。"
+            else:
+                out.update(read_model(s, out["writer"]))
+            print(json.dumps(out, ensure_ascii=False))
+            return 0
 
-    rc = 0
-    if want_writer is not None:
-        r = choose_writer(s, want_writer)
-        print(json.dumps(r, ensure_ascii=False))
-        if not r.get("ok"):
-            rc = 1
-    if want_model is not None:
-        r = set_model(s, want_model)
-        print(json.dumps(r, ensure_ascii=False))
-        rc = 0 if r.get("ok") else 1
+        rc = 0
+        if want_writer is not None:
+            r = choose_writer(s, want_writer)
+            print(json.dumps(r, ensure_ascii=False))
+            if not r.get("ok"):
+                rc = 1
+        if want_model is not None:
+            r = set_model(s, want_model)
+            print(json.dumps(r, ensure_ascii=False))
+            rc = 0 if r.get("ok") else 1
+    except ForegroundLost as e:
+        # 目标窗口被切走/被盖住：立刻停，后面的点击一个都不发
+        print(json.dumps({"ok": False, "stage": "user_took_over",
+                          "hint": str(e)}, ensure_ascii=False))
+        return 4
     return rc
 
 

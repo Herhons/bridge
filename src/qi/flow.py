@@ -13,7 +13,7 @@ import time
 from dataclasses import dataclass
 
 from . import guard
-from .screen import Match, Screen
+from .screen import ForegroundLost, Match, Screen
 
 
 @dataclass(frozen=True)
@@ -320,7 +320,14 @@ def cli(site: Site, argv: list[str], *, prepare=None, extra_help: str = "") -> i
 
     if not guard.guard(need, wait, force):
         return 4
-    result = ask(site, prompt, mode=mode, timeout=timeout, tab=tab, prepare=prepare)
+    try:
+        result = ask(site, prompt, mode=mode, timeout=timeout, tab=tab, prepare=prepare)
+    except ForegroundLost as e:
+        # 目标窗口被切走/被盖住：立刻停，不猜位置。已经发出的那次点击无法撤回，
+        # 但至少不会继续往下打。
+        print("失败:", json.dumps({"ok": False, "stage": "user_took_over",
+                                  "hint": str(e)}, ensure_ascii=False))
+        return 4
     if result.get("ok"):
         print("=== 回答 ===")
         print(result.pop("reply"))

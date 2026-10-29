@@ -150,12 +150,23 @@ class Match:
         return f"<{self.name} {self.score:.3f} 中心({cx},{cy})>"
 
 
+class ForegroundLost(RuntimeError):
+    """目标窗口不在前台：用户切走了，或者被别的窗口盖住了。
+
+    每次点击/输入前都校验一次。这样"用户在用电脑"从"点歪了还不知道"
+    变成"立刻停下并报错"——2026-10-29 有一次就是这样把点击打在了微信上。
+    """
+
+
 class Screen:
     def __init__(self, *, threshold: float = 0.85, library: Path | None = None, verbose: bool = True):
         self.threshold = threshold
         self.library = Path(library) if library else LIBRARY
         self.verbose = verbose
         self._tpl: dict[str, np.ndarray] = {}
+        self.target_hwnd: int | None = None
+        # 点击前是否要求目标窗口在前台。默认要：点到别的窗口上比不点更糟。
+        self.require_foreground = True
 
     # ---------------------------------------------------------------- 找图
     def bounds(self) -> tuple[int, int, int, int]:
@@ -237,6 +248,7 @@ class Screen:
         if not found:
             return False
         hwnd = found[0]
+        self.target_hwnd = hwnd          # 即使已经在前台也要记下来，供点击前校验
         if user32.GetForegroundWindow() == hwnd:
             return True
         fg = user32.GetForegroundWindow()
@@ -460,7 +472,22 @@ class Screen:
         # 两次都没到位：至少别让调用方以为点到了
         raise RuntimeError(f"光标没能移到 ({x},{y})，实际停在 ({pt.x},{pt.y})")
 
+    def _assert_foreground(self) -> None:
+        """点击/输入前校验：前台还是不是当初那个窗口。
+
+        没调用过 bring_to_front（target_hwnd 为空）时直接放行，
+        这样只读场景（截图、找图）不受影响。
+        """
+        if not self.require_foreground or self.target_hwnd is None:
+            return
+        fg = user32.GetForegroundWindow()
+        if fg != self.target_hwnd:
+            raise ForegroundLost(
+                f"目标窗口不在前台（前台={fg}，目标={self.target_hwnd}）。"
+                "你可能切到了别的窗口，已中止，不猜位置。")
+
     def click_xy(self, x: int, y: int) -> None:
+        self._assert_foreground()
         self.move_to(x, y)
         time.sleep(0.03)
         _send(_INPUT(type=INPUT_MOUSE, mi=_MOUSEINPUT(0, 0, 0, MOUSEEVENTF_LEFTDOWN, 0, None)))
@@ -476,6 +503,7 @@ class Screen:
 
         滑杆这类控件只点一下改不动（点了也弹回原位），必须按住拖。
         """
+        self._assert_foreground()
         vx, vy = user32.GetSystemMetrics(SM_XVIRTUALSCREEN), user32.GetSystemMetrics(SM_YVIRTUALSCREEN)
         vw, vh = user32.GetSystemMetrics(SM_CXVIRTUALSCREEN), user32.GetSystemMetrics(SM_CYVIRTUALSCREEN)
 
@@ -511,6 +539,7 @@ class Screen:
         return m
 
     def type_text(self, text: str, *, interval: float = 0.004) -> None:
+        self._assert_foreground()
         for ch in text:
             if ch == "\n":
                 self.press("enter")
@@ -528,6 +557,7 @@ class Screen:
                 time.sleep(interval)
 
     def press(self, key: str, *, times: int = 1) -> None:
+        self._assert_foreground()
         vk = VK[key.lower()]
         for _ in range(times):
             _send(_INPUT(type=INPUT_KEYBOARD, ki=_KEYBDINPUT(vk, 0, 0, 0, None)))
@@ -536,6 +566,7 @@ class Screen:
             time.sleep(0.02)
 
     def hotkey(self, *keys: str) -> None:
+        self._assert_foreground()
         codes = [VK[k.lower()] for k in keys]
         for c in codes:
             _send(_INPUT(type=INPUT_KEYBOARD, ki=_KEYBDINPUT(c, 0, 0, 0, None)))

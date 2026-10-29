@@ -8,6 +8,6 @@
 """
 
 from .library import Library
-from .screen import DPI_LEVEL, LIBRARY, Match, Screen
+from .screen import DPI_LEVEL, LIBRARY, ForegroundLost, Match, Screen
 
-__all__ = ["Screen", "Match", "Library", "DPI_LEVEL", "LIBRARY"]
+__all__ = ["Screen", "Match", "Library", "ForegroundLost", "DPI_LEVEL", "LIBRARY"]
