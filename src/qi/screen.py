@@ -581,6 +581,19 @@ class Screen:
         self.click(m, offset=offset)
         return m
 
+    def scroll(self, notches: int, *, at: tuple[int, int] | None = None) -> None:
+        """滚轮。正数向上、负数向下，一格 = 120。
+
+        at 给了就先移过去再滚——滚轮事件发给**鼠标当前位置下面的窗口**，
+        不移过去就是在别处滚（之前 _find_item 把鼠标放在窗口中心，那是页面
+        正中，根本不在模型列表上，所以怎么滚都找不到最后一项）。
+        """
+        self._assert_foreground()
+        if at is not None:
+            self.move_to(int(at[0]), int(at[1]))
+            time.sleep(0.05)
+        user32.mouse_event(0x0800, 0, 0, int(notches) * 120, 0)
+
     def type_text(self, text: str, *, interval: float = 0.004) -> None:
         self._assert_foreground()
         for ch in text:

@@ -377,19 +377,6 @@ def _slider(s: Screen):
     if x1 - x0 < 200 or y1 - y0 < 40:
         return None
 
-    def runs_of(mask):
-        out, st = [], None
-        for i, m in enumerate(mask):
-            if m:
-                if st is None:
-                    st = i
-            elif st is not None:
-                out.append((st, i - 1))
-                st = None
-        if st is not None:
-            out.append((st, len(mask) - 1))
-        return out
-
     # 1) 候选轨道行。
     #    判据不能用「最长连续段」：滑块是白的，会把轨道切成左右两段，
     #    滑块在中间时最长的一段只有 130px，达不到 170 的下限，真轨道直接被排除
@@ -698,23 +685,80 @@ def set_effort(s: Screen, key: str, writer: str | None = None) -> dict:
     return out
 
 
-def _find_item(s: Screen, writer: str, tpl: str, scroll: bool = True):
-    """找模型项；找不到就往下滚再找（工作模式 9 项，一屏放不下）。"""
+def _list_band(s: Screen, writer: str, win):
+    """列表所在的纵向范围（屏幕坐标）。把搜索限制在列表里。
+
+    不能在整个窗口里找：**芯片上也会出现模型名**（选中 GPT-5.6 Luna 时芯片就
+    写着「GPT-5.6 Luna 高」），实测 gpt56_luna 模板在芯片上匹到 0.928，
+    过了 0.85 的阈值，而且比列表项还先撞上，点下去点到列表外面。
+
+    做法：把能匹配到的项按 y 排序，按「相邻间距 ≤60px」分组，取最长的那组
+    （列表项间距 36px，芯片离列表 70px 以上，会单独成组被丢掉），
+    再上下各留 40px 余量 —— 滚动后新露出来的项也在这个范围里。
+    """
+    ys = []
+    for _k, (_d, tpl) in MODELS.get(writer, {}).items():
+        m = s.find(tpl, threshold=0.90, region=win)
+        if m is not None:
+            ys.append(int(m.center[1]))
+    if len(ys) < 2:
+        return None
+    ys.sort()
+    groups = [[ys[0]]]
+    for y in ys[1:]:
+        if y - groups[-1][-1] <= 60:
+            groups[-1].append(y)
+        else:
+            groups.append([y])
+    gp = max(groups, key=len)
+    if len(gp) < 2:
+        return None
+    return (win[0], gp[0] - 40, win[2], gp[-1] - gp[0] + 80)
+
+
+def _list_anchor(s: Screen, writer: str):
+    """找一个当前可见的模型项，用来定位「列表在屏幕上的位置」。
+
+    滚轮事件发给鼠标当前位置下面的窗口，鼠标必须落在列表上才滚得动。
+    原来用窗口中心，那是页面正中，滚轮根本不在列表上（实测毫无反应）。
+    """
     win = _win(s)
-    m = s.find(tpl, threshold=0.85, region=win)
+    band = _list_band(s, writer, win) or win
+    for _k, (_d, tpl) in MODELS.get(writer, {}).items():
+        m = s.find(tpl, threshold=0.90, region=band)
+        if m is not None:
+            return m
+    return None
+
+
+def _scroll_list(s: Screen, writer: str, notches: int) -> bool:
+    """在列表上滚 notches 格（负数向下）。返回是否找到了定位点。"""
+    anchor = _list_anchor(s, writer)
+    if anchor is None:
+        return False
+    s.scroll(notches, at=anchor.center)
+    time.sleep(0.5)
+    return True
+
+
+def _find_item(s: Screen, writer: str, tpl: str, scroll: bool = True):
+    """找模型项；找不到就往下滚再找（工作模式 9 项，一屏只放得下 8 项）。
+
+    逐格滚而不是一次滚 4 格：列表只溢出 1 项，滚多了会把目标又推出去
+    （虽然实测到底就停住，但不同窗口高度下不一定）。
+    """
+    win = _win(s)
+    band = _list_band(s, writer, win) or win
+    m = s.find(tpl, threshold=0.85, region=band)
     if m is not None or not scroll:
         return m
-    # 列表内部的滚动条：把鼠标放到列表中间滚一下
-    cx = win[0] + win[2] // 2
-    cy = win[1] + win[3] // 2
-    try:
-        s.move_to(cx, cy)
-    except Exception:
+    if _list_anchor(s, writer) is None:
         return None
     for _ in range(4):
-        s.scroll(-3)
-        time.sleep(0.35)
-        m = s.find(tpl, threshold=0.85, region=win)
+        if not _scroll_list(s, writer, -1):
+            return None
+        band = _list_band(s, writer, win) or win     # 滚动后范围会变
+        m = s.find(tpl, threshold=0.85, region=band)
         if m is not None:
             return m
     return None
@@ -774,15 +818,27 @@ def _pick_model(s: Screen, writer: str) -> dict:
     "勾和每行都错开 36px"的等差假结果（实测）。
     """
     snap, prev = None, None
-    for _ in range(6):
-        cur = _scan_model(s, writer)
-        if cur is not None and prev is not None and cur["signed"] == prev["signed"]:
-            snap = cur
+    # 三次机会：原位 -> 滚到顶 -> 滚到底。
+    # 勾可能落在视口外：列表默认停在顶部，选中项在底部时勾看不见（实测
+    # 选中 GPT-5.6 Luna 后复核读成 unknown，但芯片明明已经变成 GPT-5.6 Luna 高）；
+    # 反过来为了找靠下的模型把列表滚到底，顶部「默认」那一行的勾又会滚出去。
+    for attempt in range(3):
+        prev = None
+        for _ in range(4):
+            cur = _scan_model(s, writer)
+            if cur is not None and prev is not None and cur["signed"] == prev["signed"]:
+                snap = cur
+                break
+            prev = cur
+            time.sleep(0.35)
+        if snap is None:
+            snap = prev
+        if snap is not None:
             break
-        prev = cur
-        time.sleep(0.4)
-    if snap is None:
-        snap = prev
+        if attempt == 0:
+            _scroll_list(s, writer, 8)
+        elif attempt == 1:
+            _scroll_list(s, writer, -8)
     if snap is None:
         return {"model": "unknown", "hint": "列表里找不到勾，也匹不上任何模型名"}
 
