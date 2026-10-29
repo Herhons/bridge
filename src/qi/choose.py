@@ -108,7 +108,21 @@ def _chip(cfg: Chooser, key: str) -> str:
     return f"{cfg.prefix}chip_{key}"
 
 
+def _calm(s: Screen, cfg: Chooser) -> None:
+    """读之前把界面"放平"：关弹层、移开鼠标。
+
+    踩过两次：芯片被鼠标压着会变底色；刚点过的芯片带蓝色聚焦框。
+    两种状态下模板都对不上，读出来就是 unknown。
+    """
+    s.press("esc")
+    win = s.window_rect(cfg.title_hint, on_secondary=cfg.on_secondary)
+    if win:
+        s.move_to(win[0] + 30, win[1] + 120)
+    time.sleep(0.35)
+
+
 def read_current(s: Screen, cfg: Chooser) -> dict:
+    _calm(s, cfg)
     for key in cfg.has_chip:
         m = s.find(_chip(cfg, key))
         if m is not None:
