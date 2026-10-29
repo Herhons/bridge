@@ -35,6 +35,12 @@ from qi import Library, Screen  # noqa: E402
 REQUIRED = ["ds_composer", "ds_send_on", "ds_copy"]
 OPTIONAL = ["ds_newchat", "ds_stop"]
 
+# ds_composer 是输入框右侧的麦克风图标（不管开关状态都在），
+# 点它本身会触发语音输入，所以要按偏移量点到左边的文字行上。
+COMPOSER_OFFSET = (-300, -65)
+# 输入框在屏幕上的范围，用来验证"字到底写进去没有"
+COMPOSER_REGION = (-977, 603, 776, 124)
+
 
 def _parse(argv: list[str]) -> tuple[str, str, float, list[str]]:
     mode = "new"
@@ -60,6 +66,16 @@ def _parse(argv: list[str]) -> tuple[str, str, float, list[str]]:
             words.append(a)
         i += 1
     return " ".join(words), mode, timeout, bad
+
+
+def _send_enabled(s: Screen, m) -> bool:
+    """发送键到底可不可点，只能看颜色。
+
+    模板匹配是归一化相关，深蓝（可点）和浅蓝（不可点）都判 1.000，
+    但两者 B-R 差得很远：实测可点约 148，不可点约 59。
+    """
+    b, _g, r = s.region_mean(m)
+    return (b - r) > 100
 
 
 def _hover_hunt_copy(s: Screen) -> tuple[list, str]:
@@ -95,39 +111,52 @@ def ask(prompt: str, *, mode: str = "new", timeout: float = 180.0) -> dict:
         s.click_image("ds_newchat", wait=3.0)
         time.sleep(0.8)
 
-    # 2. 写入
+    # 2. 写入（判"写进去没有"用发送键是否变可用，比像素差分稳）
     composer = s.find("ds_composer", threshold=0.80)
     if composer is None:
         return {"ok": False, "stage": "composer_not_found", "elapsed": round(time.time() - t0, 1),
                 "hint": "页面上没有找到输入框锚点图；确认 DeepSeek 页在前台且没被遮挡"}
-    s.click(composer)
-    time.sleep(0.2)
-    s.hotkey("ctrl", "a")
-    time.sleep(0.1)
-    s.type_text(prompt)
-    time.sleep(0.2)
+
+    send = None
+    for attempt in range(2):
+        s.click(composer, offset=COMPOSER_OFFSET)
+        time.sleep(0.25)
+        if attempt == 0:
+            # 首次点击常常只用于激活窗口，补一次
+            s.click(composer, offset=COMPOSER_OFFSET)
+            time.sleep(0.2)
+        s.hotkey("ctrl", "a")
+        time.sleep(0.1)
+        s.type_text(prompt)
+        time.sleep(0.4)
+        cand = s.find("ds_send_on", threshold=0.92)
+        if cand is not None and _send_enabled(s, cand):
+            send = cand
+            break
+    if send is None:
+        return {"ok": False, "stage": "write_not_visible", "elapsed": round(time.time() - t0, 1),
+                "hint": "输入后发送键没变成可用态：焦点没进输入框，或键被拦"}
 
     # 3. 提交：只点发送键，不按 Enter
-    send = s.find("ds_send_on", threshold=0.85)
-    if send is None:
-        return {"ok": False, "stage": "send_not_available", "elapsed": round(time.time() - t0, 1),
-                "hint": "发送键不可用：可能没写进输入框，或该端发送键是灰态（另存一张 ds_send_on 的可用态图）"}
     s.click(send)
+    t_sent = time.time()
 
-    # 4. 等生成结束
+    # 4. 等生成结束（停止键出现 → 消失）。没有 ds_stop 就退回"等复制键"。
+    generating_seen = False
     if lib.has("ds_stop"):
-        if s.wait("ds_stop", timeout=12.0, appear=True) is None:
-            return {"ok": False, "stage": "no_generating_signal", "elapsed": round(time.time() - t0, 1),
-                    "hint": "点了发送但没看到生成中的停止键：可能没发出去"}
-        if s.wait("ds_stop", timeout=timeout, appear=False) is None:
-            return {"ok": False, "stage": "timeout", "elapsed": round(time.time() - t0, 1)}
+        generating_seen = s.wait_present("ds_stop", timeout=12.0)
+        if not generating_seen:
+            time.sleep(1.5)  # 极短回答可能没赶上停止键，继续往下走
+        elif not s.wait_gone("ds_stop", timeout=timeout):
+            return {"ok": False, "stage": "timeout", "elapsed": round(time.time() - t0, 1),
+                    "hint": "停止键一直没消失，生成超时"}
 
-    # 5. 复制回答（取最靠下的那个复制键：回答在提问下面）
+    # 5. 复制回答（取最靠下的复制键：提问在上、回答在下）
     hits, how = [], "none"
     deadline = time.time() + timeout
     while time.time() < deadline:
         hits, how = _hover_hunt_copy(s)
-        if hits:
+        if hits and (generating_seen or time.time() - t_sent > 2.0):
             break
         time.sleep(1.0)
     if not hits:
@@ -148,6 +177,11 @@ def ask(prompt: str, *, mode: str = "new", timeout: float = 180.0) -> dict:
         return {"ok": False, "stage": "copy_failed", "elapsed": round(time.time() - t0, 1),
                 "copies": len(hits), "how": how,
                 "hint": "点了复制键但剪贴板没变：可能点到了别的按钮，或该键需要更长响应"}
+    if reply.strip() == prompt.strip():
+        # 拿到的和提问一模一样，说明点的是提问上的复制键
+        return {"ok": False, "stage": "copied_prompt", "elapsed": round(time.time() - t0, 1),
+                "copies": len(hits), "how": how, "reply": reply,
+                "hint": "复制到的是提问本身：回答还没出现就点了，或选了上面那个复制键"}
 
     return {
         "ok": True,
@@ -161,6 +195,7 @@ def ask(prompt: str, *, mode: str = "new", timeout: float = 180.0) -> dict:
         "at": [target.center[0], target.center[1]],
         "mode": mode,
         "prompt_len": len(prompt),
+        "generating_seen": generating_seen,
     }
 
 

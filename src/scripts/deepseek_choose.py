@@ -7,12 +7,12 @@ DeepSeek 没有模型选择器，只有「深度思考」「智能搜索」两�
     python deepseek_choose.py --think on
     python deepseek_choose.py --think off --search on
 
-需要资源库里有 4 张图：
-    ds_think_on / ds_think_off / ds_search_on / ds_search_off
-截法：python tools/snip.py --save ds_think_on --region x,y,w,h
+判断开关状态**不能靠模板分数**：归一化相关对亮度不敏感，
+开/关两态在同一位置都能拿到 0.96 以上。实测可靠的是颜色——
+关：浅蓝描边，B-R≈37；开：白底黑字，B-R≈0.6。
+所以模板只用来定位胶囊，开关状态看 B-R。
 
-判断"开/关"靠图：两张状态图分别匹配，谁的分高算谁；分差太小就报 unknown，
-不硬猜（v0.0.8 的教训是"看起来对、结果全错"）。
+读状态前必须先把鼠标移开：悬停会把胶囊变成灰底，读出来像"开"。
 """
 
 from __future__ import annotations
@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import time
 
 _SRC = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _SRC not in sys.path:
@@ -27,44 +28,53 @@ if _SRC not in sys.path:
 
 from qi import Library, Screen  # noqa: E402
 
-REQUIRED = ["ds_think_on", "ds_think_off", "ds_search_on", "ds_search_off"]
-TOGGLES = {"think": ("ds_think_on", "ds_think_off"), "search": ("ds_search_on", "ds_search_off")}
-MARGIN = 0.03  # 两张图分数差小于这个就判 unknown
+# 每个开关一张定位图（截"关"的样子即可，两态都能定位到）
+TEMPLATES = {"think": "ds_think", "search": "ds_search"}
+REQUIRED = list(TEMPLATES.values())
+OFF_MIN = 25.0   # B-R 大于这个值算"关"（浅蓝描边）
+ON_MAX = 15.0    # 小于这个值算"开"（白底黑字）
 
 
-def read_state(s: Screen, kind: str) -> dict:
-    on_name, off_name = TOGGLES[kind]
-    a = s.find(on_name)
-    b = s.find(off_name)
-    s_on = a.score if a else 0.0
-    s_off = b.score if b else 0.0
-    if abs(s_on - s_off) < MARGIN:
-        return {"state": "unknown", "score_on": round(s_on, 3), "score_off": round(s_off, 3)}
-    state = "on" if s_on > s_off else "off"
-    return {"state": state, "score_on": round(s_on, 3), "score_off": round(s_off, 3),
-            "hit": a if state == "on" else b}
+def _read(s: Screen, kind: str) -> dict:
+    m = s.find(TEMPLATES[kind])
+    if m is None:
+        return {"state": "missing", "blue": None, "hit": None}
+    # 把鼠标移开再量，否则悬停态会被读成"开"
+    s.move_to(m.center[0], max(0, m.center[1] - 400))
+    time.sleep(0.35)
+    b, _g, r = s.region_mean(m)
+    blue = round(b - r, 1)
+    state = "off" if blue > OFF_MIN else ("on" if blue < ON_MAX else "unknown")
+    return {"state": state, "blue": blue, "hit": m}
+
+
+def list_state(s: Screen) -> dict:
+    out = {}
+    for kind in TEMPLATES:
+        d = _read(s, kind)
+        d.pop("hit", None)
+        out[kind] = d
+    return out
 
 
 def set_state(s: Screen, kind: str, want: str) -> dict:
-    cur = read_state(s, kind)
+    cur = _read(s, kind)
     before = cur["state"]
-    if before == "unknown":
-        return {"ok": False, "kind": kind, "stage": "unreadable", "before": before,
-                "hint": "两张状态图分数太接近，或都没找到；先确认资源库里的图是当前主题下截的"}
+    if before in ("missing", "unknown"):
+        return {"ok": False, "kind": kind, "stage": before, "before": before, "blue": cur["blue"],
+                "hint": "定位图没找到，或 B-R 落在 15~25 之间；确认页面是浅色主题、开关没被悬停"}
     if before == want:
-        return {"ok": True, "kind": kind, "stage": "already", "before": before, "after": before}
-    hit = cur.get("hit")
-    if hit is None:
-        return {"ok": False, "kind": kind, "stage": "no_target", "before": before}
-    s.click(hit)
-    s.wait(TOGGLES[kind][0] if want == "on" else TOGGLES[kind][1], timeout=3.0)
-    after = read_state(s, kind)["state"]
+        return {"ok": True, "kind": kind, "stage": "already", "before": before, "after": before,
+                "blue": cur["blue"]}
+    s.click(cur["hit"])
+    time.sleep(0.9)
+    after = _read(s, kind)["state"]
     return {"ok": after == want, "kind": kind, "stage": "done" if after == want else "unverified",
             "before": before, "after": after}
 
 
 def _parse(argv: list[str]) -> dict:
-    o = {"list": False, "think": None, "search": None, "bad": []}
+    o = {"list": False, "think": None, "search": None, "bad": [], "help": False}
     i = 0
     while i < len(argv):
         a = argv[i]
@@ -117,7 +127,7 @@ def main() -> int:
 
     s = Screen()
     if o["list"]:
-        print(json.dumps({k: read_state(s, k) for k in ("think", "search")}, ensure_ascii=False))
+        print(json.dumps(list_state(s), ensure_ascii=False))
         return 0
 
     todo = {k: v for k, v in (("think", o["think"]), ("search", o["search"])) if v}

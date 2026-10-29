@@ -69,6 +69,21 @@ def _init() -> str:
     user32.GetDC.argtypes = [wintypes.HWND]
     user32.GetDC.restype = wintypes.HDC
     user32.ReleaseDC.argtypes = [wintypes.HWND, wintypes.HDC]
+
+    # 剪贴板：句柄是 64 位，不声明 argtypes 会被截断成 0 并 access violation
+    kernel32.GlobalAlloc.argtypes = [wintypes.UINT, ctypes.c_size_t]
+    kernel32.GlobalAlloc.restype = ctypes.c_void_p
+    kernel32.GlobalLock.argtypes = [ctypes.c_void_p]
+    kernel32.GlobalLock.restype = ctypes.c_void_p
+    kernel32.GlobalUnlock.argtypes = [ctypes.c_void_p]
+    kernel32.GlobalUnlock.restype = wintypes.BOOL
+    user32.OpenClipboard.argtypes = [wintypes.HWND]
+    user32.OpenClipboard.restype = wintypes.BOOL
+    user32.EmptyClipboard.restype = wintypes.BOOL
+    user32.GetClipboardData.argtypes = [wintypes.UINT]
+    user32.GetClipboardData.restype = ctypes.c_void_p
+    user32.SetClipboardData.argtypes = [wintypes.UINT, ctypes.c_void_p]
+    user32.SetClipboardData.restype = ctypes.c_void_p
     return level
 
 
@@ -192,6 +207,16 @@ class Screen:
             print(f"  没找到 {name}（最高 {best.score:.3f} / 阈值 {th}）" if best else f"  没找到 {name}（图比屏幕大）")
         return None
 
+    def region_mean(self, m: Match) -> tuple[float, float, float]:
+        """命中框内的平均 BGR。
+
+        模板匹配用的是归一化相关，对整体亮度/对比度不敏感：
+        同一个按钮"深蓝可点"和"浅蓝不可点"会给出同样的 1.000。
+        所以状态判断必须靠颜色，不能靠分数。
+        """
+        img = self.grab((m.x, m.y, m.w, m.h))
+        return (float(img[:, :, 0].mean()), float(img[:, :, 1].mean()), float(img[:, :, 2].mean()))
+
     def find_all(self, name: str, *, threshold: float | None = None, limit: int = 10) -> list[Match]:
         th = self.threshold if threshold is None else threshold
         hay = cv2.cvtColor(self.grab(), cv2.COLOR_BGR2GRAY)
@@ -221,6 +246,26 @@ class Screen:
         if self.verbose:
             print(f"  等待 {name} {'出现' if appear else '消失'} 超时 {timeout}s")
         return None
+
+    def wait_present(self, name: str, *, timeout: float = 15.0, interval: float = 0.4,
+                     threshold: float | None = None) -> bool:
+        """等这张图出现。返回 True/False，不返回 Match（避免和"超时"混淆）。"""
+        end = time.time() + timeout
+        while time.time() < end:
+            if self.find(name, threshold=threshold) is not None:
+                return True
+            time.sleep(interval)
+        return False
+
+    def wait_gone(self, name: str, *, timeout: float = 60.0, interval: float = 0.4,
+                  threshold: float | None = None) -> bool:
+        """等这张图消失。返回 True 表示确实消失了。"""
+        end = time.time() + timeout
+        while time.time() < end:
+            if self.find(name, threshold=threshold) is None:
+                return True
+            time.sleep(interval)
+        return False
 
     # ---------------------------------------------------------------- 动作
     def move_to(self, x: int, y: int) -> None:
