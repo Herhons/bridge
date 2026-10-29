@@ -29,6 +29,25 @@ if _SRC not in sys.path:
     sys.path.insert(0, _SRC)
 
 from qi import Library, Screen  # noqa: E402
+from qi.choose import Chooser, choose_writer, read_writer  # noqa: E402
+from qi.flow import Site, _open_new_chat  # noqa: E402
+
+# 模式按钮只在新对话页出现，所以动 writer 之前先确保在新对话页
+_NEWCHAT = Site(name="chatgpt", title_hint="Google Chrome", composer="gpt_composer",
+                send="gpt_send_on", actions="gpt_actions", copy="gpt_copy",
+                composer_offset=(240, -5),
+                newchat=("gpt_newchat", "gpt_newchat_icon"), sidebar="gpt_sidebar",
+                send_mode="exists")
+
+# 写入器模式：聊天的整组按钮模板 + 左右两格
+WRITER = Chooser(
+    name="chatgpt",
+    anchor="gpt_composer",
+    open_offset=(0, 0),
+    prefix="gpt_",
+    writer_tabs=("gpt_writer_tabs_chat", "gpt_writer_tabs_work"),
+    writers={"chat": 0, "work": 1},
+)
 
 EFFORTS = {
     "instant": {"chip": "gpt_chip_low", "frac": 0.22, "desc": "即时（最低）"},
@@ -111,7 +130,7 @@ def set_effort(s: Screen, key: str) -> dict:
 def main() -> int:
     name = os.path.basename(__file__)
     args = sys.argv[1:]
-    want, tab, bad = None, None, []
+    want, tab, bad, writer = None, None, [], None
     do_list = "--list" in args or "-l" in args
     if "--effort" in args:
         i = args.index("--effort")
@@ -119,6 +138,12 @@ def main() -> int:
             want = args[i + 1].strip().lower()
         else:
             bad.append("--effort 缺值")
+    if "--writer" in args:
+        i = args.index("--writer")
+        if i + 1 < len(args):
+            writer = args[i + 1].strip().lower()
+        else:
+            bad.append("--writer 缺值")
     if "--tab" in args:
         i = args.index("--tab")
         if i + 1 < len(args):
@@ -132,10 +157,11 @@ def main() -> int:
     if bad:
         print("参数有问题：", bad)
         return 2
-    if not do_list and want is None:
+    if not do_list and want is None and writer is None:
         print("用法：")
         print(f"  python {name} --list [--tab N]")
         print(f"  python {name} --effort instant|mid|high [--tab N]")
+        print(f"  python {name} --writer chat|work [--effort X]   # 换模式会换掉强度档位")
         for k, v in EFFORTS.items():
             print(f"    {k:8} {v['desc']}")
         print("  说明：本端只支持强度；模型选择（弹层里「中 ›」那层子菜单）还没做")
@@ -145,7 +171,7 @@ def main() -> int:
         return 2
 
     lib = Library()
-    need = [cfg["chip"] for cfg in EFFORTS.values()]
+    need = [cfg["chip"] for cfg in EFFORTS.values()] + ["gpt_writer_tabs_chat", "gpt_writer_tabs_work"]
     print(lib.report(need))
     if lib.missing(need):
         return 3
@@ -158,12 +184,28 @@ def main() -> int:
         s.hotkey("ctrl", str(tab))
         time.sleep(1.2)
 
+    if writer is not None or do_list:
+        # 先回到新对话页，否则模式按钮根本不在页面上
+        _open_new_chat(s, _NEWCHAT)
+        time.sleep(1.0)
+
     if do_list:
-        print(json.dumps(read_current(s), ensure_ascii=False))
+        out = dict(read_current(s))
+        out.update(read_writer(s, WRITER))
+        print(json.dumps(out, ensure_ascii=False))
         return 0
-    r = set_effort(s, want)
-    print(json.dumps(r, ensure_ascii=False))
-    return 0 if r.get("ok") else 1
+
+    rc = 0
+    if writer is not None:
+        w = choose_writer(s, WRITER, writer)
+        print(json.dumps(w, ensure_ascii=False))
+        if not w.get("ok"):
+            rc = 1
+    if want is not None:
+        r = set_effort(s, want)
+        print(json.dumps(r, ensure_ascii=False))
+        rc = 0 if r.get("ok") else 1
+    return rc
 
 
 if __name__ == "__main__":

@@ -38,10 +38,14 @@ CFG = Chooser(
         "argon": "4 Argon（复杂任务）",
     },
     has_chip=("flash_lite", "flash", "pro", "argon"),
+    writer_tabs=("gem_writer_tabs_dialog", "gem_writer_tabs_task"),
+    writers={"dialog": 0, "task": 1},
     open_by_chip=True,
 )
 
-REQUIRED = [f"gem_item_{k}" for k in CFG.options] + [f"gem_chip_{k}" for k in CFG.options]
+REQUIRED = ([f"gem_item_{k}" for k in CFG.options]
+            + [f"gem_chip_{k}" for k in CFG.options]
+            + list(CFG.writer_tabs))
 
 
 def main() -> int:
