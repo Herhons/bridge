@@ -84,6 +84,18 @@ def _init() -> str:
     user32.GetClipboardData.restype = ctypes.c_void_p
     user32.SetClipboardData.argtypes = [wintypes.UINT, ctypes.c_void_p]
     user32.SetClipboardData.restype = ctypes.c_void_p
+
+    # 提前台用到的窗口 API
+    user32.GetForegroundWindow.restype = wintypes.HWND
+    user32.SetForegroundWindow.argtypes = [wintypes.HWND]
+    user32.BringWindowToTop.argtypes = [wintypes.HWND]
+    user32.AttachThreadInput.argtypes = [wintypes.DWORD, wintypes.DWORD, wintypes.BOOL]
+    user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.c_void_p]
+    user32.GetWindowThreadProcessId.restype = wintypes.DWORD
+    user32.IsWindowVisible.argtypes = [wintypes.HWND]
+    user32.GetWindowTextLengthW.argtypes = [wintypes.HWND]
+    user32.GetWindowTextW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+    kernel32.GetCurrentThreadId.restype = wintypes.DWORD
     return level
 
 
@@ -145,6 +157,48 @@ class Screen:
         """虚拟桌面 (x, y, w, h)，含所有显示器。"""
         return (user32.GetSystemMetrics(SM_XVIRTUALSCREEN), user32.GetSystemMetrics(SM_YVIRTUALSCREEN),
                 user32.GetSystemMetrics(SM_CXVIRTUALSCREEN), user32.GetSystemMetrics(SM_CYVIRTUALSCREEN))
+
+    def bring_to_front(self, title_hint: str) -> bool:
+        """把标题含 title_hint 的已有窗口提到前台。
+
+        截图只能看到屏幕上露出来的东西，被别的窗口压住就找不到任何图。
+        这里只"提到前台"，不新建、不移动、不改大小。
+        """
+        found = []
+
+        @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+        def _cb(hwnd, _):
+            if not user32.IsWindowVisible(hwnd):
+                return True
+            n = user32.GetWindowTextLengthW(hwnd)
+            if n <= 0:
+                return True
+            buf = ctypes.create_unicode_buffer(n + 1)
+            user32.GetWindowTextW(hwnd, buf, n + 1)
+            if title_hint.lower() in buf.value.lower():
+                found.append(int(hwnd))
+            return True
+
+        user32.EnumWindows(_cb, 0)
+        if not found:
+            return False
+        hwnd = found[0]
+        if user32.GetForegroundWindow() == hwnd:
+            return True
+        fg = user32.GetForegroundWindow()
+        tid_cur = kernel32.GetCurrentThreadId()
+        tid_fg = user32.GetWindowThreadProcessId(fg, None) if fg else 0
+        attached = False
+        if tid_fg and tid_fg != tid_cur:
+            attached = bool(user32.AttachThreadInput(tid_cur, tid_fg, True))
+        try:
+            user32.SetForegroundWindow(hwnd)
+            user32.BringWindowToTop(hwnd)
+        finally:
+            if attached:
+                user32.AttachThreadInput(tid_cur, tid_fg, False)
+        time.sleep(0.25)
+        return user32.GetForegroundWindow() == hwnd
 
     def template(self, name: str) -> np.ndarray:
         if name in self._tpl:

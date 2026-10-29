@@ -78,6 +78,48 @@ def _send_enabled(s: Screen, m) -> bool:
     return (b - r) > 100
 
 
+def _is_action_row(s: Screen, m) -> bool:
+    """判断这个复制键是不是回答动作条里的那一个。
+
+    依据：回答动作条右边还有 重新生成/点赞/点踩/朗读/分享，一排五六个；
+    提问气泡上的复制键是孤立的。所以"右侧还有没有同伴图标"能直接分开两者的结构。
+    """
+    import cv2
+    import numpy as np
+
+    x0, y0 = m.x + m.w + 4, m.y - 3
+    strip = s.grab((x0, y0, 190, m.h + 6))
+    if strip.size == 0:
+        return False
+    g = cv2.cvtColor(strip, cv2.COLOR_BGR2GRAY)
+    mask = (g < 210).astype(np.uint8)
+    n, _lab, st, _c = cv2.connectedComponentsWithStats(mask, 8)
+    peers = 0
+    for i in range(1, n):
+        _x, _y, w, h, area = st[i]
+        if 6 <= w <= 26 and 6 <= h <= 26 and 30 <= area <= 400:
+            peers += 1
+    return peers >= 2
+
+
+def _pick_answer_copy(hits: list, s: Screen) -> tuple[object, dict]:
+    """从所有复制键里挑回答那一个。
+
+    两道判据叠加：
+    1. 结构：右侧有同伴图标的才算动作条（提问上的那个是孤立的）。
+    2. 兜底：都没有同伴时退回"最左 + 最下"——提问靠右、回答靠左。
+    """
+    rows = [h for h in hits if _is_action_row(s, h)]
+    if rows:
+        target = max(rows, key=lambda m: m.y)
+        return target, {"rule": "action_row", "candidates": len(rows), "total": len(hits)}
+
+    left = min(h.x for h in hits)
+    lefts = [h for h in hits if h.x <= left + 40]
+    target = max(lefts, key=lambda m: m.y)
+    return target, {"rule": "leftmost", "leftmost_x": left, "left_count": len(lefts), "total": len(hits)}
+
+
 def _hover_hunt_copy(s: Screen) -> tuple[list, str]:
     """找回答的复制键。它常常只在鼠标悬停时才出现，所以分几档高度扫一下。"""
     hits = s.find_all("ds_copy")
@@ -105,6 +147,11 @@ def ask(prompt: str, *, mode: str = "new", timeout: float = 180.0) -> dict:
                 "hint": "缺 ds_newchat；想发在当前会话就用 --continue"}
 
     s = Screen()
+    # 截图看不到被遮挡的部分，先把 DeepSeek 窗口提到前台（只提前台，不新建不移动）
+    front = s.bring_to_front("DeepSeek")
+    if not front:
+        return {"ok": False, "stage": "page_not_front", "elapsed": round(time.time() - t0, 1),
+                "hint": "没找到标题含 DeepSeek 的窗口；先把页面打开"}
 
     # 1. 新对话
     if mode == "new":
@@ -151,7 +198,7 @@ def ask(prompt: str, *, mode: str = "new", timeout: float = 180.0) -> dict:
             return {"ok": False, "stage": "timeout", "elapsed": round(time.time() - t0, 1),
                     "hint": "停止键一直没消失，生成超时"}
 
-    # 5. 复制回答（取最靠下的复制键：提问在上、回答在下）
+    # 5. 复制回答
     hits, how = [], "none"
     deadline = time.time() + timeout
     while time.time() < deadline:
@@ -162,26 +209,35 @@ def ask(prompt: str, *, mode: str = "new", timeout: float = 180.0) -> dict:
     if not hits:
         return {"ok": False, "stage": "copy_not_found", "elapsed": round(time.time() - t0, 1),
                 "hint": "没找到回答的复制键：确认 ds_copy.png 是回答动作条里那一个，而不是提问上的"}
-    target = max(hits, key=lambda m: m.y)
 
+    target, pick = _pick_answer_copy(hits, s)
+    # 候选顺序：按左右挑出来的那个优先，其余按 y 从下往上兜底
+    ordered = [target] + [h for h in sorted(hits, key=lambda m: m.y, reverse=True) if h is not target]
+
+    reply, tried = "", []
     sentinel = f"__QI_EMPTY_{int(time.time() * 1000)}__"
-    s.set_clipboard(sentinel)
-    s.click(target)
-    reply = ""
-    for _ in range(20):
-        time.sleep(0.2)
-        reply = s.clipboard()
-        if reply and reply != sentinel:
+    for cand in ordered[:3]:
+        s.set_clipboard(sentinel)
+        s.click(cand)
+        got = ""
+        for _ in range(20):
+            time.sleep(0.2)
+            got = s.clipboard()
+            if got and got != sentinel:
+                break
+        tried.append({"x": cand.x, "y": cand.y, "chars": len(got) if got != sentinel else 0})
+        if got and got != sentinel and got.strip() != prompt.strip():
+            reply, target = got, cand
             break
-    if not reply or reply == sentinel:
-        return {"ok": False, "stage": "copy_failed", "elapsed": round(time.time() - t0, 1),
-                "copies": len(hits), "how": how,
-                "hint": "点了复制键但剪贴板没变：可能点到了别的按钮，或该键需要更长响应"}
-    if reply.strip() == prompt.strip():
-        # 拿到的和提问一模一样，说明点的是提问上的复制键
-        return {"ok": False, "stage": "copied_prompt", "elapsed": round(time.time() - t0, 1),
-                "copies": len(hits), "how": how, "reply": reply,
-                "hint": "复制到的是提问本身：回答还没出现就点了，或选了上面那个复制键"}
+
+    if not reply:
+        # 三种可能：剪贴板没变、只拿到提问本身
+        copied_prompt = any(t["chars"] > 0 for t in tried)
+        return {"ok": False,
+                "stage": "copied_prompt" if copied_prompt else "copy_failed",
+                "elapsed": round(time.time() - t0, 1),
+                "copies": len(hits), "how": how, "pick": pick, "tried": tried,
+                "hint": "所有候选复制键拿到的都是提问内容或空。回答的动作条可能还没渲染，或被顶出视口"}
 
     return {
         "ok": True,
@@ -190,7 +246,8 @@ def ask(prompt: str, *, mode: str = "new", timeout: float = 180.0) -> dict:
         "elapsed": round(time.time() - t0, 1),
         "basis": "copied",
         "copies": len(hits),
-        "hover": how,
+        "how": how,
+        "pick": pick,
         "score": round(target.score, 3),
         "at": [target.center[0], target.center[1]],
         "mode": mode,
