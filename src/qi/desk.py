@@ -154,23 +154,38 @@ def ensure_app(name: str, *, wait: float = 25.0, verbose: bool = True) -> int | 
     return None
 
 
-def activate(hwnd: int, *, topmost_flash: bool = True) -> None:
-    """把窗口提到前台。
+def activate(hwnd: int, *, tries: int = 3) -> bool:
+    """把窗口提到前台，返回是否成功。
 
-    先用 SetForegroundWindow；被系统拒绝时（前台锁），用一次 topmost 闪一下
-    再取消，这是不需要 UIA / AttachThreadInput 的常见做法。
+    SetForegroundWindow 经常被系统拒绝（前台锁：只有「当前前台进程」或
+    「刚收到用户输入的进程」才能改前台）。实测复用时 100% 失败——
+    窗口明明活着，但前台一直是 WorkBuddy，之后每一次点击都会被
+    _assert_foreground 拦掉。
+
+    三个办法按顺序试：
+      1. 直接 SetForegroundWindow；
+      2. 轻敲一下 Alt 再 SetForegroundWindow —— Alt 会解除前台锁，
+         这是不依赖 AttachThreadInput 的常用做法；
+      3. topmost 闪一下（HWND_TOPMOST 再 HWND_NOTOPMOST）。
     """
-    if user32.GetForegroundWindow() == int(hwnd):
-        return
-    user32.SetForegroundWindow(int(hwnd))
-    time.sleep(0.3)
-    if user32.GetForegroundWindow() == int(hwnd):
-        return
-    if topmost_flash:
-        user32.SetWindowPos(int(hwnd), -1, 0, 0, 0, 0, 0x0001 | 0x0002)
+    for i in range(tries):
+        if user32.GetForegroundWindow() == int(hwnd):
+            return True
+        user32.SetForegroundWindow(int(hwnd))
         time.sleep(0.25)
-        user32.SetWindowPos(int(hwnd), -2, 0, 0, 0, 0, 0x0001 | 0x0002)
-        time.sleep(0.25)
+        if user32.GetForegroundWindow() == int(hwnd):
+            return True
+        if i == 0:
+            # 轻敲 Alt 解除前台锁
+            user32.keybd_event(0x12, 0, 0, 0)
+            user32.keybd_event(0x12, 0, 2, 0)
+            time.sleep(0.05)
+        elif i == 1:
+            user32.SetWindowPos(int(hwnd), -1, 0, 0, 0, 0, 0x0001 | 0x0002)
+            time.sleep(0.2)
+            user32.SetWindowPos(int(hwnd), -2, 0, 0, 0, 0, 0x0001 | 0x0002)
+            time.sleep(0.2)
+    return user32.GetForegroundWindow() == int(hwnd)
 
 
 def place(hwnd: int, pos: tuple[int, int], size: tuple[int, int]) -> None:

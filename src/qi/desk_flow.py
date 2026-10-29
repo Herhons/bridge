@@ -152,10 +152,14 @@ def open_bind(name: str, *, position=(-1440, -560), size=(1380, 1340),
         return None
     desk.place(hwnd, position, size)
     time.sleep(0.6)
-    desk.activate(hwnd)
-    time.sleep(1.2)
+    if not desk.activate(hwnd):
+        if verbose:
+            print("  警告：没能把窗口提到前台，后续点击会被前台检查拦掉")
+    time.sleep(1.0)
     s = Screen(verbose=verbose)
     s.bind(hwnd)
+    # bind 之后把 target_hwnd 显式设上，_assert_foreground 才会拿它比
+    s.target_hwnd = hwnd
     return s
 
 
