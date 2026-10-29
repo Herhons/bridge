@@ -7,19 +7,33 @@
     python codex_use.py --list                          读当前模型和强度
     python codex_use.py --model gpt6_sol                只切模型
     python codex_use.py --effort high                   只调强度
-    python codex_use.py --model gpt6_sol --effort max   两个都调
-    python codex_use.py --model gpt6_sol --effort max "问题"
+    python codex_use.py --model gpt6_sol --effort ultra 两个都调
+    python codex_use.py --model gpt6_sol --effort ultra "问题"
     python codex_use.py --probe                         只报每个模板命中在哪，不点击
+
+强度六档（2026-10-29 逐档实测，滑杆上那 5 个小灰点就是其余 5 档）：
+    light / medium / high / xhigh(Extra High) / max / ultra
+    low、mid 是 light、medium 的旧别名。
+
+模型（列表一屏只能露 7 项，最后两项露不出来）：
+    default / gpt61_sol / gpt6_astra / gpt61_terra / gpt6_sol / gpt6_luna
 
 ## 控件怎么定位（这里的方法决定了它有多耐改版）
 
-**每个控件都有自己的模板图，运行时在窗口里找出来，用命中的位置去点。**
+**能裁模板的控件一律裁模板，运行时在窗口里找出来、点命中的位置。**
 没有任何「发送键左边 N 像素是芯片」这种推算。
 
-    cdx_send    橙圆+白三角的发送键
-    cdx_arrow   芯片右端的 ⌄ 箭头  ← 芯片文字随模型变，箭头不变，所以裁箭头
-    cdx_corner  输入框左上角的圆角边框
-    cdx_mic     麦克风（判断发送键是不是变成了麦克风）
+    cdx_send          橙圆+白三角的发送键
+    cdx_mic           麦克风（同时当芯片的右锚点）
+    cdx_plus          输入框左下角的 + 按钮
+    cdx_composer      「+ 及上方空白」，命中中心就是输入框内的落点
+    cdx_select_effort 卡片开着时芯片上的占位文字「Select effort」
+    cdx_select_model  卡片开着时芯片上的「Select model」（Default 自动模式）
+    cdx_r_light ...   卡片顶部那六个档位词，用来**读**当前档位
+
+芯片（`GPT-6 Astra Light ⌄`）关着时是**一串纯文字、没有胶囊底色**，文字随模型
+和档位变，裁不出固定模板。它的定位办法见 chip_point()：以麦克风为右锚点，
+取它左边条带里最靠右的一小撮深色像素——那就是 ⌄，也就是芯片按钮本身。
 
 窗口位置变了没事（每次摆到 --pos）；窗口尺寸变了也能用——模板匹配找的是图形，
 不是坐标。唯一要求是 UI 的**缩放比例**没变（系统 DPI 缩放、浏览器缩放会改变像素大小，
@@ -28,21 +42,38 @@
 
 ## 界面结构（2026-10-29 实测，窗口 1380x1340）
 
-输入框在底部，右下角：`GPT-6 Astra Ultra ∨`  麦克风  ●（橙色发送键）
-点芯片弹出强度层：
+输入框在底部，右下角：`GPT-6 Astra Ultra ⌄`  麦克风  ●（橙色发送键）
+**点一下芯片**弹出卡片（不用快捷键：Ctrl+Shift+M 只在输入框有焦点时才生效，
+焦点不在那儿就毫无反应，而且失败时看不出是没按对还是没打开）。
 
+卡片有两种形态，**用芯片上的字区分**：
+
+  形态 A：选的是**具体模型**，芯片写「Select effort」
     ┌─────────────────────────┐
-    │ ⚡        Ultra        ↻ │   ← 强度档位字
+    │ ⚡        Ultra        ↻ │   ← 大号档位词（橙色），就是读数依据
     │        GPT-6 Astra ›    │   ← 点这一行进模型列表
-    │  ●━━━━━━━━━━━━━━━━━━    │   ← 紫色滑杆
+    │  ●━━━━━━━━━━━━━━━━━━    │   ← 独立强度滑杆（颜色随档位变，橙/紫都有）
     └─────────────────────────┘
+
+  形态 B：选的是 **Default（自动）**，芯片写「Select model」
+    ┌─────────────────────────┐
+    │ ⚡   GPT-6 Astra Medium ›│   ← 模型和档位合成一行
+    │  ●━━━━━━━━━━━━━━━━━━    │   ← **不是**强度滑杆，是「模型+强度」预设条
+    └─────────────────────────┘
+    这条预设条左右键是在组合之间换（Luna High → Sol Light → …），
+    所以 Default 模式下**没有独立强度可调**，--effort 会明确拒绝。
+
+卡片是**模态**的：点外面任何地方就收起。所以每次操作只开一次，
+读完/改完再 Esc，绝不反复开关。
 
 ## 已知限制
 
 1. 模型列表有固定最大高度，一屏最多露 7 项。最后两项（GPT-5.6 Terra / GPT-5.6 Luna）
    既露不出来、滚轮也无效（实测滚 9 格纹丝不动，窗口 1340 拉到 1900 也一样），
    会明确报 unreachable。
-2. 取回答还没接上：codex 的复制按钮要 hover 才出现，模板还没裁。
+2. Default（自动）模型下调不了强度：那种卡片里没有独立滑杆（见上）。先用 --model
+   选一个具体模型。
+3. 取回答还没接上：codex 的复制按钮要 hover 才出现，模板还没裁。
    现在 `"问题"` 会发出去、等生成结束，但取回会返回 need_copy_template。
 """
 
@@ -75,12 +106,20 @@ WIN_POS = (-1440, -560)
 #
 # 现在每个控件都有自己的模板，运行时在窗口里找它：
 SEND_TPL = "cdx_send"          # 橙圆+白三角，右下角发送键
+# **同一个橙圆按钮有两种图标**：输入框有内容时是白色三角（发送），
+# 空的时候是白色声波竖条（语音输入）。实测声波那一版在 cdx_send 模板上
+# 能匹到 0.947 —— 用 TPL_THR=0.90 会把它当成发送键，点下去就**开始录音**。
+# 所以"真的要按发送"这一步必须用 0.97 这个更严的阈值（真三角实测 1.000）。
+SEND_THR = 0.97
 
-# 强度弹层用**快捷键**打开，不点芯片。
-# 芯片上的箭头不能当锚点：箭头紧跟在模型名后面，模型名一变长变短它就跟着移
-# （实测 Light->High 移了 47px），而且芯片有时带胶囊底色、有时不带，箭头模板
-# 换一次档就匹不上（1.000 -> 0.74）。芯片 tooltip 里写着这个快捷键。
-CHIP_HOTKEY = ("ctrl", "shift", "m")
+# 强度弹层**直接点芯片**打开，不用快捷键。
+# （Ctrl+Shift+M 只在输入框有焦点时才生效，焦点在别处就毫无反应，而且失败时
+#  看不出来到底是没按对还是弹层没开。点击没有这个歧义。）
+#
+# 芯片关着的时候是「模型名 档位 ⌄」一串**纯文字、没有胶囊底色**，文字随模型和
+# 档位变，裁不出固定模板；而 ⌄ 只有 6x4 像素，单独当模板又太弱。
+# 所以用**几何 + 右锚点**定位（见 chip_point）：芯片永远紧贴在麦克风左边，
+# ⌄ 是这串文字里最后一个字形，跟麦克风之间有一小段留白。
 PLUS_TPL = "cdx_plus"          # 输入框左下角 + 按钮
 # 输入框的落点模板：**加号 + 它上方 26px 空白**（30x56）。
 # 为什么不单独用加号再往上挪 45px：那就是偏移。把"加号 + 上方空白"整块裁下来之后，
@@ -92,10 +131,19 @@ COMPOSER_TPL = "cdx_composer"  # 加号+上方空白，命中中心 = 输入框�
 # 弹层开着时，芯片位置一定显示固定占位文字「Select effort」。
 # 这是判断"弹层开没开"唯一可靠的依据：
 #   · 不能用滑杆：弹层关着时也会匹到页面上别的灰条，于是误判成"已经开着"，
-#     连快捷键都不按，直接读错位置（实测 --list 读到 effort=low，实际是全关状态）；
+#     连芯片都不点，直接读错位置（实测 --list 读到 effort=light，实际是全关状态）；
 #   · 不能用"橙色填充"：最高档是紫色渐变，压根没有橙色。
 # 实测：弹层开着 1.000，关掉后直接 None。
 MENU_TPL = "cdx_select_effort"
+# 卡片还有第二种画法：芯片变成「Select model」。
+# **什么时候出现**：模型选的是 Default（自动）时。这时卡片里没有独立强度滑杆，
+# 只有一条「模型名 强度 ›」+ 一条**预设滑条**（左右键是在「模型+强度」的组合之间
+# 换，实测一路按右键会看到 Luna High -> Sol Light -> Sol Medium -> Astra Light ...）。
+# 选了具体模型之后卡片才变成形态 A（顶行档位词 + 模型行 + 独立强度滑杆），
+# 芯片也随之变回「Select effort」。
+# 所以：**判形态 = 判有没有独立强度滑杆**，只认 "Select effort" 会把 Default 下
+# 开着的卡片当成关着，再点一下芯片反而把它点关 —— 表现就是"点来点去弹层一闪一闪"。
+MODEL_MENU_TPL = "cdx_select_model"
 MIC_TPL = "cdx_mic"            # 麦克风（用来在发送键/麦克风互变时判断状态）
 
 TPL_THR = 0.90             # 实测：正确位置 1.000，次高分 ≤0.745，0.90 留足余量
@@ -117,20 +165,32 @@ BOTTOM_H = 150
 # 提示一下，不硬跑。
 MIN_W = 1050
 
-SLIDER_ABOVE = 57          # 入口行（「GPT-6 Astra ›」）在**轨道中心行**上方 57px
+SLIDER_ABOVE = 57          # 形态 A：模型行在**滑杆中心行**上方 57px（实测）
+ROW_ABOVE_PRESET = 40      # 形态 B：那一行在预设滑条中心行上方 40px（实测）
+# 两种形态卡片高度不同，偏移也跟着不同。这个差值是**卡片内部**的排版常量
+# （卡片贴着芯片长上去，尺寸固定），和"用窗口比例猜控件位置"是两回事。
+ROW_ABOVE = {"effort": SLIDER_ABOVE, "preset": ROW_ABOVE_PRESET}
 ITEM_GAP = 31              # 模型列表行距
 CLICK_MAX, CLICK_GAP = 14, 0.4
 
-EFFORTS = ["low", "mid", "high", "xhigh", "max"]
+EFFORTS = ["light", "medium", "high", "xhigh", "max", "ultra"]
 
-# 各档位在轨道上的相对位置（0=最左 1=最右），**实测值，不是等分**。
-# 键盘每按一次右键停下来的位置是 0 / 0.377 / 0.573 / 0.766 / 0.954，
-# 第一个间距是后面几个的两倍（第一次按会跳两档），所以等分 0/0.25/0.5/0.75/1.0
-# 会算错：mid 的目标落在两档之间，按一次就冲过去、再退又退回 low
-# （实测 --effort mid 停在 low）。
-EFFORT_FRAC = {"low": 0.000, "mid": 0.377, "high": 0.573,
-               "xhigh": 0.766, "max": 0.954}
-EFFORT_LABEL = {"low": "轻度", "mid": "中", "high": "高", "xhigh": "极高", "max": "Ultra"}
+# 各档位在轨道上的相对位置（0=最左 1=最右），**实测值，不是等分猜测**。
+# 2026-10-29 定位了六个停靠点（滑杆上那 5 个小灰点 = 除当前档外的其余 5 档）：
+#   knob 950 / 992 / 1032 / 1073 / 1114 / 1155  ->  Light / Medium / High /
+#   Extra High / Max / Ultra（档位字是橙色，Ultra 时轨道变成紫渐变）
+# 用 (knob-left)/(right-left) 换算，left=923 right=1167。
+#
+# **原来这里只有 5 档是错的**：把 Extra High 和 Max 挤成了一档，
+# 于是 --effort max 永远到不了真正的 Max（停在 Extra High），Ultra 反而被叫成 max。
+EFFORT_FRAC = {"light": 0.111, "medium": 0.283, "high": 0.447,
+               "xhigh": 0.615, "max": 0.783, "ultra": 0.951}
+EFFORT_LABEL = {"light": "Light", "medium": "Medium", "high": "High",
+                "xhigh": "Extra High", "max": "Max", "ultra": "Ultra"}
+
+# 老名字（low/mid）保留成别名，省得已经写好的调用方全改。
+EFFORT_ALIAS = {"low": "light", "mid": "medium", "med": "medium",
+                "extrahigh": "xhigh", "extra_high": "xhigh", "xhigh": "xhigh"}
 
 TEMPLATE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                             "..", "assets", "library")
@@ -603,9 +663,9 @@ def locate(d, win, *, need_composer=True):
 
     现在每个控件都有自己的图，在窗口里找出来：
         cdx_send    橙圆+白三角的发送键          底部条带内找
-        cdx_arrow   芯片右端的 ⌄ 箭头            底部条带内找（文字会变，箭头不变）
         cdx_plus    输入框左下角的 + 按钮        底部条带内找
-        cdx_mic     麦克风                      只用于判断发送键是不是变成了麦克风
+        cdx_mic     麦克风                      判断发送键是否变成麦克风，兼作芯片右锚点
+        芯片       没有固定模板，见 chip_point()：麦克风左边最靠右那一小撮深色字形
 
     **输入框本身没有模板**，因为它是纯白圆角矩形，一点纹理都没有，裁不出可匹配的图
     （试过裁左上角圆角：输入框一获得焦点，光标就出现在那里，min 从 199 掉到 26，
@@ -636,6 +696,68 @@ def locate(d, win, *, need_composer=True):
             out["composer"] = _center(m_box)
 
     return out
+
+
+def chip_point(d, win):
+    """芯片按钮的点击点（窗口内坐标），None = 没找到。
+
+    芯片关着时是 `GPT-6.1 Terra Ultra ⌄` 一串**纯文字、无胶囊底色**，
+    文字随模型/档位变，裁不出固定模板。只用两个不变的事实定位：
+      1. 右锚点：芯片永远紧贴麦克风左边（生成中麦克风变停止键，才退用发送键）；
+      2. ⌄ 是这串文字里**最后一个字形**，与麦克风之间有一段留白。
+
+    于是在「麦克风左侧 60px × 上下 12px」这条小条带里找深色列、按空白切组，
+    取**最靠右的一组**，再要求它宽度 4~14px、右边缘离麦克风 4~30px。
+    实测 ⌄ 宽 6px、离麦克风 15px；它左边最近的字形离它 10px，不会并成一组。
+
+    不做 `mic_left - 139` 这类减法：模型名换长换短，芯片整体会平移（实测 47px）。
+    """
+    img = d.grab(win)
+    if img.size == 0:
+        return None
+    g = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    band = _band(win)
+    anchor = d.find(MIC_TPL, TPL_THR, band)
+    near = 30                                   # ⌄ 离锚点左边缘的上限
+    if anchor is None:
+        anchor = d.find(SEND_TPL, TPL_THR, band)
+        near = 60                               # 退用发送键时中间还隔着麦克风
+    if anchor is None:
+        return None
+    ax = anchor[0] - win[0]                     # 锚点左边缘（窗口内）
+    ay = anchor[1] - win[1] + anchor[3] // 2
+    x0, x1 = max(0, ax - 60), max(0, ax - 4)
+    y0, y1 = max(0, ay - 12), min(g.shape[0], ay + 12)
+    if x1 - x0 < 10 or y1 - y0 < 6:
+        return None
+
+    strip = g[y0:y1, x0:x1]
+    cols = (strip < 205).sum(axis=0)
+    groups, st = [], None
+    for i, c in enumerate(cols):
+        if c > 0 and st is None:
+            st = i
+        elif c == 0 and st is not None:
+            groups.append((x0 + st, x0 + i - 1))
+            st = None
+    if st is not None:
+        groups.append((x0 + st, x0 + len(cols) - 1))
+    if not groups:
+        return None
+
+    gl, gr = groups[-1]                          # 最靠右的一组 = ⌄
+    if not (4 <= gr - gl + 1 <= 14):
+        return None
+    if not (4 <= ax - gr <= near):
+        return None
+
+    # 纵向用这一组的深色像素质心，横向用中点
+    sub = strip[:, gl - x0:gr - x0 + 1]
+    ys, xs = np.nonzero(sub < 205)
+    if len(ys) == 0:
+        return None
+    cy = y0 + int(round(ys.mean()))
+    return ((gl + gr) // 2, cy)
 
 
 def probe(d, win):
@@ -733,17 +855,23 @@ def find_slider(d, win, send=None):
                 st = None
         return best
 
-    # **必须同时满足"形状像轨道"和"行上有滑块"**。
-    # 只按形状选会选错：实测 y=1204 那组（高 27，白段宽 70）也像轨道，
-    # 而且高度比真轨道(24)还大，max(key=len) 就挑中它，然后滑块找不到、返回 None。
-    cands = []
-    for gp in pick:
-        b = _knob_of(gp)
-        if b is not None:
-            cands.append((gp, b))
+    # **必须同时满足"形状像轨道"和"行上有滑块"**，然后**取最靠下的那条**。
+    #
+    # 为什么是"最靠下"而不是"最高"/"最长"：
+    #   · 只按形状选会选错——实测 y=1204 那组（高 27、白段宽 70）也像轨道，
+    #     比真轨道(24)还高，max(key=len) 就挑中它，然后返回 None；
+    #   · 卡片里**上面的元素也会像轨道**：模型行是浅灰胶囊（宽 213、高 26），
+    #     里面的字间空白能被当成"白色滑块"，于是被误认成轨道（实测 y=1217）；
+    #   · 而滑杆永远是卡片里**最下面**的那个元素（卡片从芯片往上长）。
+    # 同时用芯片行当上界：卡片里的东西一定在芯片上方 25px 以上，
+    # 芯片自己那行（浅灰胶囊 + 文字）就不会被当成轨道。
+    chip = chip_point(d, win)
+    ceil_y = (chip[1] - 25) if chip else (h_img - 55)
+    cands = [(gp, _knob_of(gp)) for gp in pick]
+    cands = [(gp, b) for gp, b in cands if b is not None and gp[len(gp) // 2][0] <= ceil_y]
     if not cands:
         return None
-    gp, best = max(cands, key=lambda x: len(x[0]))
+    gp, best = max(cands, key=lambda x: x[0][len(x[0]) // 2][0])
     row_y, left, right = gp[len(gp) // 2]
     knob = (best[0] + best[1]) // 2
     left = min(left, best[0])
@@ -789,21 +917,30 @@ def list_band(d, win):
 def enter_list(d, win):
     """进模型列表。三种状态分别处理：
        已经在列表层   -> 直接返回
-       在强度层       -> 点「模型名 ›」那一行
-       全关           -> 先开弹层，再点那一行
+       在卡片层       -> 点「模型名 ›」那一行（两种形态行高不同，按形态取偏移）
+       全关           -> 先点芯片开卡片，再点那一行
     """
     if items_visible(d, win):
         return True
-    if not _menu_open(d, win):
-        if not _open_effort(d, win):
-            return False
-    sl = find_slider(d, win, locate(d, win).get("send"))
-    if sl is None:
+    form = _open_card(d, win)
+    if form is None:
         return False
-    left, right, row_y, _knob = sl
-    d.click(win[0] + (left + right) // 2, win[1] + row_y - SLIDER_ABOVE)
-    time.sleep(1.3)
-    return items_visible(d, win)
+    for attempt in (0, 1):
+        sl = find_slider(d, win, locate(d, win).get("send"))
+        if sl is None:
+            return False
+        left, right, row_y, _knob = sl
+        d.click(win[0] + (left + right) // 2,
+                win[1] + row_y - ROW_ABOVE.get(form, SLIDER_ABOVE))
+        time.sleep(1.3)
+        if items_visible(d, win):
+            return True
+        if attempt == 0 and _popup_state(d, win) == "closed":
+            # 点空了/卡片被关掉，重新开一次再点，最多两轮
+            form = _open_card(d, win)
+            if form is None:
+                return False
+    return False
 
 
 def read_model(d, win):
@@ -842,24 +979,22 @@ def set_model(d, win, key):
     band = list_band(d, win)
     if band is None:
         return {"ok": False, "stage": "list_band_none"}
-    chk = d.find(CHECK_TPL, 0.80, band)
-    keys = list(MODELS)
-    if chk is not None and before.get("model") in keys:
-        # 用「勾的位置 + 固定行距 31px」推算目标行。
-        # 不做整窗模板搜索：列表位置每次都变，模板分数会掉到 0.88，
-        # 而 GPT-6.1 Sol 和 GPT-6 Sol 文字极像，整窗搜会串味
-        # （实测点了 gpt6_sol 却切成了 gpt61_sol）。
-        cur_idx = keys.index(before["model"])
-        tgt_idx = keys.index(key)
-        cy = chk[1] + chk[3] // 2 + (tgt_idx - cur_idx) * ITEM_GAP
-        m = d.find(MODELS[key], MODEL_THR, band)
-        cx = (m[0] + m[2] // 2) if m else (band[0] + 60)
-        d.click(cx, cy)
-    else:
-        m = d.find(MODELS[key], MODEL_THR, band)
-        if m is None:
-            return {"ok": False, "stage": "item_not_visible", "want": key}
+    # **优先点目标模板自己的命中中心**：模板阈值 0.92 已经把
+    # "GPT-6.1 Sol / GPT-5.6 Sol" 这类近似的行筛掉了（错行的最高分只有 0.88）。
+    # 只有模板没匹上时才退回「勾的位置 + 固定行距」推算——
+    # 那条路对 **Default** 这种两行高的项是错的（行距不是 31），
+    # 实测点 Default 会落到隔壁 GPT-6.1 Sol 上。
+    m = d.find(MODELS[key], MODEL_THR, band)
+    if m is not None:
         d.click(m[0] + m[2] // 2, m[1] + m[3] // 2)
+    elif d.find(CHECK_TPL, 0.80, band) is not None and before.get("model") in MODELS:
+        chk = d.find(CHECK_TPL, 0.80, band)
+        keys = list(MODELS)
+        cy = (chk[1] + chk[3] // 2
+              + (keys.index(key) - keys.index(before["model"])) * ITEM_GAP)
+        d.click(band[0] + 60, cy)
+    else:
+        return {"ok": False, "stage": "item_not_visible", "want": key}
     # 点完模型项，弹层会收起。这时直接点芯片会被"关闭动画"吃掉
     # （实测 reverify_failed）。先点一下输入框空白：既把残余弹层关掉，
     # 又把键盘焦点还给页面，比按 Esc 稳（Esc 会吞掉下一次点击）。
@@ -872,6 +1007,10 @@ def set_model(d, win, key):
     if not enter_list(d, win):
         return {"ok": False, "stage": "reverify_failed", "before": before.get("model")}
     after = read_model(d, win)
+    # 复核完把列表收掉：留着它会挡住下一次调用（下一次进来先当"已在列表层"，
+    # 跳过开弹层，接着 set_effort 就会在这一层找不到滑杆）。
+    d.press("esc")
+    time.sleep(0.45)
     ok = after.get("model") == key
     return {"ok": ok, "before": before.get("model"), "after": after.get("model"),
             "want": key, "stage": "done" if ok else "unverified"}
@@ -879,67 +1018,150 @@ def set_model(d, win, key):
 
 # ============================================================ 调强度
 
-def _menu_open(d, win) -> bool:
-    """弹层（强度层）开着吗 = 芯片位置是不是显示「Select effort」。
+def _popup_form(d, win):
+    """卡片形态：'effort'（有独立强度滑杆）/ 'preset'（预设滑条）/ None（没开）。
 
-    阈值 0.82 而不是 0.90：实测同一段文字在不同模型/不同次渲染下会偏移几个像素，
-    分数落在 0.88（0.90 会判成"没开"，于是按快捷键又把弹层关掉，进列表必失败）。
-    弹层真关掉时这个模板直接 None（<0.5），所以 0.82 有足够余量。
+    判据是芯片上的字（实测：开着 0.936 / 1.000，关着 None / 0.489）：
+        Select effort -> 具体模型，卡片里是档位词 + 模型行 + 强度滑杆
+        Select model  -> Default（自动），卡片里是「模型 强度 ›」+ 预设滑条
     """
-    return d.find(MENU_TPL, 0.82, _band(win)) is not None
+    band = _band(win)
+    if d.find(MENU_TPL, 0.82, band) is not None:
+        return "effort"
+    if d.find(MODEL_MENU_TPL, 0.85, band) is not None:
+        return "preset"
+    return None
 
 
-def _open_effort(d, win):
-    """把强度弹层打开。**只开一次，不反复开关。**
+def _popup_state(d, win):
+    """卡片现在停在哪一层：closed / effort（强度滑杆层）/ preset（预设滑条层）/ models。
 
-    弹层是模态的：点它外面任何地方都会收起来。所以调用方拿到打开的弹层后，
-    要一口气把要读的、要改的都做完，最后才 Esc。
-
-    打开顺序：
-      1. 先直接按 Ctrl+Shift+M —— 输入框通常已经聚焦，**不产生任何点击**；
-      2. 没反应才点一次输入框再按。
-    不做"Esc 清场 + 重试"：Esc 会关掉已开的弹层、再按又开，表现就是来回闪。
+    先判 models：「列表里能同时看到 ≥2 个模型名」。
+    列表层里芯片也显示「Select ...」，只看芯片会把列表层误当成卡片层，
+    接着去 find_slider 就必然返回 None，报一句莫名其妙的 no_slider。
     """
-    if _menu_open(d, win):
+    if items_visible(d, win):
+        return "models"
+    return _popup_form(d, win) or "closed"
+
+
+def _open_card(d, win):
+    """把卡片打开，返回形态 'effort' / 'preset'，打不开返回 None。
+
+    点芯片，一次只点一下，不反复开关。弹层是模态的：点它外面任何地方都会收起，
+    所以调用方拿到打开后的形态，要一口气把要读的、要改的都做完，最后才收。
+
+    点完芯片要**确认真的开了**再返回：关闭动画没走完时点击会被吃掉
+    （刚点完模型项、卡片正在收起，这时点芯片实测无效）。
+    失败只重试一次，且第二次前先点一下输入框把残余动画和焦点都处理干净。
+    """
+    form = _popup_form(d, win)
+    if form:
+        return form
+    for attempt in (0, 1):
+        if attempt:
+            pm = locate(d, win)
+            if "composer" not in pm:
+                return None
+            d.click(*pm["composer"])
+            time.sleep(0.4)
+        p = chip_point(d, win)
+        if p is None:
+            return None
+        d.click(win[0] + p[0], win[1] + p[1])
+        time.sleep(1.3)
+        form = _popup_form(d, win)
+        if form:
+            return form
+    return None
+
+
+def _ensure_effort(d, win):
+    """保证现在停在**强度滑杆层**，返回 True/False。
+
+    三种入口状态都收敛到这里，且**不来回开关**：
+        effort -> 已经在这层，什么都不做
+        models -> 列表层，先按一次 Esc 退回去（退不回去就重新点开）
+        preset -> Default(自动) 模式，这里根本没有独立滑杆，返回 False
+        closed -> 点芯片打开
+    """
+    st = _popup_state(d, win)
+    if st == "effort":
         return True
-    d.hotkey(*CHIP_HOTKEY)
-    time.sleep(1.2)
-    if _menu_open(d, win):
-        return True
-    pm = locate(d, win)
-    if "composer" not in pm:
-        return False
-    d.click(*pm["composer"])
-    time.sleep(0.35)
-    d.hotkey(*CHIP_HOTKEY)
-    time.sleep(1.4)
-    return _menu_open(d, win)
+    if st == "models":
+        d.press("esc")
+        time.sleep(0.5)
+        if _popup_state(d, win) == "effort":
+            return True
+    return _open_card(d, win) == "effort"
+
+
+def _effort_text(d, win, sl):
+    """在卡片顶部读档位词（Light / Medium / ...），读不到返回 None。
+
+    形态 A 的卡片顶部有一个**大号橙色档位词**，这是最可靠的读数来源：
+    实测正确那个 1.000，其余 ≤0.94（"High" 会在 "Extra High" 里匹到 0.94，
+    所以要求赢家 ≥0.95 且领先第二名 ≥0.03，避免 High / Extra High 串味）。
+
+    为什么还需要它：滑杆位置换算成比例会被卡片宽度带偏
+    （实测轨道 244~267px 都出现过，档距 41~52px），换算误差能到半档。
+    文字是直接读数，不受宽度影响。
+    """
+    left, right, row_y, _knob = sl
+    w = max(80, (right - left) - 40)
+    region = (win[0] + left + 20, win[1] + row_y - 95, w, 70)
+    best, bs, second = None, 0.0, 0.0
+    for k in EFFORTS:
+        m = d.find("cdx_r_" + k, 0.0, region)
+        s = m[4] if m else 0.0
+        if s > bs:
+            second, bs, best = bs, s, k
+        elif s > second:
+            second = s
+    if best is not None and bs >= 0.95 and bs - second >= 0.03:
+        return best
+    return None
 
 
 def _effort_now(d, win, sl):
-    """从**已经打开**的弹层读档位（不开关弹层）。
+    """从**已经打开**的卡片读档位（不开关卡片）。
 
-    比例用**滑块圆心**在轨道上的位置，不用填充右端——填充右端是滑块左边缘，
-    差一个半径（13px），在 200px 的轨道上就是 6%，足够把 High 读成 mid。
+    先读卡片顶部的档位词；读不到（比如卡片高度变了、词被裁掉）才退回
+    按滑块圆心算比例的老办法。比例用**滑块圆心**，不用填充右端——
+    填充右端是滑块左边缘，差一个半径（13px），200px 轨道上就是 6%。
     """
-    left, right, _row_y, knob = sl
+    left, right, row_y, knob = sl
     frac = (knob - left) / max(1, right - left)
-    best, bd = EFFORTS[0], 9.9
-    for k in EFFORTS:
-        d_ = abs(frac - EFFORT_FRAC[k])
-        if d_ < bd:
-            bd, best = d_, k
-    out = {"effort": best, "label": EFFORT_LABEL[best],
-           "knob": knob, "track": [left, right], "frac": round(frac, 3)}
-    if best == "low":
+    out = {"knob": knob, "track": [left, right], "frac": round(frac, 3)}
+    guess = _effort_text(d, win, sl)
+    if guess is not None:
+        out.update({"effort": guess, "label": EFFORT_LABEL[guess], "from": "text"})
+    else:
+        best, bd = EFFORTS[0], 9.9
+        for k in EFFORTS:
+            d_ = abs(frac - EFFORT_FRAC[k])
+            if d_ < bd:
+                bd, best = d_, k
+        out.update({"effort": best, "label": EFFORT_LABEL[best], "from": "slider"})
+    if out["effort"] == "light":
         out["at_min"] = True
+    if out["effort"] == "ultra":
+        out["at_max"] = True
     return out
 
 
 def read_effort(d, win):
-    """读强度：开一次弹层 -> 读 -> 关。"""
-    if not _open_effort(d, win):
-        return {"effort": "unknown", "hint": "打不开强度弹层"}
+    """读强度：开一次卡片 -> 读 -> 关。Default 模式下没有档位，如实报 auto。"""
+    st = _popup_state(d, win)
+    if st == "preset":
+        return {"effort": "auto", "hint": "当前是 Default（自动）模型，"
+                                          "卡片里只有「模型+强度」预设条，没有独立档位"}
+    if not _ensure_effort(d, win):
+        if _popup_state(d, win) == "preset":
+            return {"effort": "auto", "form": "preset",
+                    "hint": "Default（自动）模型：卡片里只有「模型+强度」预设条，"
+                            "没有独立档位"}
+        return {"effort": "unknown", "hint": "打不开强度卡片"}
     sl = find_slider(d, win, locate(d, win).get("send"))
     out = _effort_now(d, win, sl) if sl else {"effort": "unknown",
                                               "hint": "没找到滑杆"}
@@ -951,7 +1173,7 @@ def read_effort(d, win):
 def set_effort(d, win, key):
     """调强度。**开一次弹层，一次做完，靠"读到位置就停"而不是数按键次数。**
 
-    1. 打开弹层（快捷键，不点芯片）
+    1. 点芯片打开弹层（只点一下，点完确认真的开了）
     2. 读当前档位
     3. 点一下滑块（滑块在弹层内部，点它不会收起）
     4. 左键按到底归零
@@ -965,9 +1187,24 @@ def set_effort(d, win, key):
 
     不拖：拖 -52px 实际走 -82px，而且连续拖同一控件第二次就不动。
     """
+    key = EFFORT_ALIAS.get(key, key)
     if key not in EFFORTS:
         return {"ok": False, "stage": "bad_arg", "want": key, "options": EFFORTS}
-    if not _open_effort(d, win):
+    st = _popup_state(d, win)
+    if st == "preset":
+        # Default（自动）模式下卡片里没有独立强度滑杆，那条滑条是
+        # 「模型+强度」的预设组合，调它等于换模型 —— 不能当成调强度用。
+        return {"ok": False, "stage": "default_model",
+                "hint": "当前模型是 Default（自动），卡片里只有「模型+强度」预设条，"
+                        "没有独立强度滑杆。先用 --model 选一个具体模型再调强度"}
+    if not _ensure_effort(d, win):
+        # 打不开时再看一眼形态：Default 下 _ensure_effort 会先把卡片点开、
+        # 再因为形态不对返回 False，所以这里能拿到准确原因。
+        if _popup_state(d, win) == "preset":
+            return {"ok": False, "stage": "default_model",
+                    "hint": "当前模型是 Default（自动），卡片里只有"
+                            "「模型+强度」预设条，没有独立强度滑杆。"
+                            "先用 --model 选一个具体模型再调强度"}
         return {"ok": False, "stage": "menu_not_open"}
 
     send = locate(d, win).get("send")
@@ -977,42 +1214,78 @@ def set_effort(d, win, key):
     before = _effort_now(d, win, sl)
 
     left, right, row_y, knob = sl
-    d.click(win[0] + knob, win[1] + row_y)
+    d.click(win[0] + knob, win[1] + row_y)     # 点圆点，键盘才接管滑杆
     time.sleep(0.45)
 
-    span = max(1, right - left)
-    target = left + span * EFFORT_FRAC[key]
-    if key == "max":
-        target = right - 5                    # 最高档：顶到最右
-    if key == "low":
-        target = left + 5
-
-    for _ in range(9):                        # 归零
+    # **现场自标定**，不用写死的比例：
+    #   ① 左键按到底 -> p0（硬停，真实最左）
+    #   ② 再按 3 次右键读 p3，步长 = (p3 - p0) / 3
+    #   ③ 回到底部，从 p0 数着往右走
+    # 为什么除 3 不除 1：单次读数有 ±10px 抖动（动画没停稳就抓），
+    # 实测一次就量出 step=52（真值 41），把 max 目标推到轨道外。
+    # 卡片宽度本身也会变（实测轨道 244~267px），写死比例同样会差半档。
+    for _ in range(9):
         d.press("left")
         time.sleep(0.2)
+    p0 = (find_slider(d, win, send) or (0, 0, 0, knob))[3]
+    for _ in range(3):
+        d.press("right")
+        time.sleep(0.35)
+    p3 = (find_slider(d, win, send) or (0, 0, 0, p0))[3]
+    step = (p3 - p0) / 3.0
+    if step < 8:                                # 读抖动/没动：退回按轨道宽度估
+        step = max(8.0, (right - left) / 5.0)
+    for _ in range(12):
+        d.press("left")
+        time.sleep(0.16)
 
-    for _ in range(12):                       # 往右逼近
+    idx = EFFORTS.index(key)
+    target = p0 + idx * step
+
+    for _ in range(10):                        # 往右逼近
         cur = find_slider(d, win, send)
-        if cur is None or cur[3] >= target - 5:
+        if cur is None or cur[3] >= target - 4:
             break
         d.press("right")
         time.sleep(0.26)
-    for _ in range(8):                        # 超了往回退
+    for _ in range(10):                        # 超了往回退
         cur = find_slider(d, win, send)
-        if cur is None or cur[3] <= target + 5:
+        if cur is None or cur[3] <= target + 4:
             break
         d.press("left")
         time.sleep(0.26)
 
+    # **按文字读数闭环纠偏**：位置往前走完，再读卡片上那个档位词，
+    # 差几档就补几下。步长估算有误差（卡片宽度会变），但文字是直接读数，
+    # 用它当反馈就不怕步长不准。最多纠 3 轮，每轮最多挪 6 下。
+    after = {"effort": "unknown"}
+    for _ in range(3):
+        sl2 = find_slider(d, win, send)
+        if sl2 is None:
+            break
+        after = _effort_now(d, win, sl2)
+        if after.get("effort") == key or after.get("from") != "text":
+            break
+        diff = EFFORTS.index(after["effort"]) - idx
+        for _ in range(min(6, abs(diff))):
+            d.press("right" if diff < 0 else "left")
+            time.sleep(0.26)
+
     sl2 = find_slider(d, win, send)
-    after = _effort_now(d, win, sl2) if sl2 else {"effort": "unknown"}
+    if sl2 is not None:
+        after = _effort_now(d, win, sl2)
     d.press("esc")
     time.sleep(0.45)
 
     ok = after.get("effort") == key
+    if not ok and after.get("from") != "text" and after.get("knob") is not None:
+        # 没有文字读数时（卡片形态变了）才退回位置判断：落在目标半档内算到位。
+        ok = abs(after["knob"] - target) <= step * 0.5
     return {"ok": ok, "before": before.get("effort"), "want": key,
-            "after": after.get("effort"), "knob": after.get("knob"),
-            "target": int(target), "stage": "done" if ok else "unverified"}
+            "after": after.get("effort"), "read": after.get("from"),
+            "knob": after.get("knob"),
+            "p0": int(p0), "step": int(step), "target": int(target),
+            "stage": "done" if ok else "unverified"}
 
 
 # ============================================================ 提问
@@ -1028,36 +1301,46 @@ def ask(d, win, prompt, timeout=180.0):
     d.press("delete")
     time.sleep(0.15)
     d.type_text(prompt)
-    time.sleep(0.5)
+    time.sleep(0.6)
     pos = locate(d, win)
     if "send" not in pos:
         return {"ok": False, "stage": "no_send_button"}
+    # **必须确认这个橙圆按钮已经是发送箭头**：输入框还空着时它是声波图标
+    # （语音输入），在 cdx_send 上能匹到 0.947，用普通阈值会点成录音。
+    # 输入成功后图标会变成三角（实测 1.000），所以用 0.97 判定。
+    m_send = d.find(SEND_TPL, SEND_THR, _band(win))
+    if m_send is None:
+        dbg = os.path.join(DEBUG_DIR, "codex_send_not_ready.png")
+        cv2.imwrite(dbg, d.grab(win, fresh=True))
+        return {"ok": False, "stage": "send_not_ready",
+                "hint": "打字后发送键没变成三角（可能还是语音图标/字没进去），"
+                        "没敢往下点，免得点成录音",
+                "debug_shot": dbg}
     d.click(*pos["send"])
 
-    # 等生成结束：发送键从「生成中的方块」恢复成橙色圆钮
-    end = time.time() + timeout
-    while time.time() < end:
-        time.sleep(2.0)
-        p = locate(d, win)
-        if "send" not in p:
-            continue
-        img = d.grab(win)
-        if img.size == 0:
-            continue
-        x, y = p["send"][0] - win[0], p["send"][1] - win[1]
-        patch = img[max(0, y - 12):y + 12, max(0, x - 12):x + 12]
-        if patch.size == 0:
-            continue
-        b = patch[:, :, 0].astype(int)
-        r = patch[:, :, 2].astype(int)
-        if int(((r - b) > 60).sum()) > 60:
+    # 点完只确认**发出去了**：橙圆按钮离开「发送三角」状态（0.97 那个判据）。
+    # 发出去之后输入框变空，这个按钮会变成**语音图标**（在 cdx_send 上 0.947），
+    # 所以它既不是三角也不是"消失"，只有用 0.97 才能把"已发送"和"还是发送键"分开。
+    #
+    # **不再假装等生成结束**：原来的写法是等橙圆回到三角，但生成完输入框仍是空的，
+    # 按钮本来就一直是语音图标，永远等不到三角 —— 只会白等到超时。
+    # 真正能判断"生成完了"的锚点是回答上的复制按钮，那个模板还没裁（见文件头限制 3）。
+    t0 = time.time()
+    while time.time() - t0 < 20:
+        time.sleep(0.6)
+        if d.find(SEND_TPL, SEND_THR, _band(win)) is None:
             break
     else:
-        return {"ok": False, "stage": "timeout", "hint": f"{timeout}s 内没生成完"}
+        dbg = os.path.join(DEBUG_DIR, "codex_not_sent.png")
+        cv2.imwrite(dbg, d.grab(win, fresh=True))
+        return {"ok": False, "stage": "not_sent",
+                "hint": "点了发送但 20s 内按钮没离开发送态，消息可能没发出去",
+                "debug_shot": dbg}
 
-    time.sleep(1.0)
-    return {"ok": False, "stage": "need_copy_template",
-            "hint": "回答已生成，但 codex 的复制按钮要 hover 才出现，模板还没裁"}
+    return {"ok": False, "stage": "need_copy_template", "sent": True,
+            "hint": "消息已发出，但取回答还没接：codex 的复制按钮要 hover 才出现，"
+                    "模板还没裁。等你确认可以发测试文案时再补",
+            "timeout_arg_ignored": timeout != 180.0}
 
 
 # ============================================================ CLI
@@ -1190,20 +1473,25 @@ def main():
 
     try:
         if a.list:
-            # **只开一次弹层**：先读强度（此时是强度层），再点入口行进列表读模型，
+            # **只开一次卡片**：先读强度（只有形态 A 有），再点入口行进列表读模型，
             # 最后 Esc 收掉。原来读模型开一次、读强度又开一次，等于开关两遍。
             out = {}
-            if not _open_effort(d, win):
+            form = _open_card(d, win)
+            if form is None:
                 out = {"model": "unknown", "effort": "unknown",
-                       "hint": "打不开强度弹层"}
+                       "hint": "打不开卡片"}
             else:
-                send = locate(d, win).get("send")
-                sl = find_slider(d, win, send)
-                if sl is not None:
+                sl = find_slider(d, win, locate(d, win).get("send"))
+                if form == "preset":
+                    out.update({"effort": "auto", "form": "preset",
+                                "hint": "Default（自动）模型：卡片里只有"
+                                        "「模型+强度」预设条，没有独立档位"})
+                elif sl is not None:
                     out.update(_effort_now(d, win, sl))
+                if sl is not None:
                     left, right, row_y, _knob = sl
                     d.click(win[0] + (left + right) // 2,
-                            win[1] + row_y - SLIDER_ABOVE)
+                            win[1] + row_y - ROW_ABOVE.get(form, SLIDER_ABOVE))
                     time.sleep(1.3)
                 if items_visible(d, win):
                     out.update(read_model(d, win))
@@ -1221,7 +1509,7 @@ def main():
                 d.press("esc")
                 time.sleep(0.4)
             print(json.dumps(out, ensure_ascii=False))
-            return 0
+            return 0 if out.get("model") not in (None, "unknown") else 1
 
         if a.model:
             r = set_model(d, win, a.model)
