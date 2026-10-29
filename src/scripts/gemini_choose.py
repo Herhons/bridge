@@ -78,22 +78,27 @@ def _open_model_menu(s) -> bool:
 
 
 def read_model(s) -> dict:
-    """读当前模型：菜单项左边有没有勾。实测选中 37、未选 0。"""
+    """读当前模型：看菜单项**左侧**有没有勾。
+
+    实测（2026-10-29 新菜单）：勾在标题左边，采样窗 = (m.x-45, m.y+10, 26, 24)，
+    选中 42 个亮像素，未选 0。之前判成"勾位置会变"，是因为整行模板把定位点带偏了；
+    现在模板只截标题文字（125x19），定位稳定到 1.000，勾区就跟着稳了。
+    """
     if not _open_model_menu(s):
         return {"model": "unknown", "hint": "打不开模型菜单"}
     ink = {}
     for k in CFG.options:
-        m = s.find(f"gem_item_{k}", threshold=0.85)
+        m = s.find(f"gem_item_{k}", threshold=0.88)
         if m is not None:
-            band = s.grab((m.x, m.y, 40, m.h))
+            band = s.grab((m.x - 45, m.y + 10, 26, 24))
             g = cv2.cvtColor(band, cv2.COLOR_BGR2GRAY)
-            ink[k] = int((g > 140).sum())
+            ink[k] = int((g > 110).sum())
     s.press("esc")
     time.sleep(0.3)
     if not ink:
         return {"model": "unknown", "hint": "模型项一个都没定位到"}
     best = max(ink, key=ink.get)
-    return {"model": best if ink[best] > 10 else "unknown", "ink": ink}
+    return {"model": best if ink[best] > 5 else "unknown", "ink": ink}
 
 
 def set_model(s, key: str) -> dict:
@@ -104,7 +109,7 @@ def set_model(s, key: str) -> dict:
         return {"ok": True, "stage": "already", "before": cur, "after": cur}
     if not _open_model_menu(s):
         return {"ok": False, "stage": "menu_not_open", "before": cur}
-    m = s.find(f"gem_item_{key}", threshold=0.85)
+    m = s.find(f"gem_item_{key}", threshold=0.88)
     if m is None:
         s.press("esc")
         return {"ok": False, "stage": "item_not_found", "before": cur, "want": key}
@@ -170,7 +175,6 @@ def set_think(s, key: str) -> dict:
 
 
 REQUIRED = ([f"gem_item_{k}" for k in CFG.options]
-            + [f"gem_chip_{k}" for k in CFG.options]
             + list(CFG.writer_tabs)
             + [THINK_ENTRY] + [t for _d, t in THINK.values()])
 
@@ -179,13 +183,22 @@ def main() -> int:
     argv = sys.argv[1:]
     # --think 走单独的流程（子菜单维度），其余交给通用 cli
     if "--model" in argv:
-        # 实测不稳：菜单选中行会加边框和勾，整行模板在选中/未选两态长得不一样；
-        # 改成只截文字后，勾的位置又随渲染变，读不出"当前是哪个"。
-        # 与其给一个自己都复核不了的开关，不如说清楚。
-        print(json.dumps({"ok": False, "stage": "not_supported",
-                          "hint": "Gemini 模型选择的读值不稳（选中行样式会变），已停用；请在网页上手动选。"},
-                         ensure_ascii=False))
-        return 1
+        i = argv.index("--model")
+        if i + 1 >= len(argv):
+            print("--model 缺值；可选：", ", ".join(CFG.options))
+            return 2
+        key = argv[i + 1].strip().lower()
+        rest = argv[:i] + argv[i + 2:]
+        sc = Screen()
+        if not sc.bring_to_front(CFG.title_hint, on_secondary=CFG.on_secondary):
+            print("找不到浏览器窗口"); return 1
+        if "--tab" in rest:
+            j = rest.index("--tab")
+            if j + 1 < len(rest):
+                sc.hotkey("ctrl", rest[j + 1]); time.sleep(1.2)
+        r = set_model(sc, key)
+        print(json.dumps(r, ensure_ascii=False))
+        return 0 if r.get("ok") else 1
 
     if "--think" in argv:
         # 实测：思考等级子菜单点一下会把整个菜单关掉，悬停也不触发（鼠标瞬移不产生 hover）。
@@ -205,7 +218,8 @@ def main() -> int:
                 sc.hotkey("ctrl", argv[j + 1]); time.sleep(1.2)
         # 读状态不改页面。模式按钮只在新对话页出现，会话页里读不到是正常的。
         w = read_writer(sc, CFG).get("writer")
-        out = {"writer": w, "model": "unknown", "note": "模型/思考等级未支持，请在网页上手动选"}
+        out = {"writer": w}
+        out.update(read_model(sc))
         if w in (None, "unknown"):
             out["note"] = "模式按钮只在新对话页出现（当前在会话页）。用 --new 先开新对话再读；本命令不替你重置会话。"
         print(json.dumps(out, ensure_ascii=False))
