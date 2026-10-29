@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 import time
 from dataclasses import dataclass, field
@@ -214,69 +215,25 @@ def choose(s: Screen, cfg: Chooser, key: str) -> dict:
 # ------------------------------------------------------------------ CLI
 def cli(cfg: Chooser, argv: list[str]) -> int:
     need, wait, force, argv = guard.parse_guard_args(list(argv))
-    name = f"{cfg.name}_choose.py"
-    do_list, want, bad, help_, tab, writer = False, None, [], False, None, None
-    i = 0
-    while i < len(argv):
-        a = argv[i]
-        if a in ("-l", "--list"):
-            do_list = True
-        elif a == "--tab":
-            if i + 1 >= len(argv):
-                bad.append("--tab 缺值")
-            else:
-                i += 1
-                try:
-                    tab = int(argv[i])
-                except ValueError:
-                    bad.append(f"--tab 要数字，收到 {argv[i]!r}")
-        elif a == "--writer":
-            if i + 1 >= len(argv):
-                bad.append("--writer 缺值")
-            else:
-                i += 1
-                writer = argv[i].strip().lower()
-        elif a in ("--model", "--effort", "--mode"):
-            if i + 1 >= len(argv):
-                bad.append(f"{a} 缺值")
-            else:
-                i += 1
-                want = argv[i].strip().lower()
-        elif a in ("-h", "--help"):
-            help_ = True
-        else:
-            bad.append(a)
-        i += 1
-
-    if help_ or (not do_list and want is None and writer is None):
-        print("用法：")
-        print(f"  python {name} --list [--tab N]")
-        print(f"  python {name} --model <{'|'.join(cfg.options)}> [--tab N]")
-        if cfg.writers:
-            print(f"  python {name} --writer <{'|'.join(cfg.writers)}> [--model X]")
-            print("  换模式会换掉整套模型列表，所以 --writer 先于 --model 生效")
-        print("  --tab N   先按 Ctrl+N 切到第 N 个标签页（左边数）")
-        print("  --idle 2 / --wait 120 / --force   你正在用电脑时是否等待")
-        for k, desc in cfg.options.items():
-            mark = "" if k in cfg.has_chip else "  （只能设，不能读）"
-            print(f"    {k:12} {desc}{mark}")
-        return 0 if help_ else 2
-    if bad:
-        print("参数有问题：", bad)
-        return 2
-    if want is not None and want not in cfg.options:
-        print(f"没有这个档位：{want}")
-        print("可选：", ", ".join(cfg.options))
-        return 2
-    if writer is not None and writer not in cfg.writers:
-        print(f"没有这个模式：{writer}")
-        print("可选：", ", ".join(cfg.writers))
+    parser = argparse.ArgumentParser(prog=f"{cfg.name}_choose.py",
+                                     description="按写入器、模型的顺序选择并复核")
+    parser.add_argument("--list", "-l", action="store_true")
+    parser.add_argument("--writer", choices=cfg.writers, type=str.lower)
+    parser.add_argument("--model", "--effort", "--mode", dest="model",
+                        choices=cfg.options, type=str.lower)
+    parser.add_argument("--tab", type=int, choices=range(1, 10))
+    args = parser.parse_args(argv)
+    do_list, want, writer = args.list, args.model, args.writer
+    if do_list and (want is not None or writer is not None):
+        parser.error("--list 不能与选择模式或模型的参数同用")
+    if not (do_list or want or writer):
+        parser.print_help()
         return 2
 
     if not guard.guard(need, wait, force):
         return 4
     s = Screen()
-    hwnd = ensure_site(cfg.name)
+    hwnd = ensure_site(cfg.name, tab=args.tab)
     if hwnd is None:
         print("开不出浏览器窗口（检查 Chrome 路径）")
         return 1
@@ -285,30 +242,27 @@ def cli(cfg: Chooser, argv: list[str]) -> int:
         print("窗口提不到前台")
         return 1
     time.sleep(1.2)
-    # --tab 不再生效：ensure_site 保证当前标签就是要操作的那个页面，
-    # 再切一下反而会把目标页切走。参数保留只为兼容旧命令。
-    _ = tab
-
-    if do_list:
-        out = dict(read_current(s, cfg))
-        if cfg.writers:
-            out.update(read_writer(s, cfg))
-        print(json.dumps(out, ensure_ascii=False))
-        return 0
-
-    rc = 0
     try:
+        if do_list:
+            out = dict(read_current(s, cfg))
+            if cfg.writers:
+                out.update(read_writer(s, cfg))
+            print(json.dumps(out, ensure_ascii=False))
+            # 任何一个读不出来的字段都算失败：返回 0 会让验证器把"没读到"记成通过
+            unknown = out["state"] == "unknown" or out.get("writer") == "unknown"
+            return 1 if unknown else 0
         if writer is not None:
             w = choose_writer(s, cfg, writer)
             print(json.dumps(w, ensure_ascii=False))
-            if not w.get("ok"):
-                rc = 1
+            if not w["ok"]:
+                return 1
         if want is not None:
             r = choose(s, cfg, want)
             print(json.dumps(r, ensure_ascii=False))
-            rc = 0 if r.get("ok") else 1
+            if not r["ok"]:
+                return 1
     except ForegroundLost as e:
         print("失败:", json.dumps({"ok": False, "stage": "user_took_over",
                                   "hint": str(e)}, ensure_ascii=False))
         return 4
-    return rc
+    return 0

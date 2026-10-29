@@ -7,7 +7,7 @@
     python tools/verify_all.py --random 3 --only grok,gemini   # 随机抽组合复验
 
 每条记录：目标组合、返回码、脚本自报的 before/after、读回值、是否通过。
-结果同时写到 deliverables/verify-<端>.json，方便回看。
+结果写到 deliverables/verification/<本次时间>/，保留以前的验证记录。
 """
 
 from __future__ import annotations
@@ -19,12 +19,13 @@ import random
 import subprocess
 import sys
 import time
+from datetime import datetime, timedelta, timezone
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SCRIPTS = os.path.join(ROOT, "src", "scripts")
 PY = sys.executable
 
-TABS = {"grok": 1, "chatgpt": 1, "gemini": 3, "deepseek": 8}
+TABS = {name: None for name in ("grok", "chatgpt", "gemini", "deepseek")}
 
 # gemini 任务模式的模型列表与对话模式不同（实测：任务只有 Flash / Argon）
 GEMINI_MODELS = {
@@ -36,10 +37,16 @@ CHATGPT_MODELS = {
     "work": ["default", "gpt61_sol", "gpt61_terra", "gpt6_astra", "gpt6_sol",
              "gpt6_luna", "gpt56_sol", "gpt56_terra", "gpt56_luna"],
 }
+CHATGPT_EFFORTS = {
+    "chat": ["low", "mid", "high"],
+    "work": ["low", "mid", "high", "xhigh", "max"],
+}
 
 
 def run(script: str, args: list[str], tab: int, timeout: int = 120) -> tuple[int, dict, str]:
-    cmd = [PY, os.path.join(SCRIPTS, script), *args, "--tab", str(tab)]
+    cmd = [PY, os.path.join(SCRIPTS, script), *args]
+    if tab is not None:
+        cmd += ["--tab", str(tab)]
     t0 = time.time()
     try:
         p = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8",
@@ -48,8 +55,11 @@ def run(script: str, args: list[str], tab: int, timeout: int = 120) -> tuple[int
         last = out[-1] if out else ""
         try:
             data = json.loads(last)
-        except Exception:
-            data = {"_raw": last[-300:]}
+        except json.JSONDecodeError:
+            return p.returncode or 1, {
+                "ok": False, "stage": "invalid_output", "_raw": last[-300:],
+                "_sec": round(time.time() - t0, 1),
+            }, last
         data["_sec"] = round(time.time() - t0, 1)
         return p.returncode, data, last
     except subprocess.TimeoutExpired:
@@ -87,34 +97,36 @@ def verify_grok() -> list[dict]:
     return rows
 
 
-def verify_gemini() -> list[dict]:
-    rows = []
-    for w, models in GEMINI_MODELS.items():
-        rc, d, _ = run("gemini_choose.py", ["--writer", w], TABS["gemini"])
-        ok = rc == 0 and d.get("ok") and d.get("after") == w
-        rows.append(rec("writer", w, rc, d, ok, f"after={d.get('after')}"))
-        for m in models:
-            rc, d, _ = run("gemini_choose.py", ["--model", m], TABS["gemini"])
-            ok = rc == 0 and d.get("ok") and d.get("after") == m
-            rows.append(rec("model", f"{w}+{m}", rc, d, ok, f"after={d.get('after')}"))
+def verify_mode(name: str, writer: str, models: list[str],
+                efforts: list[str] = ()) -> list[dict]:
+    script, tab = f"{name}_choose.py", TABS[name]
+    writer_rc, writer_data, _ = run(script, ["--writer", writer], tab)
+    writer_ok = (writer_rc == 0 and writer_data.get("ok")
+                 and writer_data.get("after") == writer)
+    rows = [rec("writer", writer, writer_rc, writer_data, writer_ok,
+                f"after={writer_data.get('after')}")]
+    for kind, options in (("model", models), ("effort", efforts)):
+        for option in options:
+            target = f"{writer}+{option}"
+            if not writer_ok:
+                rows.append(rec(kind, target, writer_rc,
+                                {"stage": "writer_not_selected", "writer": writer_data},
+                                False, f"未执行：模式 {writer} 切换未通过"))
+                continue
+            rc, data, _ = run(script, [f"--{kind}", option], tab)
+            ok = rc == 0 and data.get("ok") and data.get("after") == option
+            rows.append(rec(kind, target, rc, data, ok, f"after={data.get('after')}"))
     return rows
+
+
+def verify_gemini() -> list[dict]:
+    return [row for writer, models in GEMINI_MODELS.items()
+            for row in verify_mode("gemini", writer, models)]
 
 
 def verify_chatgpt() -> list[dict]:
-    rows = []
-    for w, models in CHATGPT_MODELS.items():
-        rc, d, _ = run("chatgpt_choose.py", ["--writer", w], TABS["chatgpt"])
-        ok = rc == 0 and d.get("ok") and d.get("after") == w
-        rows.append(rec("writer", w, rc, d, ok, f"after={d.get('after')}"))
-        for m in models:
-            rc, d, _ = run("chatgpt_choose.py", ["--model", m], TABS["chatgpt"])
-            ok = rc == 0 and d.get("ok") and d.get("after") == m
-            rows.append(rec("model", f"{w}+{m}", rc, d, ok, f"after={d.get('after')}"))
-    for e in ("instant", "mid"):
-        rc, d, _ = run("chatgpt_choose.py", ["--effort", e], TABS["chatgpt"])
-        ok = rc == 0 and d.get("ok")
-        rows.append(rec("effort", e, rc, d, ok, f"after={d.get('after')}"))
-    return rows
+    return [row for writer, models in CHATGPT_MODELS.items()
+            for row in verify_mode("chatgpt", writer, models, CHATGPT_EFFORTS[writer])]
 
 
 VERIFIERS = {"deepseek": verify_deepseek, "grok": verify_grok,
@@ -126,25 +138,25 @@ def main() -> int:
     ap.add_argument("--only", default="deepseek,grok,gemini,chatgpt")
     ap.add_argument("--random", type=int, default=0, help="每个端随机抽 N 个组合复验")
     ap.add_argument("--seed", type=int, default=20261029)
+    ap.add_argument("--output-dir", help="本次结果目录；默认创建独立时间目录")
     args = ap.parse_args()
 
     rng = random.Random(args.seed)
     names = [n.strip() for n in args.only.split(",") if n.strip()]
-    outdir = os.path.join(ROOT, "deliverables")
+    stamp = datetime.now(timezone(timedelta(hours=8))).strftime("%Y%m%d-%H%M%S-%f")
+    outdir = args.output_dir or os.path.join(ROOT, "deliverables", "verification", stamp)
     os.makedirs(outdir, exist_ok=True)
 
     summary = {}
     for name in names:
         print(f"\n===== {name} =====", flush=True)
         rows = VERIFIERS[name]()
-        passed = sum(1 for r in rows if r["ok"])
         for r in rows:
             flag = "OK  " if r["ok"] else "FAIL"
             print(f"  [{flag}] {r['kind']:6} {r['target']:<28} {r['detail']}  {r['sec']}s", flush=True)
 
         if args.random:
-            good = [r for r in rows if r["ok"]]
-            picks = rng.sample(good, min(args.random, len(good)))
+            picks = rng.sample(rows, min(args.random, len(rows)))
             print(f"  --- 随机复验 {len(picks)} 个 ---", flush=True)
             for r in picks:
                 tgt = r["target"]
@@ -169,12 +181,12 @@ def main() -> int:
                         detail = f"after={d.get('after')}"
                     elif "+" in tgt:
                         w, m = tgt.split("+", 1)
-                        rc1, d1, _ = run(script, ["--writer", w], TABS[name])
-                        rc, d, _ = run(script, ["--model", m], TABS[name])
-                        ok = rc1 == 0 and d1.get("ok") and rc == 0 and d.get("ok") and d.get("after") == m
-                        detail = f"writer={d1.get('after')}, after={d.get('after')}"
+                        trial = verify_mode(name, w,
+                                            [m] if r["kind"] == "model" else [],
+                                            [m] if r["kind"] == "effort" else [])[-1]
+                        rc, d, ok, detail = trial["rc"], trial["raw"], trial["ok"], trial["detail"]
                     else:
-                        rc, d, _ = run(script, ["--model", tgt], TABS[name])
+                        rc, d, _ = run(script, [f"--{r['kind']}", tgt], TABS[name])
                         ok = rc == 0 and d.get("ok") and d.get("after") == tgt
                         detail = f"after={d.get('after')}"
                 rows.append(rec("random", tgt, rc, d, ok, detail))
@@ -191,7 +203,10 @@ def main() -> int:
     print("\n===== 汇总 =====")
     for k, v in summary.items():
         print(f"  {k:9} {v['passed']}/{v['total']}  失败: {v['failed'] or '无'}")
-    return 0
+    with open(os.path.join(outdir, "summary.json"), "w", encoding="utf-8") as f:
+        json.dump(summary, f, ensure_ascii=False, indent=2)
+    print(f"结果目录：{outdir}")
+    return 1 if any(v["failed"] for v in summary.values()) else 0
 
 
 if __name__ == "__main__":

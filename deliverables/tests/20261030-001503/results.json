@@ -1,0 +1,277 @@
+[
+  {
+    "case": "syntax",
+    "ok": true,
+    "files": 53
+  },
+  {
+    "case": "regressions",
+    "ok": true,
+    "returncode": 0,
+    "output": "test_existing_draft_and_busy_conversation_are_not_modified (test_conversation.ConversationTests.test_existing_draft_and_busy_conversation_are_not_modified) ... ok\ntest_generation_pause_with_copy_available_is_not_completion (test_conversation.ConversationTests.test_generation_pause_with_copy_available_is_not_completion) ... ok\ntest_mismatched_input_never_submits (test_conversation.ConversationTests.test_mismatched_input_never_submits) ... ok\ntest_new_reply_waits_for_generation_to_finish (test_conversation.ConversationTests.test_new_reply_waits_for_generation_to_finish) ... ok\ntest_shared_text_input_does_not_submit_on_newline (test_conversation.ConversationTests.test_shared_text_input_does_not_submit_on_newline) ... ok\ntest_switching_conversation_does_not_copy_another_reply (test_conversation.ConversationTests.test_switching_conversation_does_not_copy_another_reply) ... ok\ntest_unsent_question_never_returns_existing_answer (test_conversation.ConversationTests.test_unsent_question_never_returns_existing_answer) ... ok\ntest_user_copy_without_reply_actions_is_not_a_reply (test_conversation.ConversationTests.test_user_copy_without_reply_actions_is_not_a_reply) ... ok\ntest_failed_effort_blocks_message (test_desktop_controls.DesktopControlTests.test_failed_effort_blocks_message) ... ok\ntest_failed_model_blocks_effort_and_message (test_desktop_controls.DesktopControlTests.test_failed_model_blocks_effort_and_message) ... ok\ntest_foreground_loss_during_typing_stops_before_next_character (test_desktop_controls.DesktopControlTests.test_foreground_loss_during_typing_stops_before_next_character) ... ok\ntest_foreground_loss_stops_without_reactivation (test_desktop_controls.DesktopControlTests.test_foreground_loss_stops_without_reactivation) ... ok\ntest_model_requires_exact_readback_for_both_key_and_display_name (test_desktop_controls.DesktopControlTests.test_model_requires_exact_readback_for_both_key_and_display_name) ... ok\ntest_multiline_and_non_bmp_text_are_preserved_without_submission (test_desktop_controls.DesktopControlTests.test_multiline_and_non_bmp_text_are_preserved_without_submission) ... ok\ntest_successful_configuration_runs_in_order (test_desktop_controls.DesktopControlTests.test_successful_configuration_runs_in_order) ... ok\ntest_unsupported_model_does_not_change_selection (test_desktop_controls.DesktopControlTests.test_unsupported_model_does_not_change_selection) ... ok\ntest_default_run_keeps_historical_json (test_verifier.VerifierTests.test_default_run_keeps_historical_json) ... ok\ntest_effort_cases_match_current_script_options (test_verifier.VerifierTests.test_effort_cases_match_current_script_options) ... ok\ntest_failed_mode_never_runs_dependent_model_or_effort (test_verifier.VerifierTests.test_failed_mode_never_runs_dependent_model_or_effort) ... ok\ntest_failed_suite_returns_nonzero_and_records_failure (test_verifier.VerifierTests.test_failed_suite_returns_nonzero_and_records_failure) ... ok\ntest_malformed_success_output_is_protocol_failure (test_verifier.VerifierTests.test_malformed_success_output_is_protocol_failure) ... ok\ntest_random_effort_uses_effort_flag_and_establishes_mode (test_verifier.VerifierTests.test_random_effort_uses_effort_flag_and_establishes_mode) ... ok\ntest_random_rerun_includes_failed_cases (test_verifier.VerifierTests.test_random_rerun_includes_failed_cases) ... ok\ntest_successful_suite_returns_zero (test_verifier.VerifierTests.test_successful_suite_returns_zero) ... ok\ntest_wrong_effort_readback_fails (test_verifier.VerifierTests.test_wrong_effort_readback_fails) ... ok\ntest_wrong_mode_readback_stops_combination (test_verifier.VerifierTests.test_wrong_mode_readback_stops_combination) ... ok\ntest_chatgpt_incompatible_writer_and_model_are_rejected_before_ui (test_web_cli.WebCliTests.test_chatgpt_incompatible_writer_and_model_are_rejected_before_ui) ... ok\ntest_chatgpt_successful_combination_preserves_dependency_order (test_web_cli.WebCliTests.test_chatgpt_successful_combination_preserves_dependency_order) ... ok\ntest_failure_to_open_new_chat_stops_all_following_actions (test_web_cli.WebCliTests.test_failure_to_open_new_chat_stops_all_following_actions) ... ok\ntest_foreground_loss_stops_a_multi_step_command (test_web_cli.WebCliTests.test_foreground_loss_stops_a_multi_step_command) ... ok\ntest_gemini_combined_command_applies_every_requested_step_in_order (test_web_cli.WebCliTests.test_gemini_combined_command_applies_every_requested_step_in_order) ... ok\ntest_invalid_command_line_cannot_start_ui_work (test_web_cli.WebCliTests.test_invalid_command_line_cannot_start_ui_work) ... ok\ntest_list_alone_does_not_create_a_conversation (test_web_cli.WebCliTests.test_list_alone_does_not_create_a_conversation) ... ok\ntest_model_failure_never_applies_effort_to_the_wrong_model (test_web_cli.WebCliTests.test_model_failure_never_applies_effort_to_the_wrong_model) ... ok\ntest_new_and_list_reads_the_new_conversation (test_web_cli.WebCliTests.test_new_and_list_reads_the_new_conversation) ... ok\ntest_read_and_mutation_flags_are_rejected_before_opening_the_browser (test_web_cli.WebCliTests.test_read_and_mutation_flags_are_rejected_before_opening_the_browser) ... ok\ntest_tab_selection_is_passed_to_the_browser (test_web_cli.WebCliTests.test_tab_selection_is_passed_to_the_browser) ... ok\ntest_unreadable_state_does_not_report_success (test_web_cli.WebCliTests.test_unreadable_state_does_not_report_success) ... ok\ntest_writer_failure_never_selects_a_model_in_the_wrong_mode (test_web_cli.WebCliTests.test_writer_failure_never_selects_a_model_in_the_wrong_mode) ... ok\n\n----------------------------------------------------------------------\nRan 39 tests in 1.022s\n\nOK\n"
+  },
+  {
+    "case": "deepseek_choose:help",
+    "ok": true,
+    "returncode": 0,
+    "stdout": "用法：\n  python deepseek_choose.py --list                    # 读当前两个开关（只读）\n  python deepseek_choose.py --think on|off\n  python deepseek_choose.py --search on|off\n  python deepseek_choose.py --list --tab N            # 先按 Ctrl+N 切标签页\n  （发提问请用 deepseek_use.py）\n",
+    "stderr": "",
+    "seconds": 0.26
+  },
+  {
+    "case": "deepseek_use:help",
+    "ok": true,
+    "returncode": 0,
+    "stdout": "资源库就绪：4/4 张\nusage: deepseek_use.py [-h] [--new | --continue] [--timeout TIMEOUT]\n                       [--tab {1,2,3,4,5,6,7,8,9}]\n                       prompt\n\npositional arguments:\n  prompt                完整提问，可包含换行\n\noptions:\n  -h, --help            show this help message and exit\n  --new                 新对话（默认）\n  --continue\n  --timeout TIMEOUT\n  --tab {1,2,3,4,5,6,7,8,9}\n",
+    "stderr": "",
+    "seconds": 0.29
+  },
+  {
+    "case": "grok_choose:help",
+    "ok": true,
+    "returncode": 0,
+    "stdout": "资源库就绪：7/7 张\nusage: grok_choose.py [-h] [--list] [--writer {}]\n                      [--model {fast,expert,auto,build}]\n                      [--tab {1,2,3,4,5,6,7,8,9}]\n\n按写入器、模型的顺序选择并复核\n\noptions:\n  -h, --help            show this help message and exit\n  --list, -l\n  --writer {}\n  --model, --effort, --mode {fast,expert,auto,build}\n  --tab {1,2,3,4,5,6,7,8,9}\n",
+    "stderr": "",
+    "seconds": 0.29
+  },
+  {
+    "case": "grok_use:help",
+    "ok": true,
+    "returncode": 0,
+    "stdout": "资源库就绪：4/4 张\nusage: grok_use.py [-h] [--new | --continue] [--timeout TIMEOUT]\n                   [--tab {1,2,3,4,5,6,7,8,9}]\n                   prompt\n\npositional arguments:\n  prompt                完整提问，可包含换行\n\noptions:\n  -h, --help            show this help message and exit\n  --new                 新对话（默认）\n  --continue\n  --timeout TIMEOUT\n  --tab {1,2,3,4,5,6,7,8,9}\n",
+    "stderr": "",
+    "seconds": 0.29
+  },
+  {
+    "case": "gemini_choose:help",
+    "ok": true,
+    "returncode": 0,
+    "stdout": "usage: gemini_choose.py [-h] [--list] [--new] [--writer {dialog,task}]\n                        [--model {flash_lite,flash,pro,argon}] [--think THINK]\n                        [--tab {1,2,3,4,5,6,7,8,9}]\n\n选择 Gemini 写入器和模型，不发送消息\n\noptions:\n  -h, --help            show this help message and exit\n  --list, -l            读取当前模式和模型\n  --new                 先开新对话\n  --writer {dialog,task}\n  --model {flash_lite,flash,pro,argon}\n  --think THINK         思考等级（当前未实现）\n  --tab {1,2,3,4,5,6,7,8,9}\n",
+    "stderr": "",
+    "seconds": 0.29
+  },
+  {
+    "case": "gemini_use:help",
+    "ok": true,
+    "returncode": 0,
+    "stdout": "资源库就绪：8/8 张\nusage: gemini_use.py [-h] [--new | --continue] [--timeout TIMEOUT]\n                     [--tab {1,2,3,4,5,6,7,8,9}]\n                     prompt\n\npositional arguments:\n  prompt                完整提问，可包含换行\n\noptions:\n  -h, --help            show this help message and exit\n  --new                 新对话（默认）\n  --continue\n  --timeout TIMEOUT\n  --tab {1,2,3,4,5,6,7,8,9}\n\n--task 发到「任务（计划）」模式：先新对话，再切任务，然后提交 --chat 发到「对话」模式（默认）\n",
+    "stderr": "",
+    "seconds": 0.3
+  },
+  {
+    "case": "chatgpt_choose:help",
+    "ok": true,
+    "returncode": 0,
+    "stdout": "usage: chatgpt_choose.py [-h] [--list] [--new] [--writer {chat,work}]\n                         [--model {default,gpt56,gpt56_luna,gpt56_sol,gpt56_terra,gpt6,gpt61_sol,gpt61_terra,gpt6_astra,gpt6_luna,gpt6_sol}]\n                         [--effort {high,low,max,mid,xhigh}]\n                         [--tab {1,2,3,4,5,6,7,8,9}]\n\n选择 ChatGPT 模式、模型和强度，不发送消息\n\noptions:\n  -h, --help            show this help message and exit\n  --list, -l            读取当前状态\n  --new                 先开新对话\n  --writer {chat,work}\n  --model {default,gpt56,gpt56_luna,gpt56_sol,gpt56_terra,gpt6,gpt61_sol,gpt61_terra,gpt6_astra,gpt6_luna,gpt6_sol}\n  --effort {high,low,max,mid,xhigh}\n  --tab {1,2,3,4,5,6,7,8,9}\n",
+    "stderr": "",
+    "seconds": 0.3
+  },
+  {
+    "case": "chatgpt_use:help",
+    "ok": true,
+    "returncode": 0,
+    "stdout": "资源库就绪：4/4 张\nusage: chatgpt_use.py [-h] [--new | --continue] [--timeout TIMEOUT]\n                      [--tab {1,2,3,4,5,6,7,8,9}]\n                      prompt\n\npositional arguments:\n  prompt                完整提问，可包含换行\n\noptions:\n  -h, --help            show this help message and exit\n  --new                 新对话（默认）\n  --continue\n  --timeout TIMEOUT\n  --tab {1,2,3,4,5,6,7,8,9}\n",
+    "stderr": "",
+    "seconds": 0.3
+  },
+  {
+    "case": "workbuddy_choose:help",
+    "ok": true,
+    "returncode": 0,
+    "stdout": "usage: workbuddy_choose.py [-h] [--list] [--model MODEL] [--idle IDLE]\n                           [--wait WAIT] [--force]\n\nWorkBuddy 模型选择 / 提问并读取本轮回复\n\noptions:\n  -h, --help     show this help message and exit\n  --list\n  --model MODEL\n  --idle IDLE\n  --wait WAIT\n  --force\n",
+    "stderr": "",
+    "seconds": 0.38
+  },
+  {
+    "case": "workbuddy_use:help",
+    "ok": true,
+    "returncode": 0,
+    "stdout": "usage: workbuddy_use.py [-h] [--new | --continue] [--timeout TIMEOUT] [--list]\n                        [--model MODEL] [--idle IDLE] [--wait WAIT] [--force]\n                        prompt\n\nWorkBuddy 模型选择 / 提问并读取本轮回复\n\npositional arguments:\n  prompt\n\noptions:\n  -h, --help         show this help message and exit\n  --new\n  --continue\n  --timeout TIMEOUT\n  --list\n  --model MODEL\n  --idle IDLE\n  --wait WAIT\n  --force\n",
+    "stderr": "",
+    "seconds": 0.38
+  },
+  {
+    "case": "opencode_choose:help",
+    "ok": true,
+    "returncode": 0,
+    "stdout": "usage: opencode_choose.py [-h] [--list] [--model MODEL] [--effort EFFORT]\n                          [--probe] [--wait WAIT] [--idle IDLE] [--force]\n\noptions:\n  -h, --help       show this help message and exit\n  --list, -l\n  --model MODEL\n  --effort EFFORT\n  --probe\n  --wait WAIT\n  --idle IDLE\n  --force\n",
+    "stderr": "",
+    "seconds": 0.26
+  },
+  {
+    "case": "opencode_use:help",
+    "ok": true,
+    "returncode": 0,
+    "stdout": "usage: opencode_use.py [-h] [--new] [--list] [--model MODEL] [--effort EFFORT]\n                       [--probe] [--timeout TIMEOUT] [--wait WAIT]\n                       [--idle IDLE] [--force]\n                       [prompt]\n\npositional arguments:\n  prompt\n\noptions:\n  -h, --help         show this help message and exit\n  --new              先打开一个新对话\n  --list, -l\n  --model MODEL\n  --effort EFFORT\n  --probe\n  --timeout TIMEOUT\n  --wait WAIT\n  --idle IDLE\n  --force\n",
+    "stderr": "",
+    "seconds": 0.26
+  },
+  {
+    "case": "dsh_choose:help",
+    "ok": true,
+    "returncode": 0,
+    "stdout": "usage: dsh_choose.py [-h] [--list] [--model MODEL] [--effort EFFORT] [--probe]\n                     [--wait WAIT] [--idle IDLE] [--force]\n\noptions:\n  -h, --help       show this help message and exit\n  --list, -l\n  --model MODEL\n  --effort EFFORT\n  --probe\n  --wait WAIT\n  --idle IDLE\n  --force\n",
+    "stderr": "",
+    "seconds": 0.26
+  },
+  {
+    "case": "dsh_use:help",
+    "ok": true,
+    "returncode": 0,
+    "stdout": "usage: dsh_use.py [-h] [--new] [--list] [--model MODEL] [--effort EFFORT]\n                  [--probe] [--timeout TIMEOUT] [--wait WAIT] [--idle IDLE]\n                  [--force]\n                  [prompt]\n\npositional arguments:\n  prompt\n\noptions:\n  -h, --help         show this help message and exit\n  --new              先打开一个新对话\n  --list, -l\n  --model MODEL\n  --effort EFFORT\n  --probe\n  --timeout TIMEOUT\n  --wait WAIT\n  --idle IDLE\n  --force\n",
+    "stderr": "",
+    "seconds": 0.26
+  },
+  {
+    "case": "codex_choose:help",
+    "ok": true,
+    "returncode": 0,
+    "stdout": "usage: codex_choose.py [-h] [--list] [--model MODEL] [--effort EFFORT]\n                       [--probe] [--size SIZE] [--pos POS] [--wait WAIT]\n                       [--idle IDLE] [--force]\n\noptions:\n  -h, --help       show this help message and exit\n  --list, -l\n  --model MODEL\n  --effort EFFORT\n  --probe          只打印每个模板的命中分数和窗口内坐标，不点击\n  --size SIZE      WxH，默认 1380x1340\n  --pos POS        X,Y，默认 -1440,-560\n  --wait WAIT\n  --idle IDLE\n  --force\n",
+    "stderr": "",
+    "seconds": 0.26
+  },
+  {
+    "case": "codex_use:help",
+    "ok": true,
+    "returncode": 0,
+    "stdout": "usage: codex_use.py [-h] [--new] [--list] [--model MODEL] [--effort EFFORT]\n                    [--probe] [--size SIZE] [--pos POS] [--timeout TIMEOUT]\n                    [--wait WAIT] [--idle IDLE] [--force]\n                    [prompt]\n\npositional arguments:\n  prompt\n\noptions:\n  -h, --help         show this help message and exit\n  --new              先打开一个新对话\n  --list, -l\n  --model MODEL\n  --effort EFFORT\n  --probe            只打印每个模板的命中分数和窗口内坐标，不点击\n  --size SIZE        WxH，默认 1380x1340\n  --pos POS          X,Y，默认 -1440,-560\n  --timeout TIMEOUT\n  --wait WAIT\n  --idle IDLE\n  --force\n",
+    "stderr": "",
+    "seconds": 0.28
+  },
+  {
+    "case": "deepseek_choose:live",
+    "ok": true,
+    "returncode": 0,
+    "stdout": "资源库就绪：2/2 张\n  复用窗口 hwnd=3280516（当前已是 deepseek）\n  找到 <ds_think 1.000 中心(-948,196)>\n  找到 <ds_search 1.000 中心(-846,196)>\n{\"think\": {\"state\": \"off\", \"blue\": 36.9}, \"search\": {\"state\": \"off\", \"blue\": 38.7}}\n",
+    "stderr": "",
+    "seconds": 2.62
+  },
+  {
+    "case": "deepseek_use:live",
+    "ok": false,
+    "returncode": 1,
+    "stdout": "资源库就绪：5/5 张\n  复用窗口 hwnd=3280516（当前已是 deepseek）\n  找到 <ds_newchat 1.000 中心(-1298,-347)>\n  没找到 ds_stop（最高 0.817 / 阈值 0.92）\n  没找到 ds_stop（最高 0.817 / 阈值 0.92）\n  找到 <ds_send_on 1.000 中心(-261,208)>\n  找到 <ds_stop 1.000 中心(-261,715)>\n  没找到 ds_stop（最高 0.817 / 阈值 0.92）\n  找到 <ds_copy 1.000 中心(-987,-50)>\n{\"ok\": false, \"submission\": \"accepted\", \"sent\": true, \"stage\": \"conversation_changed\", \"elapsed\": 4.0, \"mode\": \"new\"}\n",
+    "stderr": "",
+    "seconds": 4.42,
+    "expected_reply": "BR009-20261030-001503-deepseek-OK"
+  },
+  {
+    "case": "grok_choose:live",
+    "ok": false,
+    "returncode": 1,
+    "stdout": "资源库就绪：7/7 张\n[等待] 你正在用电脑（空闲 1.8s < 2s），最多等你 15s 停手…\n[继续] 已空闲 2.2s，开始执行。\n  复用窗口 hwnd=3280516（当前已是 grok）\n  没找到 grok_chip_fast（最高 0.733 / 阈值 0.85）\n  没找到 grok_chip_expert（最高 0.617 / 阈值 0.85）\n{\"state\": \"unknown\", \"hint\": \"当前芯片和任何一张 chip 图都对不上（可能是没截过的档位，或主题/缩放变了）\"}\n",
+    "stderr": "",
+    "seconds": 14.5
+  },
+  {
+    "case": "grok_use:live",
+    "ok": false,
+    "returncode": 1,
+    "stdout": "资源库就绪：5/5 张\n[等待] 你正在用电脑（空闲 0.8s < 2s），最多等你 15s 停手…\n[继续] 已空闲 2.0s，开始执行。\n  复用窗口 hwnd=3280516（当前已是 grok）\n{\"ok\": false, \"submission\": \"unknown\", \"sent\": null, \"stage\": \"timeout\", \"elapsed\": 121.5, \"mode\": \"new\"}\n",
+    "stderr": "",
+    "seconds": 123.12,
+    "expected_reply": "BR009-20261030-001503-grok-OK"
+  },
+  {
+    "case": "gemini_choose:live",
+    "ok": true,
+    "returncode": 0,
+    "stdout": "资源库就绪：7/7 张\n  复用窗口 hwnd=3280516（当前已是 gemini）\n  找到 <gem_writer_tabs_dialog 1.000 中心(-570,245)>\n  没找到 gem_item_flash_lite（最高 0.480 / 阈值 0.85）\n  没找到 gem_item_flash（最高 0.519 / 阈值 0.85）\n  没找到 gem_item_pro（最高 0.821 / 阈值 0.85）\n  没找到 gem_item_argon（最高 0.543 / 阈值 0.85）\n  找到 <gem_mic 1.000 中心(-197,166)>\n  找到 <gem_item_flash_lite 0.965 中心(-315,233)>\n  找到 <gem_item_flash_lite 0.965 中心(-315,233)>\n  找到 <gem_item_flash 0.975 中心(-315,310)>\n  找到 <gem_item_pro 0.976 中心(-315,388)>\n  找到 <gem_item_argon 0.982 中心(-315,467)>\n{\"writer\": \"dialog\", \"model\": \"argon\", \"ink\": {\"flash_lite\": 0, \"flash\": 0, \"pro\": 0, \"argon\": 40}}\n",
+    "stderr": "",
+    "seconds": 5.37
+  },
+  {
+    "case": "gemini_use:live",
+    "ok": false,
+    "returncode": 1,
+    "stdout": "资源库就绪：8/8 张\n[等待] 你正在用电脑（空闲 0.7s < 2s），最多等你 15s 停手…\n[继续] 已空闲 2.2s，开始执行。\n  复用窗口 hwnd=3280516（当前已是 gemini）\n  找到 <gem_writer_tabs_dialog 1.000 中心(-570,245)>\n{\"ok\": false, \"submission\": \"not_sent\", \"sent\": false, \"stage\": \"draft_present\", \"hint\": \"当前输入框已有草稿\", \"elapsed\": 1.9, \"mode\": \"new\"}\n",
+    "stderr": "",
+    "seconds": 3.88,
+    "expected_reply": "BR009-20261030-001503-gemini-OK"
+  },
+  {
+    "case": "chatgpt_choose:live",
+    "ok": true,
+    "returncode": 0,
+    "stdout": "资源库就绪：15/15 张\n[等待] 你正在用电脑（空闲 1.6s < 2s），最多等你 15s 停手…\n[继续] 已空闲 2.0s，开始执行。\n  复用窗口 hwnd=3280516（当前已是 chatgpt）\n  找到 <gpt_tab_chat_word 1.000 中心(-614,-413)>\n  找到 <gpt_tab_work_word 1.000 中心(-514,-413)>\n  没找到 gpt_check（最高 0.641 / 阈值 0.85）\n  没找到 gpt_wm2_default（最高 0.567 / 阈值 0.85）\n  没找到 gpt_wm2_gpt61_sol（最高 0.535 / 阈值 0.85）\n  没找到 gpt_wm2_gpt61_terra（最高 0.552 / 阈值 0.85）\n  没找到 gpt_wm2_gpt6_astra（最高 0.839 / 阈值 0.85）\n  没找到 gpt_wm2_gpt6_sol（最高 0.599 / 阈值 0.85）\n  没找到 gpt_wm2_gpt6_luna（最高 0.612 / 阈值 0.85）\n  没找到 gpt_wm2_gpt56_sol（最高 0.507 / 阈值 0.85）\n  没找到 gpt_wm2_gpt56_terra（最高 0.472 / 阈值 0.85）\n  没找到 gpt_wm2_gpt56_luna（最高 0.476 / 阈值 0.85）\n  没找到 gpt_check（最高 0.641 / 阈值 0.85）\n  没找到 gpt_wm2_default（最高 0.567 / 阈值 0.85）\n  没找到 gpt_wm2_gpt61_sol（最高 0.535 / 阈值 0.85）\n  没找到 gpt_wm2_gpt61_terra（最高 0.552 / 阈值 0.85）\n  没找到 gpt_wm2_gpt6_astra（最高 0.839 / 阈值 0.85）\n  没找到 gpt_wm2_gpt6_sol（最高 0.599 / 阈值 0.85）\n  没找到 gpt_wm2_gpt6_luna（最高 0.612 / 阈值 0.85）\n  没找到 gpt_wm2_gpt56_sol（最高 0.507 / 阈值 0.85）\n  没找到 gpt_wm2_gpt56_terra（最高 0.472 / 阈值 0.85）\n  没找到 gpt_wm2_gpt56_luna（最高 0.476 / 阈值 0.85）\n  找到 <gpt_tab_chat_word 1.000 中心(-614,-413)>\n  找到 <gpt_composer 0.993 中心(-913,186)>\n  找到 <gpt_check 1.000 中心(-229,360)>\n  找到 <gpt_check 1.000 中心(-229,360)>\n  找到 <gpt_wm2_default 1.000 中心(-422,238)>\n  找到 <gpt_wm2_gpt61_sol 1.000 中心(-422,287)>\n  找到 <gpt_wm2_gpt61_terra 1.000 中心(-422,323)>\n  找到 <gpt_wm2_gpt6_astra 1.000 中心(-422,359)>\n  找到 <gpt_wm2_gpt6_sol 1.000 中心(-422,395)>\n  找到 <gpt_wm2_gpt6_luna 1.000 中心(-422,431)>\n  找到 <gpt_wm2_gpt56_sol 1.000 中心(-422,467)>\n  找到 <gpt_wm2_gpt56_terra 1.000 中心(-422,503)>\n  没找到 gpt_wm2_gpt56_luna（最高 0.760 / 阈值 0.85）\n  找到 <gpt_check 1.000 中心(-229,360)>\n  找到 <gpt_wm2_default 1.000 中心(-422,238)>\n  找到 <gpt_wm2_gpt61_sol 1.000 中心(-422,287)>\n  找到 <gpt_wm2_gpt61_terra 1.000 中心(-422,323)>\n  找到 <gpt_wm2_gpt6_astra 1.000 中心(-422,359)>\n  找到 <gpt_wm2_gpt6_sol 1.000 中心(-422,395)>\n  找到 <gpt_wm2_gpt6_luna 1.000 中心(-422,431)>\n  找到 <gpt_wm2_gpt56_sol 1.000 中心(-422,467)>\n  找到 <gpt_wm2_gpt56_terra 1.000 中心(-422,503)>\n  没找到 gpt_wm2_gpt56_luna（最高 0.760 / 阈值 0.85）\n  找到 <gpt_check 1.000 中心(-229,360)>\n  没找到 gpt_check（最高 0.656 / 阈值 0.85）\n  没找到 gpt_wm2_default（最高 0.567 / 阈值 0.85）\n  没找到 gpt_wm2_gpt61_sol（最高 0.535 / 阈值 0.85）\n  没找到 gpt_wm2_gpt61_terra（最高 0.552 / 阈值 0.85）\n  没找到 gpt_wm2_gpt6_astra（最高 0.839 / 阈值 0.85）\n  没找到 gpt_wm2_gpt6_sol（最高 0.599 / 阈值 0.85）\n  没找到 gpt_wm2_gpt6_luna（最高 0.612 / 阈值 0.85）\n  没找到 gpt_wm2_gpt56_sol（最高 0.507 / 阈值 0.85）\n  没找到 gpt_wm2_gpt56_terra（最高 0.472 / 阈值 0.85）\n  没找到 gpt_wm2_gpt56_luna（最高 0.476 / 阈值 0.85）\n  没找到 gpt_check（最高 0.656 / 阈值 0.85）\n  没找到 gpt_wm2_default（最高 0.567 / 阈值 0.85）\n  没找到 gpt_wm2_gpt61_sol（最高 0.535 / 阈值 0.85）\n  没找到 gpt_wm2_gpt61_terra（最高 0.552 / 阈值 0.85）\n  没找到 gpt_wm2_gpt6_astra（最高 0.839 / 阈值 0.85）\n  没找到 gpt_wm2_gpt6_sol（最高 0.599 / 阈值 0.85）\n  没找到 gpt_wm2_gpt6_luna（最高 0.612 / 阈值 0.85）\n  没找到 gpt_wm2_gpt56_sol（最高 0.507 / 阈值 0.85）\n  没找到 gpt_wm2_gpt56_terra（最高 0.472 / 阈值 0.85）\n  没找到 gpt_wm2_gpt56_luna（最高 0.476 / 阈值 0.85）\n  找到 <gpt_tab_chat_word 1.000 中心(-614,-413)>\n  找到 <gpt_composer 0.993 中心(-913,186)>\n  没找到 gpt_check（最高 0.656 / 阈值 0.85）\n  没找到 gpt_wm2_default（最高 0.567 / 阈值 0.85）\n  没找到 gpt_wm2_gpt61_sol（最高 0.314 / 阈值 0.85）\n  没找到 gpt_wm2_gpt61_terra（最高 0.317 / 阈值 0.85）\n  没找到 gpt_wm2_gpt6_astra（最高 0.308 / 阈值 0.85）\n  没找到 gpt_wm2_gpt6_sol（最高 0.329 / 阈值 0.85）\n  没找到 gpt_wm2_gpt6_luna（最高 0.331 / 阈值 0.85）\n  没找到 gpt_wm2_gpt56_sol（最高 0.315 / 阈值 0.85）\n  没找到 gpt_wm2_gpt56_terra（最高 0.291 / 阈值 0.85）\n  没找到 gpt_wm2_gpt56_luna（最高 0.327 / 阈值 0.85）\n  没找到 gpt_check（最高 0.656 / 阈值 0.85）\n  没找到 gpt_wm2_default（最高 0.567 / 阈值 0.85）\n  没找到 gpt_wm2_gpt61_sol（最高 0.535 / 阈值 0.85）\n  没找到 gpt_wm2_gpt61_terra（最高 0.552 / 阈值 0.85）\n  没找到 gpt_wm2_gpt6_astra（最高 0.839 / 阈值 0.85）\n  没找到 gpt_wm2_gpt6_sol（最高 0.599 / 阈值 0.85）\n  没找到 gpt_wm2_gpt6_luna（最高 0.612 / 阈值 0.85）\n  没找到 gpt_wm2_gpt56_sol（最高 0.507 / 阈值 0.85）\n  没找到 gpt_wm2_gpt56_terra（最高 0.472 / 阈值 0.85）\n  没找到 gpt_wm2_gpt56_luna（最高 0.476 / 阈值 0.85）\n{\"writer\": \"work\", \"ink\": {\"chat\": 93, \"work\": 13}, \"at\": {\"chat\": [-650, -426, 72, 26], \"work\": [-550, -426, 72, 26]}, \"model\": \"gpt6_astra\", \"dist\": {\"default\": 122, \"gpt61_sol\": 73, \"gpt61_terra\": 37, \"gpt6_astra\": 1, \"gpt6_sol\": 35, \"gpt6_luna\": 71, \"gpt56_sol\": 107, \"gpt56_terra\": 143}, \"effort\": \"high\", \"effort_label\": \"高\", \"effort_knob\": 1103, \"effort_off\": 6, \"effort_tol\": 20, \"effort_at_min\": false}\n",
+    "stderr": "",
+    "seconds": 16.28
+  },
+  {
+    "case": "chatgpt_use:live",
+    "ok": false,
+    "returncode": 1,
+    "stdout": "资源库就绪：5/5 张\n[等待] 你正在用电脑（空闲 1.6s < 2s），最多等你 15s 停手…\n[继续] 已空闲 2.4s，开始执行。\n  复用窗口 hwnd=3280516（当前已是 chatgpt）\n{\"ok\": false, \"submission\": \"unknown\", \"sent\": null, \"stage\": \"interrupted\", \"hint\": \"(-2147220991, '事件无法调用任何订户', (None, None, None, 0, None))\", \"elapsed\": 3.1, \"mode\": \"new\"}\n",
+    "stderr": "",
+    "seconds": 4.24,
+    "expected_reply": "BR009-20261030-001503-chatgpt-OK"
+  },
+  {
+    "case": "workbuddy_choose:live",
+    "ok": true,
+    "returncode": 0,
+    "stdout": "[等待] 你正在用电脑（空闲 0.7s < 2s），最多等你 15s 停手…\n[继续] 已空闲 2.3s，开始执行。\n  复用已有 workbuddy 窗口 hwnd=67458\n{\"ok\": true, \"model\": \"GLM-5.3\"}\n",
+    "stderr": "",
+    "seconds": 2.91
+  },
+  {
+    "case": "workbuddy_use:live",
+    "ok": false,
+    "returncode": 1,
+    "stdout": "  复用已有 workbuddy 窗口 hwnd=67458\n{\"ok\": false, \"submission\": \"unknown\", \"sent\": null, \"stage\": \"ambiguous_submission\"}\n",
+    "stderr": "",
+    "seconds": 3.64,
+    "expected_reply": "BR009-20261030-001503-workbuddy-OK"
+  },
+  {
+    "case": "opencode_choose:live",
+    "ok": true,
+    "returncode": 0,
+    "stdout": "启动 opencode …\n{\"model\": \"unknown\", \"score\": 0.399, \"hint\": \"这个模型没有强度芯片\", \"effort\": \"none\", \"chevrons\": 0}\n",
+    "stderr": "",
+    "seconds": 3.31
+  },
+  {
+    "case": "opencode_use:live",
+    "ok": false,
+    "returncode": 1,
+    "stdout": "{\"ok\": false, \"submission\": \"unknown\", \"sent\": null, \"stage\": \"interrupted\", \"hint\": \"(-2147220991, '事件无法调用任何订户', (None, None, None, 0, None))\"}\n",
+    "stderr": "",
+    "seconds": 2.77,
+    "expected_reply": "BR009-20261030-001503-opencode-OK"
+  },
+  {
+    "case": "dsh_choose:live",
+    "ok": true,
+    "returncode": 0,
+    "stdout": "{\"model\": \"deepseek_v41_flash\", \"score\": 0.972, \"effort\": \"max\", \"label\": \"Max\", \"effort_score\": 0.882}\n",
+    "stderr": "",
+    "seconds": 2.95
+  },
+  {
+    "case": "dsh_use:live",
+    "ok": false,
+    "returncode": 1,
+    "stdout": "{\"ok\": false, \"submission\": \"accepted\", \"sent\": true, \"stage\": \"conversation_changed\"}\n",
+    "stderr": "",
+    "seconds": 3.15,
+    "expected_reply": "BR009-20261030-001503-dsh-OK"
+  },
+  {
+    "case": "codex_choose:live",
+    "ok": true,
+    "returncode": 0,
+    "stdout": "{\"knob\": 1115, \"track\": [925, 1169], \"frac\": 0.779, \"effort\": \"max\", \"label\": \"Max\", \"from\": \"text\", \"model\": \"gpt6_astra\", \"dist\": 0}\n",
+    "stderr": "",
+    "seconds": 6.2
+  },
+  {
+    "case": "codex_use:live",
+    "ok": false,
+    "returncode": 1,
+    "stdout": "{\"ok\": false, \"submission\": \"unknown\", \"sent\": null, \"stage\": \"interrupted\", \"hint\": \"(-2147220991, '事件无法调用任何订户', (None, None, None, 0, None))\"}\n",
+    "stderr": "",
+    "seconds": 6.34,
+    "expected_reply": "BR009-20261030-001503-codex-OK"
+  }
+]

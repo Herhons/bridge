@@ -443,15 +443,8 @@ class Desk:
 
     def _assert_fg(self):
         fg = user32.GetForegroundWindow()
-        if fg == self.hwnd:
-            return
-        # 被别的程序抢回前台时，**先自己抢一次**再判断，不直接放弃。
-        # 只重试一次：真抢不回来（用户正在操作那个窗口）就抛，绝不硬点。
-        if activate(self.hwnd, tries=2) and user32.GetForegroundWindow() == self.hwnd:
-            return
-        raise RuntimeError(
-            f"目标窗口不在前台（前台={user32.GetForegroundWindow()}，目标={self.hwnd}），"
-            "已中止")
+        if fg != self.hwnd:
+            raise RuntimeError(f"目标窗口不在前台（前台={fg}，目标={self.hwnd}），已中止")
 
     def click(self, x, y):
         self._assert_fg()
@@ -521,15 +514,18 @@ class Desk:
             _anonymous_ = ("u",)
             _fields_ = [("type", ctypes.c_uint), ("u", _U)]
 
-        for ch in text:
+        for ch in text.replace("\r\n", "\n").replace("\r", "\n"):
+            self._assert_fg()
             if ch == "\n":
-                self.press("enter")
+                self.hotkey("shift", "enter")
                 continue
-            code = ord(ch)
-            for flags in (0x0004, 0x0004 | 0x0002):
-                inp = _IN(type=1, u=_U(ki=_K(0, code, flags, 0, 0)))
-                user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(_IN))
-                time.sleep(interval)
+            encoded = ch.encode("utf-16-le")
+            for i in range(0, len(encoded), 2):
+                code = int.from_bytes(encoded[i:i + 2], "little")
+                for flags in (0x0004, 0x0004 | 0x0002):
+                    inp = _IN(type=1, u=_U(ki=_K(0, code, flags, 0, 0)))
+                    user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(_IN))
+                    time.sleep(interval)
         self._invalidate()
 
     def set_clipboard(self, text):
@@ -1359,7 +1355,6 @@ def main():
         print(json.dumps({"ok": False, "stage": "controls_not_found",
                           "missing": pm["missing"]}, ensure_ascii=False))
         return 1
-    rc = 0
 
     try:
         if a.list:
@@ -1404,16 +1399,18 @@ def main():
         if a.model:
             r = set_model(d, win, a.model)
             print(json.dumps(r, ensure_ascii=False))
-            rc = 0 if r.get("ok") else 1
+            if not r.get("ok"):
+                return 1
         if a.effort:
             r = set_effort(d, win, a.effort)
             print(json.dumps(r, ensure_ascii=False))
-            rc = 0 if r.get("ok") else 1
+            if not r.get("ok"):
+                return 1
     except RuntimeError as e:
         print(json.dumps({"ok": False, "stage": "aborted", "hint": str(e)},
                          ensure_ascii=False))
         return 4
-    return rc
+    return 0
 
 
 if __name__ == "__main__":

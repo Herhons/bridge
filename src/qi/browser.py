@@ -185,7 +185,8 @@ def _wait_ready(hwnd: int, timeout: float = 15.0) -> bool:
 
 def _open_url(hwnd: int, url: str, wait: float = 1.2) -> None:
     """在已有窗口里开一个标签。Chrome 会把它开在最后并切过去。"""
-    _focus(hwnd)
+    if not _focus(hwnd):
+        raise RuntimeError("浏览器窗口无法获得焦点")
     shell32.ShellExecuteW(None, "open", CHROME, url, None, SW_SHOWMINNOACTIVE)
     time.sleep(wait)
     _wait_ready(hwnd)
@@ -226,29 +227,84 @@ def _spawn(url: str, position, size, timeout: float, verbose: bool) -> int | Non
     return hwnd
 
 
-def ensure_site(name: str, *, position=DEFAULT_POS, size=DEFAULT_SIZE,
+def ensure_site(name: str, *, tab: int | None = None, continue_session: bool = False,
+                position=DEFAULT_POS, size=DEFAULT_SIZE,
                 timeout: float = 25.0, verbose: bool = True) -> int | None:
-    """确保有一个窗口，且当前标签是 name 对应的站点。返回窗口句柄。"""
+    """绑定实际站点 URL。续聊只选择现有标签，绝不打开首页。"""
     from .audio import chrome_playing_audio
+    from . import ui
+    from .screen import Screen
+    from urllib.parse import urlsplit
 
     if name not in SITES:
         raise KeyError(f"未知站点 {name}，可选 {list(SITES)}")
     url, keyword = SITES[name]
 
+    def correct_page(hwnd):
+        return any(urlsplit(value).hostname == ui.HOSTS[name]
+                   for _, value in ui.documents(hwnd))
+
+    def await_page(hwnd, seconds=12.0):
+        """等页面真的变成目标站。
+
+        标签页标题会被会话名替换（ChatGPT 的标题曾经是「回归测试标记」），
+        所以「按标题找不到」不能推出「这个站没开着」；新开的标签也不是
+        立刻就能读到 URL。这里统一按 URL 轮询。
+        """
+        end = time.monotonic() + seconds
+        while time.monotonic() < end:
+            if correct_page(hwnd):
+                return True
+            time.sleep(0.5)
+        return False
+
+    def select_existing(hwnd):
+        s = Screen(verbose=verbose)
+        s.bind(hwnd)
+        if not s.focus():
+            return False
+        if tab is None and correct_page(hwnd):
+            return True
+        items = ui.tabs(hwnd)
+        if tab is not None:
+            if not 1 <= tab <= len(items):
+                return False
+            target = items[tab - 1]
+        else:
+            matches = [item for item in items if keyword in item.name.lower()]
+            if len(matches) != 1:
+                # 标题常常已经变成会话名：挨个试，命中 URL 就算（别去开重复标签）
+                others = [k for s2, (_, k) in SITES.items() if s2 != name]
+                for item in items:
+                    if any(k in item.name.lower() for k in others):
+                        continue
+                    item.control.GetSelectionItemPattern().Select()
+                    if await_page(hwnd, 3.0):
+                        return True
+                return False
+            target = matches[0]
+        target.control.GetSelectionItemPattern().Select()
+        return await_page(hwnd, timeout)
+
     old = current()
     if old:
-        place(old, position, size)
-        if keyword in _title(old).lower():
+        if select_existing(old):
             if verbose:
                 print(f"  复用窗口 hwnd={old}（当前已是 {name}）")
             _save(old, name)
             return old
+        if continue_session or tab is not None:
+            return None
         if verbose:
             print(f"  复用窗口 hwnd={old}，在里面开 {name}")
         _open_url(old, url)
+        if not await_page(old):
+            return None
         _save(old, name)
         return old
 
+    if continue_session or tab is not None:
+        return None
     playing = chrome_playing_audio()
     if verbose:
         print(f"  Chrome 在播音频: {playing}")
@@ -262,12 +318,15 @@ def ensure_site(name: str, *, position=DEFAULT_POS, size=DEFAULT_SIZE,
                 print(f"  没在播放 → 复用副屏上已有的 Chrome hwnd={target} 开 {name}")
             place(target, position, size)
             _open_url(target, url)
+            if not await_page(target):
+                return None
             _save(target, name)
             return target
         if verbose and target:
             print("  现有 Chrome 在主屏，不动它 → 新开窗口")
 
     hwnd = _spawn(url, position, size, timeout, verbose)
-    if hwnd:
+    if hwnd and await_page(hwnd):
         _save(hwnd, name)
-    return hwnd
+        return hwnd
+    return None

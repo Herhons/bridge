@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import sys
@@ -27,10 +28,11 @@ _SRC = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _SRC not in sys.path:
     sys.path.insert(0, _SRC)
 
-from qi import Library, Screen  # noqa: E402
+from qi import ForegroundLost, Library, Screen  # noqa: E402
 from qi import guard  # noqa: E402
 from qi.browser import ensure_site  # noqa: E402
-from qi.choose import Chooser, cli, open_menu, read_writer  # noqa: E402
+from qi.choose import Chooser, choose_writer, read_writer  # noqa: E402
+from qi.flow import Site, _open_new_chat  # noqa: E402
 
 CFG = Chooser(
     name="gemini",
@@ -142,85 +144,75 @@ REQUIRED = ([f"gem_item_{k}" for k in CFG.options]
 
 def main() -> int:
     need, wait, force, argv = guard.parse_guard_args(list(sys.argv[1:]))
-    if not guard.guard(need, wait, force):
-        return 4
-    # --think 走单独的流程（子菜单维度），其余交给通用 cli
-    if "--model" in argv:
-        i = argv.index("--model")
-        if i + 1 >= len(argv):
-            print("--model 缺值；可选：", ", ".join(CFG.options))
-            return 2
-        key = argv[i + 1].strip().lower()
-        rest = argv[:i] + argv[i + 2:]
-        sc = Screen()
-        hwnd = ensure_site("gemini")
-        if hwnd is None:
-            print("开不出浏览器窗口"); return 1
-        sc.bind(hwnd)
-        if not sc.focus():
-            print("窗口提不到前台"); return 1
-        time.sleep(1.2)
-        # --tab 不再生效：ensure_site 保证当前标签就是目标页
-        r = set_model(sc, key)
-        print(json.dumps(r, ensure_ascii=False))
-        return 0 if r.get("ok") else 1
-
-    if "--think" in argv:
-        # 实测：思考等级子菜单点一下会把整个菜单关掉，悬停也不触发（鼠标瞬移不产生 hover）。
-        # 与其留一个永远失败的开关，不如明确说不支持。
+    parser = argparse.ArgumentParser(description="选择 Gemini 写入器和模型，不发送消息")
+    parser.add_argument("--list", "-l", action="store_true", help="读取当前模式和模型")
+    parser.add_argument("--new", action="store_true", help="先开新对话")
+    parser.add_argument("--writer", choices=CFG.writers, type=str.lower)
+    parser.add_argument("--model", choices=CFG.options, type=str.lower)
+    parser.add_argument("--think", help="思考等级（当前未实现）")
+    parser.add_argument("--tab", type=int, choices=range(1, 10))
+    args = parser.parse_args(argv)
+    if args.list and (args.writer is not None or args.model is not None or args.think is not None):
+        parser.error("--list 不能与 --writer、--model、--think 同用；--new --list 可以同用")
+    if not (args.list or args.new or args.writer or args.model or args.think):
+        parser.print_help()
+        return 2
+    if args.think is not None:
         print(json.dumps({"ok": False, "stage": "not_supported",
-                          "hint": "Gemini 思考等级未支持：子菜单只在鼠标真实悬停时展开，脚本点不开。"
-                                  "需要的话请在网页上手动选。"}, ensure_ascii=False))
+                          "hint": "Gemini 思考等级尚未实现"}, ensure_ascii=False))
         return 1
 
-    if "--list" in argv:
-        sc = Screen()
-        hwnd = ensure_site("gemini")
-        if hwnd is None:
-            print("开不出浏览器窗口"); return 1
-        sc.bind(hwnd)
-        if not sc.focus():
-            print("窗口提不到前台"); return 1
-        time.sleep(1.2)
-        # --tab 不再生效：ensure_site 保证当前标签就是目标页
-        # 读状态不改页面。模式按钮只在新对话页出现，会话页里读不到是正常的。
-        w = read_writer(sc, CFG).get("writer")
-        out = {"writer": w}
-        out.update(read_model(sc))
-        if w in (None, "unknown"):
-            out["note"] = "模式按钮只在新对话页出现（当前在会话页）。用 --new 先开新对话再读；本命令不替你重置会话。"
-        print(json.dumps(out, ensure_ascii=False))
-        return 0
-
-    if "--new" in argv:
-        # 显式要求：先开新对话，再读/切模式
-        sc = Screen()
-        hwnd = ensure_site("gemini")
-        if hwnd is None:
-            print("开不出浏览器窗口"); return 1
-        sc.bind(hwnd)
-        if not sc.focus():
-            print("窗口提不到前台"); return 1
-        time.sleep(1.2)
-        # --tab 不再生效：ensure_site 保证当前标签就是目标页
-        from qi.flow import Site, _open_new_chat
-        site = Site(name="gemini", title_hint=CFG.title_hint, composer="gem_composer",
-                    send="gem_send_on", actions="gem_actions", copy="gem_copy",
-                    composer_offset=(200, 0), newchat="gem_newchat")
-        r = _open_new_chat(sc, site)
-        time.sleep(1.2)
-        rest = [a for a in argv if a != "--new"]
-        if not any(a.startswith("--model") or a.startswith("--writer") for a in rest):
-            print(json.dumps({"newchat": r, "writer": read_writer(sc, CFG).get("writer")},
-                             ensure_ascii=False))
-            return 0 if r.get("ok") else 1
-        return cli(CFG, rest)
-
     lib = Library()
-    print(lib.report(REQUIRED))
-    if lib.missing(REQUIRED):
+    required = REQUIRED + (["gem_newchat"] if args.new else [])
+    print(lib.report(required))
+    if lib.missing(required):
         return 3
-    return cli(CFG, sys.argv[1:])
+    if not guard.guard(need, wait, force):
+        return 4
+    sc = Screen()
+    hwnd = ensure_site("gemini", tab=args.tab)
+    if hwnd is None:
+        print("没有可操作的 Gemini 标签页")
+        return 1
+    sc.bind(hwnd)
+    if not sc.focus():
+        print("窗口提不到前台")
+        return 1
+    time.sleep(1.2)
+
+    try:
+        if args.new:
+            site = Site(name="gemini", title_hint=CFG.title_hint, composer="gem_composer",
+                        send="gem_send_on", actions="gem_actions", copy="gem_copy",
+                        composer_offset=(200, 0), newchat="gem_newchat")
+            result = _open_new_chat(sc, site)
+            print(json.dumps(result, ensure_ascii=False))
+            if not result["ok"]:
+                return 1
+        if args.list:
+            writer = read_writer(sc, CFG)["writer"]
+            out = {"writer": writer, **read_model(sc)}
+            if writer in (None, "unknown"):
+                out["note"] = "模式按钮只在新对话页出现；可用 --new --list 开新对话后读取。"
+            print(json.dumps(out, ensure_ascii=False))
+            # 模式读不出来也算失败：返回 0 会让验证器把"没读到"记成通过
+            bad = out["model"] == "unknown" or writer in (None, "unknown")
+            return 1 if bad else 0
+        if args.writer is not None:
+            result = choose_writer(sc, CFG, args.writer)
+            print(json.dumps(result, ensure_ascii=False))
+            if not result["ok"]:
+                return 1
+        if args.model is not None:
+            result = set_model(sc, args.model)
+            print(json.dumps(result, ensure_ascii=False))
+            if not result["ok"]:
+                return 1
+    except ForegroundLost as exc:
+        print(json.dumps({"ok": False, "stage": "user_took_over", "hint": str(exc)},
+                         ensure_ascii=False))
+        return 4
+    return 0
 
 
 if __name__ == "__main__":

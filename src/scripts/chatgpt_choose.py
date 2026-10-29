@@ -42,6 +42,7 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import sys
@@ -936,65 +937,28 @@ def set_model(s: Screen, key: str) -> dict:
 
 # ---------------------------------------------------------------- CLI
 def main() -> int:
-    name = os.path.basename(__file__)
     idle_need, idle_wait, force, args = guard.parse_guard_args(list(sys.argv[1:]))
-    want_model, want_writer, tab, bad = None, None, None, []
-    do_list = "--list" in args or "-l" in args
-
-    def take(flag):
-        i = args.index(flag)
-        if i + 1 >= len(args):
-            bad.append(f"{flag} 缺值")
-            return None
-        return args[i + 1].strip().lower()
-
-    if "--model" in args:
-        want_model = take("--model")
-    if "--writer" in args:
-        want_writer = take("--writer")
-    if "--tab" in args:
-        raw = take("--tab")
-        if raw is not None:
-            try:
-                tab = int(raw)
-            except ValueError:
-                bad.append("--tab 要数字")
-    want_effort = None
-    if "--effort" in args:
-        want_effort = take("--effort")
-
-    if bad:
-        print("参数有问题：", bad)
+    parser = argparse.ArgumentParser(description="选择 ChatGPT 模式、模型和强度，不发送消息")
+    parser.add_argument("--list", "-l", action="store_true", help="读取当前状态")
+    parser.add_argument("--new", action="store_true", help="先开新对话")
+    parser.add_argument("--writer", choices=TAB_WORDS, type=str.lower)
+    parser.add_argument("--model", choices=sorted({key for items in MODELS.values() for key in items}),
+                        type=str.lower)
+    parser.add_argument("--effort", choices=sorted({key for items in EFFORTS.values() for key in items}),
+                        type=str.lower)
+    parser.add_argument("--tab", type=int, choices=range(1, 10))
+    options = parser.parse_args(args)
+    do_list = options.list
+    want_model, want_writer, want_effort = options.model, options.writer, options.effort
+    if do_list and any(value is not None for value in (want_model, want_writer, want_effort)):
+        parser.error("--list 不能与 --writer、--model、--effort 同用；--new --list 可以同用")
+    if not (do_list or options.new or want_model or want_writer or want_effort):
+        parser.print_help()
         return 2
-    if not do_list and want_model is None and want_writer is None and want_effort is None:
-        print("用法：")
-        print(f"  python {name} --list [--tab N]")
-        print(f"  python {name} --writer chat|work")
-        print(f"  python {name} --model <名字>      （模型分模式，先定 --writer）")
-        print(f"  python {name} --effort low|mid|high|xhigh|max")
-        print("    强度滑杆是单独一步：开弹层(滑杆+模型名) -> 点模型名进列表 -> 选完自动回滑杆 -> 拖档位 -> Esc 生效")
-        print("  --tab N  先切到第 N 个标签页（左边数）")
-        print("  --idle 2 / --wait 120 / --force   你正在用电脑时是否等待")
-        for wr, items in MODELS.items():
-            print(f"    [{wr}] " + ", ".join(f"{k}({d})" for k, (d, _t) in items.items()))
-        for wr, tab in EFFORTS.items():
-            print(f"    [{wr}] 强度 " + ", ".join(f"{k}({v[0]})" for k, v in tab.items()))
-        return 2
-    if want_writer is not None and want_writer not in TAB_WORDS:
-        print(f"没有这个模式：{want_writer}；可选 {', '.join(TAB_WORDS)}")
-        return 2
-    if want_effort is not None and not any(want_effort in v for v in EFFORTS.values()):
-        print(f"没有这个强度：{want_effort}")
-        for wr, tab in EFFORTS.items():
-            print(f"  [{wr}] " + ", ".join(f"{k}({v[0]})" for k, v in tab.items()))
-        return 2
-    if want_model is not None:
-        known = set(MODELS["chat"]) | set(MODELS["work"])
-        if want_model not in known:
-            print(f"没有这个模型：{want_model}")
-            for wr, items in MODELS.items():
-                print(f"  [{wr}] " + ", ".join(items))
-            return 2
+    if want_writer is not None and want_model is not None and want_model not in MODELS[want_writer]:
+        parser.error(f"模型 {want_model} 不属于 {want_writer} 模式")
+    if want_writer is not None and want_effort is not None and want_effort not in EFFORTS[want_writer]:
+        parser.error(f"强度 {want_effort} 不属于 {want_writer} 模式")
 
     lib = Library()
     need = ([COMPOSER, CHECK]
@@ -1007,7 +971,7 @@ def main() -> int:
     if not guard.guard(idle_need, idle_wait, force):
         return 4
     s = Screen()
-    hwnd = ensure_site("chatgpt")
+    hwnd = ensure_site("chatgpt", tab=options.tab)
     if hwnd is None:
         print("开不出浏览器窗口（检查 Chrome 路径）")
         return 1
@@ -1016,19 +980,18 @@ def main() -> int:
         print("窗口提不到前台")
         return 1
     time.sleep(1.2)
-    # --tab 不再生效：ensure_site 保证当前标签就是要操作的那个页面，
-    # 再切一下反而会把目标页切走。参数保留只为兼容旧命令。
-    _ = tab
-
     try:
-        if want_writer is not None:
+        if options.new or want_writer is not None:
             # 模式按钮只在新对话页出现，所以切模式前先确保在新页
             _NEWCHAT = Site(name="chatgpt", title_hint=TITLE, composer="gpt_composer",
                             send="gpt_send_on", actions="gpt_actions", copy="gpt_copy",
                             composer_offset=(240, -5),
                             newchat=("gpt_newchat", "gpt_newchat_icon"), sidebar="gpt_sidebar",
                             send_mode="exists")
-            _open_new_chat(s, _NEWCHAT)
+            result = _open_new_chat(s, _NEWCHAT)
+            print(json.dumps(result, ensure_ascii=False))
+            if not result["ok"]:
+                return 1
             time.sleep(1.0)
 
         if do_list:
@@ -1043,18 +1006,18 @@ def main() -> int:
                 out["effort"] = eff.pop("effort")
                 out.update({f"effort_{k}": v for k, v in eff.items()})
             print(json.dumps(out, ensure_ascii=False))
-            return 0
+            return 0 if out.get("writer") not in (None, "unknown") else 1
 
-        rc = 0
         if want_writer is not None:
             r = choose_writer(s, want_writer)
             print(json.dumps(r, ensure_ascii=False))
-            if not r.get("ok"):
-                rc = 1
+            if not r["ok"]:
+                return 1
         if want_model is not None:
             r = set_model(s, want_model)
             print(json.dumps(r, ensure_ascii=False))
-            rc = 0 if r.get("ok") else 1
+            if not r["ok"]:
+                return 1
 
         if want_effort is not None:
             # 顺序很重要：必须先选模型再调强度。
@@ -1062,13 +1025,14 @@ def main() -> int:
             # 反过来先调强度再选模型，选完还得重开一次弹层。
             r = set_effort(s, want_effort)
             print(json.dumps(r, ensure_ascii=False))
-            rc = 0 if r.get("ok") else 1
+            if not r["ok"]:
+                return 1
     except ForegroundLost as e:
         # 目标窗口被切走/被盖住：立刻停，后面的点击一个都不发
         print(json.dumps({"ok": False, "stage": "user_took_over",
                           "hint": str(e)}, ensure_ascii=False))
         return 4
-    return rc
+    return 0
 
 
 if __name__ == "__main__":

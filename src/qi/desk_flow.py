@@ -62,7 +62,6 @@ class DeskSite:
     # 窗口尺寸是固定的（open_bind 会强制 1380x1340），所以这等价于固定坐标。
     # opencode / workbuddy 的发送键一个是灰环白图标、一个是纯黑，
     # 用颜色筛都会和周围连成一片（实测命中 3 万像素、找不到 30x30 的独立块）。
-    send_rel: tuple[float, float] | None = None
 
     # 相对发送键圆心（窗口内坐标）的偏移
     composer: tuple[int, int] = (-480, -58)   # 点这里让输入框获得焦点
@@ -119,9 +118,6 @@ def locate(s: Screen, site: DeskSite):
     if win is None:
         return None
     send = find_send(s, site, win)
-    if send is None and site.send_rel is not None:
-        # 颜色认不出来就按固定的相对位置取。窗口尺寸固定，所以这是确定的
-        send = (int(win[2] * site.send_rel[0]), int(win[3] * site.send_rel[1]))
     if send is None:
         return None
     sx, sy = send
@@ -165,74 +161,12 @@ def open_bind(name: str, *, position=(-1440, -560), size=(1380, 1340),
 
 def ask(s: Screen, site: DeskSite, prompt: str, *, timeout: float = 180.0,
         prepare=None, verbose: bool = True) -> dict:
-    """提一个问题并取回回答。
-
-    步骤和网页端一致：新对话 → 点输入框 → 全选清除 → 输入 → 等发送键可用 →
-    发送 → 等生成结束 → 找动作条的复制 → 比剪贴板。
-
-    每一步失败都**明确返回 stage**，不猜、不重试到底。
-    """
-    out = {"ok": False, "site": site.name}
-    pos = locate(s, site)
-    if pos is None:
-        out.update(stage="no_send_button",
-                   hint="找不到发送键：可能窗口尺寸不对、或者没登录/停在别的页面")
-        return out
-
+    from .conversation import Conversation, ask as send_and_receive
     if prepare is not None:
-        prepare(s, site, pos)
-
-    # 1) 新对话（有的话）
-    if pos["newchat"] is not None:
-        s.click_xy(*pos["newchat"])
-        time.sleep(0.8)
-        pos = locate(s, site) or pos
-
-    # 2) 点输入框拿焦点。抢之前再确认一次用户没在用电脑
-    if guard.user_active(2.0):
-        out.update(stage="user_took_over", hint="你正在用电脑，已中止")
-        return out
-    s.click_xy(*pos["composer"])
-    time.sleep(0.4)
-    s.hotkey("ctrl", "a")
-    time.sleep(0.1)
-    s.press("delete")
-    time.sleep(0.15)
-
-    # 3) 输入
-    s.type_text(prompt)
-    time.sleep(0.5)
-
-    # 4) 发送
-    pos = locate(s, site)
-    s.click_xy(*pos["send"])
-    out["sent_at"] = time.time()
-
-    # 5) 等回答：用「复制模板出现」当判据
-    if site.copy_tpl:
-        ok = s.wait_present(site.copy_tpl, timeout=timeout, region=pos["win"])
-        if not ok:
-            out.update(stage="timeout", hint=f"{timeout}s 内没等到复制按钮")
-            return out
-        time.sleep(0.6)
-        hits = s.find_all(site.copy_tpl, threshold=0.85, region=pos["win"])
-        if not hits:
-            out.update(stage="no_copy", hint="复制按钮刚出现又没了")
-            return out
-        # 取最下面那个（最新一条回答）
-        m = max(hits, key=lambda h: h.center[1])
-        s.set_clipboard("__sentinel__")
-        s.click(m)
-        time.sleep(0.8)
-        text = s.clipboard()
-        if text.strip() == "__sentinel__":
-            out.update(stage="clipboard_empty", hint="点了复制但剪贴板没变")
-            return out
-        out.update(ok=True, stage="answered", reply=text.strip(), chars=len(text))
-        return out
-
-    out.update(stage="no_copy_template", hint="这个端没有配置复制模板")
-    return out
+        prepared = prepare(s, site, locate(s, site))
+        if not prepared["ok"]:
+            return {"ok": False, "stage": "prepare_failed", "submission": "not_sent"}
+    return send_and_receive(Conversation(s, site.name), prompt, timeout)
 
 
 def cli(site: DeskSite, argv: list[str] | None = None) -> int:

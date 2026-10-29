@@ -8,7 +8,7 @@
     python dsh_use.py --list                        读当前模型和强度
     python dsh_use.py --model "GPT-6 Luna"          只切模型
     python dsh_use.py --effort max                  只调强度
-    python dsh_use.py --model "GPT-6 Luna" --effort low "问题"
+    python dsh_use.py --model deepseek_v41_flash --effort low "问题"
     python dsh_use.py --probe                       只报模板命中，不点击
 
 **发消息只到"确认发出去"为止**：取回答还缺复制按钮模板（要 hover 才出现），
@@ -51,10 +51,14 @@ EFFORT_LABEL = {"off": "Off", "low": "Low", "high": "High", "max": "Max"}
 EFFORT_ALIAS = {"default": "off", "none": "off", "medium": "high",
                 "mid": "high", "ultra": "max", "xhigh": "max"}
 
-# read_model 的模板库（没覆盖到的模型 read_model 返回 unknown，不影响 --model）
+# 模型选择只接受下列可读回验证的标识或完整显示名
 MODELS = {
     "deepseek_v41_flash": "dsh_m_deepseek",
     "gpt6_luna": "dsh_m_luna",
+}
+MODEL_LABELS = {
+    "deepseek_v41_flash": "DeepSeek-V4.1-Flash",
+    "gpt6_luna": "GPT-6 Luna",
 }
 MODEL_THR = 0.90
 
@@ -288,11 +292,9 @@ class Desk:
         self._cache = (0.0, None)
 
     def _assert_fg(self):
-        if user32.GetForegroundWindow() == self.hwnd:
-            return
-        if activate(self.hwnd, tries=2) and user32.GetForegroundWindow() == self.hwnd:
-            return
-        raise RuntimeError(f"目标窗口不在前台（前台={user32.GetForegroundWindow()}），已中止")
+        fg = user32.GetForegroundWindow()
+        if fg != self.hwnd:
+            raise RuntimeError(f"目标窗口不在前台（前台={fg}，目标={self.hwnd}），已中止")
 
     def click(self, x, y):
         self._assert_fg()
@@ -361,14 +363,18 @@ class Desk:
             _anonymous_ = ("u",)
             _fields_ = [("type", ctypes.c_uint), ("u", _U)]
 
-        for ch in text:
-            code = ord(ch)
-            inp = _IN(1, _U(ki=_K(0, code, 0x0004, 0, 0)))
-            user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(_IN))
-            time.sleep(interval)
-            inp = _IN(1, _U(ki=_K(0, code, 0x0004 | 0x0002, 0, 0)))
-            user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(_IN))
-            time.sleep(interval)
+        for ch in text.replace("\r\n", "\n").replace("\r", "\n"):
+            self._assert_fg()
+            if ch == "\n":
+                self.hotkey("shift", "enter")
+                continue
+            encoded = ch.encode("utf-16-le")
+            for i in range(0, len(encoded), 2):
+                code = int.from_bytes(encoded[i:i + 2], "little")
+                for flags in (0x0004, 0x0004 | 0x0002):
+                    inp = _IN(type=1, u=_U(ki=_K(0, code, flags, 0, 0)))
+                    user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(_IN))
+                    time.sleep(interval)
         self._invalidate()
 
     def tpl(self, name):
@@ -577,14 +583,18 @@ def read_model(d, win):
             bs, best = s, k
     if best is None or bs < MODEL_THR:
         return {"model": "unknown", "score": round(bs, 3),
-                "hint": "模板库没覆盖这个模型名；--model 仍可用（走搜索框）"}
+                "hint": "当前模型无法由模板库识别，不能确认模型选择结果"}
     return {"model": best, "score": round(bs, 3)}
 
 
 def set_model(d, win, name):
     """切模型：点芯片 -> 点「模型」行 -> 面板搜索框输入 -> Enter。"""
-    if not name:
-        return {"ok": False, "stage": "bad_arg"}
+    requested = name.strip().casefold()
+    key = next((key for key, label in MODEL_LABELS.items()
+                if requested in (key.casefold(), label.casefold())), None)
+    if key is None:
+        return {"ok": False, "stage": "unsupported_model", "want": name,
+                "options": MODEL_LABELS}
     rows = open_menu(d, win)
     if not rows:
         return {"ok": False, "stage": "menu_not_open"}
@@ -603,7 +613,7 @@ def set_model(d, win, name):
     time.sleep(0.1)
     d.press("delete")
     time.sleep(0.2)
-    d.type_text(name)
+    d.type_text(MODEL_LABELS[key])
     time.sleep(1.1)
     # 确认字真的进了搜索框：占位文字「搜索模型…」应该消失。
     # 不确认的话，焦点一旦留在页面上，Ctrl+A 会全选整页、字打进页面，
@@ -625,15 +635,9 @@ def set_model(d, win, name):
                 "hint": "回车后面板没关，可能没匹配到；看 debug_shot",
                 "debug_shot": dbg}
     got = read_model(d, win)
-    out = {"ok": True, "want": name, "after": got.get("model"),
-           "score": got.get("score")}
-    if got.get("model") == "unknown":
-        out.update({"verified": False,
-                    "hint": "面板已关，但读不出芯片上的模型名（模板库没覆盖）——"
-                            "请用界面对一眼，别只看这个返回值"})
-    else:
-        out.update({"verified": True})
-    return out
+    ok = got["model"] == key
+    return {"ok": ok, "verified": ok, "want": key, "after": got["model"],
+            "score": got.get("score"), "stage": "done" if ok else "unverified"}
 
 
 def set_effort(d, win, key):
@@ -702,36 +706,15 @@ def send_state(d, win):
 
 
 def ask(d, win, prompt, timeout=180.0):
-    """发一条消息。**只确认发出去了，不取回答**（取回答还缺复制按钮模板）。"""
-    ph = d.find(TPL_PH, 0.85, _band(win))
-    if ph is None:
-        return {"ok": False, "stage": "composer_not_found",
-                "hint": "找不到输入框占位文字（输入框里可能已经有内容）"}
-    d.click(ph[0] + ph[2] // 2, ph[1] + ph[3] // 2)
-    time.sleep(0.4)
-    d.hotkey("ctrl", "a")
-    time.sleep(0.1)
-    d.press("delete")
-    time.sleep(0.2)
-    d.type_text(prompt)
-    time.sleep(0.8)
-    st = send_state(d, win)
-    if st != "ready":
-        dbg = os.path.join(DEBUG_DIR, "dsh_send_not_ready.png")
-        cv2.imwrite(dbg, d.grab(win, fresh=True))
-        return {"ok": False, "stage": "send_not_ready", "state": st,
-                "hint": "输入后发送键没变成可点状态，没敢点", "debug_shot": dbg}
-    m = d.find(TPL_SEND, 0.80, _band(win))
-    d.click(m[0] + m[2] // 2, m[1] + m[3] // 2)
-    t0 = time.time()
-    while time.time() - t0 < 15:
-        time.sleep(0.6)
-        if send_state(d, win) != "ready":
-            break
-    else:
-        return {"ok": False, "stage": "not_sent", "hint": "点了发送但没离开发送态"}
-    return {"ok": False, "stage": "no_copy_template", "sent": True,
-            "hint": "消息已发出，但取回答还没接（缺复制按钮模板）"}
+    from pathlib import Path
+    source = str(Path(__file__).resolve().parents[1])
+    if source not in sys.path:
+        sys.path.insert(0, source)
+    from qi.screen import Screen
+    from qi.conversation import Conversation, ask as send_and_receive
+    screen = Screen(verbose=False)
+    screen.bind(d.hwnd)
+    return send_and_receive(Conversation(screen, "dsh"), prompt, timeout)
 
 
 # ============================================================ CLI
@@ -753,6 +736,7 @@ def probe(d, win):
 def main():
     ap = argparse.ArgumentParser(add_help=True)
     ap.add_argument("prompt", nargs="?", default=None)
+    ap.add_argument("--new", action="store_true", help="先打开一个新对话")
     ap.add_argument("--list", "-l", action="store_true")
     ap.add_argument("--model", default=None)
     ap.add_argument("--effort", default=None)
@@ -805,9 +789,17 @@ def main():
     time.sleep(0.7)
     d.grab(win, fresh=True)
     win = rect_of(hwnd)
-    rc = 0
 
     try:
+        if a.new:
+            from pathlib import Path
+            sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+            from qi.screen import Screen
+            from qi.workbuddy import new_chat
+            screen = Screen(verbose=False)
+            screen.bind(hwnd)
+            new_chat(screen, "dsh")
+            d._invalidate()
         if a.list:
             print(json.dumps(list_state(d, win), ensure_ascii=False))
             return 0
@@ -815,20 +807,23 @@ def main():
         if a.model:
             r = set_model(d, win, a.model)
             print(json.dumps(r, ensure_ascii=False))
-            rc = 0 if r.get("ok") else 1
+            if not r.get("ok"):
+                return 1
         if a.effort:
             r = set_effort(d, win, a.effort)
             print(json.dumps(r, ensure_ascii=False))
-            rc = 0 if r.get("ok") else 1
+            if not r.get("ok"):
+                return 1
         if a.prompt:
             r = ask(d, win, a.prompt, a.timeout)
             print(json.dumps(r, ensure_ascii=False))
-            rc = 0 if r.get("ok") else 1
+            if not r.get("ok"):
+                return 1
     except RuntimeError as e:
         print(json.dumps({"ok": False, "stage": "aborted", "hint": str(e)},
                          ensure_ascii=False))
         return 4
-    return rc
+    return 0
 
 
 if __name__ == "__main__":

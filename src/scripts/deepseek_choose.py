@@ -140,6 +140,8 @@ def main() -> int:
     if o.get("help"):
         usage(name)
         return 0
+    if o["list"] and (o["think"] or o["search"]):
+        o["bad"].append("--list 不能与 --think/--search 同用")
     if o["bad"]:
         print("参数有问题：", o["bad"], "（写错参数不会被当成提问）")
         usage(name)
@@ -153,7 +155,7 @@ def main() -> int:
     if not guard.guard(need, wait, force):
         return 4
     s = Screen()
-    hwnd = ensure_site("deepseek")
+    hwnd = ensure_site("deepseek", tab=o["tab"])
     if hwnd is None:
         print("开不出浏览器窗口（检查 Chrome 路径）")
         return 1
@@ -162,7 +164,6 @@ def main() -> int:
         print("窗口提不到前台")
         return 1
     time.sleep(1.2)
-    # --tab 不再生效：ensure_site 保证当前标签就是目标页
     try:
         if o["list"]:
             print(json.dumps(list_state(s), ensure_ascii=False))
@@ -177,7 +178,7 @@ def main() -> int:
             r = set_state(s, kind, want)
             print(json.dumps(r, ensure_ascii=False))
             if not r.get("ok"):
-                rc = 1
+                return 1
         return rc
     except ForegroundLost as e:
         print("失败:", json.dumps({"ok": False, "stage": "user_took_over",

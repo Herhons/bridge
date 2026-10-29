@@ -496,15 +496,8 @@ class Desk:
 
     def _assert_fg(self):
         fg = user32.GetForegroundWindow()
-        if fg == self.hwnd:
-            return
-        # 被别的程序抢回前台时，**先自己抢一次**再判断，不直接放弃。
-        # 只重试一次：真抢不回来（用户正在操作那个窗口）就抛，绝不硬点。
-        if activate(self.hwnd, tries=2) and user32.GetForegroundWindow() == self.hwnd:
-            return
-        raise RuntimeError(
-            f"目标窗口不在前台（前台={user32.GetForegroundWindow()}，目标={self.hwnd}），"
-            "已中止")
+        if fg != self.hwnd:
+            raise RuntimeError(f"目标窗口不在前台（前台={fg}，目标={self.hwnd}），已中止")
 
     def click(self, x, y):
         self._assert_fg()
@@ -574,15 +567,18 @@ class Desk:
             _anonymous_ = ("u",)
             _fields_ = [("type", ctypes.c_uint), ("u", _U)]
 
-        for ch in text:
+        for ch in text.replace("\r\n", "\n").replace("\r", "\n"):
+            self._assert_fg()
             if ch == "\n":
-                self.press("enter")
+                self.hotkey("shift", "enter")
                 continue
-            code = ord(ch)
-            for flags in (0x0004, 0x0004 | 0x0002):
-                inp = _IN(type=1, u=_U(ki=_K(0, code, flags, 0, 0)))
-                user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(_IN))
-                time.sleep(interval)
+            encoded = ch.encode("utf-16-le")
+            for i in range(0, len(encoded), 2):
+                code = int.from_bytes(encoded[i:i + 2], "little")
+                for flags in (0x0004, 0x0004 | 0x0002):
+                    inp = _IN(type=1, u=_U(ki=_K(0, code, flags, 0, 0)))
+                    user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(_IN))
+                    time.sleep(interval)
         self._invalidate()
 
     def set_clipboard(self, text):
@@ -1291,56 +1287,15 @@ def set_effort(d, win, key):
 # ============================================================ 提问
 
 def ask(d, win, prompt, timeout=180.0):
-    pos = locate(d, win)
-    if pos["missing"]:
-        return {"ok": False, "stage": "controls_not_found", "missing": pos["missing"]}
-    d.click(*pos["composer"])
-    time.sleep(0.4)
-    d.hotkey("ctrl", "a")
-    time.sleep(0.1)
-    d.press("delete")
-    time.sleep(0.15)
-    d.type_text(prompt)
-    time.sleep(0.6)
-    pos = locate(d, win)
-    if "send" not in pos:
-        return {"ok": False, "stage": "no_send_button"}
-    # **必须确认这个橙圆按钮已经是发送箭头**：输入框还空着时它是声波图标
-    # （语音输入），在 cdx_send 上能匹到 0.947，用普通阈值会点成录音。
-    # 输入成功后图标会变成三角（实测 1.000），所以用 0.97 判定。
-    m_send = d.find(SEND_TPL, SEND_THR, _band(win))
-    if m_send is None:
-        dbg = os.path.join(DEBUG_DIR, "codex_send_not_ready.png")
-        cv2.imwrite(dbg, d.grab(win, fresh=True))
-        return {"ok": False, "stage": "send_not_ready",
-                "hint": "打字后发送键没变成三角（可能还是语音图标/字没进去），"
-                        "没敢往下点，免得点成录音",
-                "debug_shot": dbg}
-    d.click(*pos["send"])
-
-    # 点完只确认**发出去了**：橙圆按钮离开「发送三角」状态（0.97 那个判据）。
-    # 发出去之后输入框变空，这个按钮会变成**语音图标**（在 cdx_send 上 0.947），
-    # 所以它既不是三角也不是"消失"，只有用 0.97 才能把"已发送"和"还是发送键"分开。
-    #
-    # **不再假装等生成结束**：原来的写法是等橙圆回到三角，但生成完输入框仍是空的，
-    # 按钮本来就一直是语音图标，永远等不到三角 —— 只会白等到超时。
-    # 真正能判断"生成完了"的锚点是回答上的复制按钮，那个模板还没裁（见文件头限制 3）。
-    t0 = time.time()
-    while time.time() - t0 < 20:
-        time.sleep(0.6)
-        if d.find(SEND_TPL, SEND_THR, _band(win)) is None:
-            break
-    else:
-        dbg = os.path.join(DEBUG_DIR, "codex_not_sent.png")
-        cv2.imwrite(dbg, d.grab(win, fresh=True))
-        return {"ok": False, "stage": "not_sent",
-                "hint": "点了发送但 20s 内按钮没离开发送态，消息可能没发出去",
-                "debug_shot": dbg}
-
-    return {"ok": False, "stage": "need_copy_template", "sent": True,
-            "hint": "消息已发出，但取回答还没接：codex 的复制按钮要 hover 才出现，"
-                    "模板还没裁。等你确认可以发测试文案时再补",
-            "timeout_arg_ignored": timeout != 180.0}
+    from pathlib import Path
+    source = str(Path(__file__).resolve().parents[1])
+    if source not in sys.path:
+        sys.path.insert(0, source)
+    from qi.screen import Screen
+    from qi.conversation import Conversation, ask as send_and_receive
+    screen = Screen(verbose=False)
+    screen.bind(d.hwnd)
+    return send_and_receive(Conversation(screen, "codex"), prompt, timeout)
 
 
 # ============================================================ CLI
@@ -1348,6 +1303,7 @@ def ask(d, win, prompt, timeout=180.0):
 def main():
     ap = argparse.ArgumentParser(add_help=True)
     ap.add_argument("prompt", nargs="?", default=None)
+    ap.add_argument("--new", action="store_true", help="先打开一个新对话")
     ap.add_argument("--list", "-l", action="store_true")
     ap.add_argument("--model", default=None)
     ap.add_argument("--effort", default=None)
@@ -1469,9 +1425,17 @@ def main():
         print(json.dumps({"ok": False, "stage": "controls_not_found",
                           "missing": pm["missing"]}, ensure_ascii=False))
         return 1
-    rc = 0
 
     try:
+        if a.new:
+            from pathlib import Path
+            sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+            from qi.screen import Screen
+            from qi.workbuddy import new_chat
+            screen = Screen(verbose=False)
+            screen.bind(hwnd)
+            new_chat(screen, "codex")
+            d._invalidate()
         if a.list:
             # **只开一次卡片**：先读强度（只有形态 A 有），再点入口行进列表读模型，
             # 最后 Esc 收掉。原来读模型开一次、读强度又开一次，等于开关两遍。
@@ -1514,20 +1478,23 @@ def main():
         if a.model:
             r = set_model(d, win, a.model)
             print(json.dumps(r, ensure_ascii=False))
-            rc = 0 if r.get("ok") else 1
+            if not r.get("ok"):
+                return 1
         if a.effort:
             r = set_effort(d, win, a.effort)
             print(json.dumps(r, ensure_ascii=False))
-            rc = 0 if r.get("ok") else 1
+            if not r.get("ok"):
+                return 1
         if a.prompt:
             r = ask(d, win, a.prompt, a.timeout)
             print(json.dumps(r, ensure_ascii=False))
-            rc = 0 if r.get("ok") else 1
+            if not r.get("ok"):
+                return 1
     except RuntimeError as e:
         print(json.dumps({"ok": False, "stage": "aborted", "hint": str(e)},
                          ensure_ascii=False))
         return 4
-    return rc
+    return 0
 
 
 if __name__ == "__main__":

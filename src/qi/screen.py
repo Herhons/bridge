@@ -462,33 +462,6 @@ class Screen:
         r = mi.rcMonitor
         return (r.left, r.top, r.right - r.left, r.bottom - r.top)
 
-    def wait_quiet(self, *, timeout: float = 120.0, interval: float = 0.7,
-                   tol: float = 0.35, need: int = 2,
-                   region: tuple[int, int, int, int] | None = None) -> bool:
-        """等画面静止下来。
-
-        用来兜"没抓到停止键"的情况：流式输出时画面一直在变，
-        连续 need 帧几乎没变化，就认为生成结束了。
-        不依赖任何模板，所以不会因为换主题/换版本失效。
-
-        region 建议传目标窗口所在显示器：整块虚拟桌面里可能有别的屏在放视频。
-        """
-        prev = self.grab(region)
-        stable = 0
-        end = time.time() + timeout
-        while time.time() < end:
-            time.sleep(interval)
-            cur = self.grab(region)
-            d = float(cv2.absdiff(prev, cur).mean()) if cur.shape == prev.shape else 1.0
-            prev = cur
-            if d < tol:
-                stable += 1
-                if stable >= need:
-                    return True
-            else:
-                stable = 0
-        return False
-
     # ---------------------------------------------------------------- 动作
     def move_to(self, x: int, y: int) -> None:
         """把光标移到屏幕坐标 (x, y)。
@@ -595,10 +568,10 @@ class Screen:
         user32.mouse_event(0x0800, 0, 0, int(notches) * 120, 0)
 
     def type_text(self, text: str, *, interval: float = 0.004) -> None:
-        self._assert_foreground()
-        for ch in text:
+        for ch in text.replace("\r\n", "\n").replace("\r", "\n"):
+            self._assert_foreground()
             if ch == "\n":
-                self.press("enter")
+                self.hotkey("shift", "enter")
                 continue
             code = ord(ch)
             if code > 0xFFFF:

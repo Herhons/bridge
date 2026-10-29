@@ -35,6 +35,7 @@ SITE = Site(
     newchat="grok_newchat",
     sidebar="grok_sidebar",
     send_mode="exists",
+    screen_reply=True,   # Grok 的回答动作条不进控件树（实测 209 个节点里没有复制键）
     send_threshold=0.90,
 )
 

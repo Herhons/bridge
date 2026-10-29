@@ -63,7 +63,10 @@ def _mk_prepare(want: str):
 
 def main() -> int:
     argv = list(sys.argv[1:])
-    want = None
+    want = None if "--continue" in argv else "dialog"
+    if "--task" in argv and "--chat" in argv:
+        print("--task 和 --chat 不能同用")
+        return 2
     if "--task" in argv:
         argv.remove("--task")
         want = "task"
@@ -73,7 +76,8 @@ def main() -> int:
 
     # 模式按钮只在新对话页出现，所以用 --task/--chat 时强制先回新对话页
     if want is not None and "--continue" in argv:
-        argv.remove("--continue")
+        print("当前会话不能切换写入器；使用 --new --task 或 --new --chat")
+        return 2
 
     lib = Library()
     need = list(REQUIRED) + list(WRITER.writer_tabs)
