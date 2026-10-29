@@ -107,6 +107,50 @@ def _voice_center(s: Screen):
     return (win[0] + x + w // 2, win[1] + y + h // 2)
 
 
+
+# ---------------------------------------------------------------- 安全前提
+def page_kind(s: Screen) -> str:
+    """当前是"新聊天页"还是"会话页"。
+
+    **这两页的布局不一样**（用户指出，实测确认）：
+      新聊天页：顶部有「聊天/工作」，大输入框在页面中间，芯片在输入框右下
+      会话页  ：没有「聊天/工作」，输入框在页面底部
+    所以模式按钮只在新聊天页存在；在会话页读它一定是 unknown，
+    拿新聊天页的偏移去会话页点，必然点空甚至点到别的按钮。
+    """
+    if s.find("gpt_tab_chat_word", threshold=0.75) is not None:
+        return "new"
+    return "session"
+
+
+def orange_near(s: Screen, center: tuple[int, int], radius: int = 40) -> int:
+    """目标点周围有多少橙色像素。
+
+    橙色圆钮空输入时是**录音键**、有文字时是**发送键**，绝不能被误点。
+    任何点击之前都先跑这个：>40 就放弃。
+    """
+    x, y = center
+    img = s.grab((x - radius, y - radius, radius * 2, radius * 2))
+    if img.size == 0:
+        return 999
+    b = img[:, :, 0].astype(int)
+    r = img[:, :, 2].astype(int)
+    return int(((r - b > 45) & (r > 145)).sum())
+
+
+def safe_click(s: Screen, target, *, radius: int = 40) -> tuple[bool, str]:
+    """带橙色护盾的点击。返回 (是否点了, 原因)。"""
+    if isinstance(target, tuple):
+        cx, cy = target
+    else:
+        cx, cy = target.center
+    ink = orange_near(s, (cx, cy), radius)
+    if ink > 40:
+        return False, f"目标 {radius}px 内有 {ink} 个橙色像素，疑似录音/发送键，拒绝点击"
+    s.click_xy(cx, cy)
+    return True, "ok"
+
+
 def _models(writer: str) -> dict:
     return MODELS.get(writer, {})
 
@@ -134,6 +178,8 @@ def _open_model_list(s: Screen, writer: str) -> bool:
     """
     if _items_visible(s, writer):
         return True
+    if page_kind(s) != "new":
+        return False       # 会话页没有模式按钮，任何偏移都会点空
     v = _voice_center(s)
     if v is None:
         return False
@@ -143,11 +189,15 @@ def _open_model_list(s: Screen, writer: str) -> bool:
     for _ in range(2):
         s.press("esc")
         time.sleep(0.35)
-        s.click_xy(v[0] + CHIP_DX, v[1] + CHIP_DY)
+        ok, why = safe_click(s, (v[0] + CHIP_DX, v[1] + CHIP_DY))
+        if not ok:
+            return False            # 橙色护盾拦下＝再点就是录音/发送
         time.sleep(0.9)
         if _items_visible(s, writer):
             return True
-        s.click_xy(v[0] + dx, v[1] + dy)
+        ok, why = safe_click(s, (v[0] + dx, v[1] + dy))
+        if not ok:
+            return False
         time.sleep(1.0)
         if _items_visible(s, writer):
             return True
@@ -328,7 +378,9 @@ def choose_writer_gpt(s: Screen, key: str) -> dict:
     if centers is None:
         return {"ok": False, "stage": "tabs_not_found", "before": cur["writer"]}
     x, y = centers[0] if key == "chat" else centers[1]
-    s.click_xy(x, y)
+    ok, why = safe_click(s, (x, y), radius=30)
+    if not ok:
+        return {"ok": False, "stage": "guard_blocked", "detail": why, "before": cur["writer"]}
 
     after, deadline = cur, time.time() + 5.0
     while time.time() < deadline:
