@@ -14,3 +14,12 @@ evidence/
 *.pem
 *.p12
 *.pfx
+
+# B20：合并时补的忽略项（robocopy 会用 WIP 的 .gitignore 覆盖，故两处都要有）
+_selftest/
+_tmp/
+.chrome-window.json
+progress.json.lock
+runs/
+docs/history/checkpoints/
+@AutomationLog.txt
