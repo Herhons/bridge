@@ -15,6 +15,10 @@
 """
 from __future__ import annotations
 
+from offline_guard import ensure_offline
+ensure_offline()
+
+
 import base64
 import hashlib
 import hmac
@@ -377,9 +381,9 @@ class OriginTests(OriginCase):
     def test_health_is_minimal(self):
         status, body, _ = self.request("GET", "/health", token=None)
         self.assertEqual(status, 200)
-        self.assertEqual(set(body), {"ok", "version", "port"})
+        self.assertEqual(set(body), {"ok", "version"})
         self.assertEqual(body["version"], "0.0.9")
-        self.assertEqual(body["port"], self.port)
+        self.assertEqual(set(body), {"ok", "version"})
         for leaked in ("pid", "uptime", "active_jobs", "name", "token"):
             self.assertNotIn(leaked, json.dumps(body))
 

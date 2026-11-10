@@ -1,0 +1,42 @@
+Bridge v0.0.9 · Codex 独立只读复验 · 2026-11-06（北京时间）
+工作目录：F:\Bridge\v0.0.9
+共同回归命令：py -3.10 -X utf8 -B -m unittest discover -s tests -v
+Python 3.10.11；最终隔离复跑 Ran 731 tests in 24.369s；OK；EXIT=0；无跳过。
+正式日志 unittest_isolated.txt；首轮731/23.319s原日志unittest.txt保留。两轮使用同一src/tests，第二轮只在运行期重定向写盘并拦截越界写入/真实输入。
+执行偏差：首轮测试漏隔离导致目录外日志/合成输入标记/失败截图写盘，详 READONLY_INCIDENT.txt；不把首轮冒称完全只读。最终隔离复跑目录外变更为0。
+保护对象 src/tests/cards/PLAN.md/progress.json 共402个既有文件SHA256不变；未新增受保护文件，详integrity_final.json。
+独立反例：independent_probes.py/.txt/_result.json；补充 independent_additional.py/.txt/_result.json，共15项，不计入731单测。
+判定口径：PASS仅针对本卡；FAIL区分实现缺陷与证据不足。未主动运行真机choose/use发送入口或外部通知，不重放旧提问。
+后续卡明确改变的行为按后续要求评估，不把合法后续变更算成旧卡回归。
+
+VERDICT FAIL
+缺口性质：父子进程抢同一UI锁使发送链路不能执行；历史请求去重边界与并发状态更新也有确定反例。
+卡片：cards/CARD-09a-server.md:6-18。
+
+逐条核对
+1. 本地ThreadingHTTPServer/127.0.0.1/固定可配端口/单实例/占用报错/start-stop-status：实现与PortTests、CliTests PASS；历史card09a_live.txt含起停与端口核对。
+2. token首次生成持久化、复用、rotate、鉴权/Host/Origin/token不进URL日志：主要实现PASS。
+   server.py:301-334、1113-1142；TokenStateTests、HttpGuardTests直接通过临时服务验证。Origin后由09b加强为固定ID；rotate需要重启，命令/文档已明说，不能伪称热切换。
+3. OPTIONS/CORS：PASS，_guard/do_OPTIONS回显合法扩展来源与允许头；真实测试含错误Host/Origin/缺token与预检。
+4. /health/endpoints/ask202/job分端结果/workflow：接口与模拟子进程用例存在，失败隔离在_run_job/_run_endpoint实现。不能由mock runner全绿推导真正choose/use能启动。
+5. 执行白名单、purpose、固定脚本数组、失败不跑use、总超时/进程树/截断/队列：主体实现，AskTests/ProcessTests覆盖。
+   输出截断发生在收完stdout后，communicate仍整段缓冲；现有测试只验truncate函数，不验证高输出内存上限。此为额外改进点，不单独作为本卡主要FAIL依据。
+6. 文件UI锁覆盖choose→use且CLI同锁：FAIL（父子锁自锁）。
+   server._run_endpoint:749-761 父进程持runs/ui.lock再同步等待_run_choose子进程；_run_choose:829-831直接启动固定CLI。
+   每个choose/use的__main__又走uilock.run，uilock.hold只同线程可重入（:256-263），没有跨进程父子代持/交接。
+   所以父进程等子进程完成、子进程等父锁释放；默认子锁等60秒，而父进程仍同步等它；子进程通常退出8/ui_busy（或被外层超时终止），choose失败，无法进入UI操作。
+   独立 P09A_parent_child_lock：只用临时锁+无UI子进程回调重现同样调用模式，child_exit=8/ui_busy，回调未进入。没有运行真机choose/use。
+   现有服务AskTests把runner替换成不拿UI锁的FakeRunner；锁测试只测一般互斥/同线程重入，漏了服务+真实子进程入口合同。
+7. job落盘/内存50/重启可读/request_id去重：落盘与读取存在；去重 FAIL。
+   _find_request:619-632只查内存和磁盘mtime最新200个。
+   独立 P09A_dedup_201：201条历史记录中h000仍可GET读取，却找不到r000；再次submit r000返回duplicate=false且新job_id，重新派发。卡片没有“仅最近200个”或到期失效例外。
+   _persist:613-617吞写盘错误仍返回202，缺“持久化失败拒绝接单”负例；建议同卡补上。
+8. workflow basename白名单/迁移409/与notify_done并发不损坏：路径和普通迁移PASS；并发读改写 FAIL。
+   workflow_move:981只加Engine自己的threading.RLock，没持progress.lock；:985读旧data，:1034覆盖整份，:1036仅核对状态。
+   独立 P09A_notify_lost_update：在server读后写前调用真实progress.write写ANOTHER-CARD/NEW_NOTIFY_NOTE（临时目录），server随后仍返回成功，却把card/note覆盖回05/OLD_NOTE。
+   WorkflowTests并发项只测同一Engine的两次迁移，不含notify_done/progress.write这个外部写者。
+9. 单测与冒烟：本卡54项、全量731 OK。card09a_live.txt的health200/无token401/有token200/start-stop符合限定实测；未发/ask属于原卡禁止真发，未因此直接FAIL。
+   高档经server仍被外层use_timeout=180/endpoint_timeout=420限制，与后续09f的900s不兼容，独立补充 P09F_server_outer_timeout已复现；应随跨卡整合修复。
+
+建议返工卡：09a-lock-integration（最高优先）；09a-durable-idempotency；09a-workflow-concurrency。
+锁修复要让父子进程具有明确可校验的同一持锁关系，保留普通CLI互斥；去重不能只扫描最近200个；server与notify_done使用同一读改写文件锁并验证并发更新不丢。

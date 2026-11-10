@@ -1,0 +1,34 @@
+Bridge v0.0.9 · Codex 独立只读复验 · 2026-11-06（北京时间）
+工作目录：F:\Bridge\v0.0.9
+共同回归命令：py -3.10 -X utf8 -B -m unittest discover -s tests -v
+Python 3.10.11；最终隔离复跑 Ran 731 tests in 24.369s；OK；EXIT=0；无跳过。
+正式日志 unittest_isolated.txt；首轮731/23.319s原日志unittest.txt保留。两轮使用同一src/tests，第二轮只在运行期重定向写盘并拦截越界写入/真实输入。
+执行偏差：首轮测试漏隔离导致目录外日志/合成输入标记/失败截图写盘，详 READONLY_INCIDENT.txt；不把首轮冒称完全只读。最终隔离复跑目录外变更为0。
+保护对象 src/tests/cards/PLAN.md/progress.json 共402个既有文件SHA256不变；未新增受保护文件，详integrity_final.json。
+独立反例：independent_probes.py/.txt/_result.json；补充 independent_additional.py/.txt/_result.json，共15项，不计入731单测。
+判定口径：PASS仅针对本卡；FAIL区分实现缺陷与证据不足。未主动运行真机choose/use发送入口或外部通知，不重放旧提问。
+后续卡明确改变的行为按后续要求评估，不把合法后续变更算成旧卡回归。
+
+VERDICT FAIL
+缺口性质：聊天最高档要求 GPT-6+高，但回执及门禁只校验最后写入的一个维度。
+卡片：cards/CARD-06c-web-adapters-config.md:3-10。
+
+逐条核对
+1. ChatGPT聊天芯片→强度层→模型、中文英文--list：实现及针对性测试 PASS。
+   chatgpt_choose.py 的 read_writer/read_model/read_effort/open_chip_menu/enter_models；ChatTierTests、WriterReadTests、ChipClickTests覆盖名字、焦点、唯一性、距离及弹层复核。
+2. chat模式表、writer回执与 gpt6+high最高档：表/单维白名单存在，联合门禁 FAIL。
+   docs/tiers.json:49-70 分别定义 gpt6 与 high。
+   chatgpt_choose.py:1595-1613 先写model回执，后写effort到同一个 chatgpt.json；第二次覆盖第一次。
+   tier_guard.check:526-545、gate:641-673 只校验receipt.dimension；不会检验另一个维度。
+   独立 P06C_single_dimension：writer=chat、effort=high、raw中model=gpt56，--purpose review 仍 gate_ok=true。模型改成GPT-5.6而强度保持高时，现有机制也无第二维证据可核对。
+   tests/test_card06c.py:242-290只测writer及单维表；:742“gpt6+high”测试只断言JSON两个列表，不验证发送入口同时满足二者。
+3. Work无模型入口→no_model_selector、旧回执作废：PASS。NoModelSelectorTests覆盖enter/read/set与失败回执null。
+4. 不用Ctrl+Shift+M，芯片唯一/距离/弹层：PASS。ChipClickTests有相应反向源码断言及假控件执行测试。
+5. Gemini折叠/展开新对话：相应flow._open_new_chat与NewChatTests PASS；历史card06c_live:188-206点到新对话但档位素材读不到，后续CARD-07已修模板并有list原文，不能把旧失败当现状。
+6. accept_lite独立GLM白名单/可选可读/输出区分：代码与AcceptLiteTests PASS。原始card06c_live:217-241、card06c_glm_quota_0840.txt 为accepted但no_reply/额度限制。
+   PLAN.md:133 明确记录用户允许“到达服务端并Free usage limit reached”作为06c链路证据；按这一例外接受发送链路，不伪称真的收到token回复。本卡不因额度单独判代码失败。
+7. Grok重截素材有效/choose使用：PASS，GrokTemplatesTests直接检查图有字/不同、实际choose选择逻辑；card06c_live:244-274解释早先坏图和重新截取。不能仅凭文件存在推导实机一定可点。
+全量：本卡45项，全量731 OK。
+历史ChatGPT实测读回：card06c_live:83-115；后续 card08_chatgpt_list.txt 也有chat/GPT-6/高 EXIT=0。该成功示例不构成“两维任一漂移都会拒发”的证明。
+
+建议返工卡：06c-composite-tier。保存同轮writer/model/effort整体读回，发送前按用途同时校验所有必要维度；补 gpt56+high、gpt6+mid、模式漂移、后写回执不能丢前维度等反例。

@@ -6,6 +6,10 @@ runlog 写失败时输出和退出码不变。
 """
 from __future__ import annotations
 
+from offline_guard import ensure_offline
+ensure_offline()
+
+
 import contextlib
 import importlib.util
 import io
@@ -31,7 +35,10 @@ TIMEOUT = {"ok": False, "stage": "timeout", "submission": "accepted", "sent": Tr
 # 卡片能打开、模型行找得到、列表读得出 model。三端都该退 0。
 READONLY = {"dsh": {"list_state": {"model": "deepseek_v41_flash"}, "probe": {}},
             "opencode": {"list_state": {"model": "deepseek_v41_flash_free"},
-                         "panel_bbox": None, "probe": {}},
+                         "panel_bbox": None, "probe": {},
+                         # 2026-11-07：main 先认会话（首页 -> session_not_open）。
+                         # 这是新增依赖的桩，断言一个字没改。
+                         "session_state": {"state": "session"}},
             "codex": {"_open_card": "effort", "probe": [],
                       "find_slider": (100, 340, 1100, 200),
                       "_effort_now": {"effort": "max", "label": "Max"},

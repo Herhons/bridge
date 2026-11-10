@@ -1,0 +1,32 @@
+Bridge v0.0.9 · Codex 独立只读复验 · 2026-11-06（北京时间）
+工作目录：F:\Bridge\v0.0.9
+共同回归命令：py -3.10 -X utf8 -B -m unittest discover -s tests -v
+Python 3.10.11；最终隔离复跑 Ran 731 tests in 24.369s；OK；EXIT=0；无跳过。
+正式日志 unittest_isolated.txt；首轮731/23.319s原日志unittest.txt保留。两轮使用同一src/tests，第二轮只在运行期重定向写盘并拦截越界写入/真实输入。
+执行偏差：首轮测试漏隔离导致目录外日志/合成输入标记/失败截图写盘，详 READONLY_INCIDENT.txt；不把首轮冒称完全只读。最终隔离复跑目录外变更为0。
+保护对象 src/tests/cards/PLAN.md/progress.json 共402个既有文件SHA256不变；未新增受保护文件，详integrity_final.json。
+独立反例：independent_probes.py/.txt/_result.json；补充 independent_additional.py/.txt/_result.json，共15项，不计入731单测。
+判定口径：PASS仅针对本卡；FAIL区分实现缺陷与证据不足。未主动运行真机choose/use发送入口或外部通知，不重放旧提问。
+后续卡明确改变的行为按后续要求评估，不把合法后续变更算成旧卡回归。
+
+VERDICT FAIL
+缺口性质：功能及单测通过；卡面“最低档”真机约束证据不足，不能给无条件PASS。
+卡片：cards/CARD-WEB2-grok-gemini.md:12-17。
+
+逐条核对
+1. Grok 发送 UIA 优先/模板回退/诊断：PASS。
+   src/scripts/grok_use.py:310-338，唯一可用提交/发送按钮优先，模板限尺度兜底；失配输出最高分、区域/DPI/可读的缩放。
+   test_cardweb2.Submit 三项直接检验优先、回退、诊断。
+2. Gemini 新对话/完成30秒内/超时前最后一读：PASS。
+   src/qi/gemini.py:317-348、561-747；test_cardweb2.GeminiNewChat、GeminiWait 覆盖UIA/模板、延迟侧栏、已完成快速判定、认领不到提问但有新回复、最后一读、不收生成中半截。
+3. Grok --read [--tab N]：PASS。
+   grok_use.py:598-669；GrokRead/GrokMain 覆盖最新回复/空页/参数/不发送及读路径不要求模板。
+4. 单测：本卡26项全过，全量731 OK；并未仅根据189/215的旧数字验收。
+5. --new 两端 token 与无需人工点击：已有证据支持功能。
+   evidence/cardweb2_live.txt:11-24 两端 --new、accepted/answered、EXIT=0；Grok submit=uia。:30-34 --read --tab2读回刚才回复。
+6. 两端“最低档”真机：证据缺口。
+   cardweb2_live.txt 只记录 use 命令和结果，没有同轮 choose最低档及读回档位。Gemini 可由后续 card07_live.txt:45-53 的flash_lite→--new补证；Grok没有相应最低档fast→--new的原始记录。
+   选择最低档的定向检索只命中 card06b_live.txt，其中:313起还明示从expert切fast未真机跑；同文件的成功发送用 --purpose accept / expert，不能拿来证明最低档。
+   因此不能断言WEB2当时一定用了高档，也不能假定用了最低档；二元验收按“证据不足”记FAIL。本次禁止真实发送，未补发任何消息。
+
+建议返工卡：WEB2-evidence（优先补现存原始记录；如确需新增实测，另行在用户允许的真机任务中完成fast读回→--new token→--read，保留唯一token与退出码，勿重放旧提问）。本卡暂无新确认的独立功能缺陷。

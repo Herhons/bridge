@@ -1,0 +1,72 @@
+{
+  "job_id": "20261108T150010-3485fe21",
+  "request_id": "c8e8c593-92eb-4bce-ba4e-74020877d7f3",
+  "status": "done",
+  "purpose": "test",
+  "prompt": "只回复下面这一行，不要任何解释、不要加标点：BRIDGE-P1-3f9a21c4",
+  "created_at": "2026-11-08T07:00:10+00:00",
+  "started_at": "2026-11-08T07:00:10+00:00",
+  "finished_at": "2026-11-08T07:00:22+00:00",
+  "order": [
+    "workbuddy"
+  ],
+  "endpoints": {
+    "workbuddy": {
+      "status": "done",
+      "reply": "BRIDGE-P1-3f9a21c4",
+      "error": null,
+      "error_code": null,
+      "exit_code": 0,
+      "choose": {
+        "ok": true,
+        "dimension": "model",
+        "target": "DeepSeek-V4.1-Flash",
+        "readback": "DeepSeek-V4.1-Flash",
+        "confirmed": true,
+        "exit_code": 0,
+        "timeout": false,
+        "elapsed": 0.641,
+        "error_code": null,
+        "error_message": null,
+        "stderr": ""
+      },
+      "use": {
+        "ok": true,
+        "stage": "answered",
+        "reply": "BRIDGE-P1-3f9a21c4",
+        "exit_code": 0,
+        "timeout": false,
+        "elapsed": 10.485,
+        "error_code": null,
+        "error_message": null,
+        "stderr": ""
+      },
+      "started_at": "2026-11-08T07:00:10+00:00",
+      "finished_at": "2026-11-08T07:00:22+00:00",
+      "elapsed": 11.47,
+      "evidence_l1": {
+        "job_id": "20261108T150010-3485fe21",
+        "request_id": "c8e8c593-92eb-4bce-ba4e-74020877d7f3",
+        "at": "2026-11-08T07:00:10+00:00",
+        "source": "server"
+      },
+      "progress": {
+        "schema_version": 1,
+        "job_id": "20261108T150010-3485fe21",
+        "endpoint": "workbuddy",
+        "pid": 29656,
+        "at": "2026-11-08T15:00:21+0800",
+        "stage": "finished",
+        "accepted": true,
+        "busy": false,
+        "copies": 1
+      }
+    }
+  },
+  "quorum": {
+    "required": 1,
+    "recovered": 1,
+    "met": true,
+    "clamped": false
+  }
+}

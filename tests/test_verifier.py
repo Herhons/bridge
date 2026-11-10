@@ -1,6 +1,10 @@
 """Verifier protocol tests. Every subprocess call is mocked; no UI is opened."""
 from __future__ import annotations
 
+from offline_guard import ensure_offline
+ensure_offline()
+
+
 import ast
 import contextlib
 import importlib.util

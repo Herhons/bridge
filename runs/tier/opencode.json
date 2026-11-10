@@ -1,0 +1,18 @@
+{
+ "consumed": true,
+ "consumed_at": "2026-11-09T14:28:32.573131+00:00",
+ "created_at": "2026-11-09T14:28:25.293930+00:00",
+ "created_monotonic": 217155.718,
+ "dimension": "model",
+ "endpoint": "opencode",
+ "hwnd": 67822,
+ "monotonic_origin": 217155.718,
+ "pid": 2932,
+ "process_start_time": 134384936521628671,
+ "raw": "{\"after\": \"deepseek_v41_flash_free\", \"ok\": true, \"read_source\": \"uia\", \"score\": null, \"stage\": \"done\", \"text\": \"OpenCode / DeepSeek V4.1 Flash Free\", \"verified\": true, \"want\": \"deepseek_v41_flash_free\"}",
+ "readback": "deepseek_v41_flash_free",
+ "schema_version": 1,
+ "tab": null,
+ "target": "deepseek_v41_flash_free",
+ "writer": null
+}

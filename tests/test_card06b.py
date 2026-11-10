@@ -16,6 +16,10 @@
 """
 from __future__ import annotations
 
+from offline_guard import ensure_offline
+ensure_offline()
+
+
 import ast
 import contextlib
 import io
@@ -850,7 +854,10 @@ class ChatgptReadbackTests(Base):
 
     def test_uia_radio_reports_selected_model(self):
         choose = SCRIPTS / "chatgpt_choose.py"
-        ns = {"MODELS": literal_assignment(choose, "MODELS"), "Screen": object}
+        # B17：read_model_uia 现在会跳过视口外的选中项；这个桩没有可见性信息，
+        # 统一按「可见」处理（隐藏项的行为由 test_b17_chatgpt_uia_scroll 覆盖）。
+        ns = {"MODELS": literal_assignment(choose, "MODELS"), "Screen": object,
+              "_offscreen": lambda node: False}
         ns["_name_key"] = load_function(choose, "_name_key", {})
 
         def radio(name, selected):
@@ -868,7 +875,8 @@ class ChatgptReadbackTests(Base):
 
     def test_uia_radio_multiple_selected_is_unknown(self):
         choose = SCRIPTS / "chatgpt_choose.py"
-        ns = {"MODELS": literal_assignment(choose, "MODELS"), "Screen": object}
+        ns = {"MODELS": literal_assignment(choose, "MODELS"), "Screen": object,
+              "_offscreen": lambda node: False}
         ns["_name_key"] = load_function(choose, "_name_key", {})
 
         def radio(name):
@@ -899,7 +907,7 @@ class ChatgptReadbackTests(Base):
         self.assertEqual(got["model"], "unknown")
         self.assertNotEqual(got.get("inferred"), "勾在所有可读项上方，选中的是第一行「默认」")
 
-    def test_set_effort_requires_chip_readback(self):
+    def test_set_effort_chip_wins_over_slider_value(self):
         choose = SCRIPTS / "chatgpt_choose.py"
         slider = {"knob": 1000, "cy": 10, "win": (0, 0, 800, 600)}
         ns = {
@@ -911,28 +919,31 @@ class ChatgptReadbackTests(Base):
             "_gap_limit": lambda w: 20,
             "_effort_of": lambda knob, w: ("high", 0),
             "open_effort": lambda s, w: True,
+            "_effort_item": lambda s: None,
             "_slider": lambda s: dict(slider),
             "safe_click": lambda s, point: (True, "ok"),
-            "_announce_effort": lambda s, root=None: {"effort": "high",
-                                                      "raw": "高，第 3 项，共 3 项。",
-                                                      "source": "uia_slider"},
+            "_announce_effort": lambda s, root=None, writer=None: {
+                "effort": "high", "raw": "高，第 3 项，共 3 项。", "source": "uia_slider"},
             "close_all": lambda s, w: None,
             "read_chip_effort": lambda s: {"effort": "mid", "raw": "中",
                                            "source": "uia_chip"},
         }
         fn = load_function(choose, "set_effort", ns)
         got = fn(FakeScreen(), "high")
-        self.assertFalse(got["ok"], "芯片显示 mid，不能因为键盘走了 2 步就报 ok")
+        self.assertFalse(got["ok"], "芯片显示 mid，滑杆读数不能盖过芯片")
         self.assertEqual(got["reason"], "readback_mismatch")
         self.assertEqual(got["after"], "mid")
-        self.assertEqual(got["announce"], "high")     # 滑杆读数只作诊断
 
         ns["read_chip_effort"] = lambda s: {"effort": "high", "raw": "高",
                                             "source": "uia_chip"}
         fn = load_function(choose, "set_effort", ns)
         self.assertTrue(fn(FakeScreen(), "high")["ok"])
 
-    def test_set_effort_fails_when_chip_is_unreadable(self):
+    def test_set_effort_falls_back_to_slider_value_when_chip_is_unreadable(self):
+        """2026-11-09：新版芯片不再暴露档位文本，滑杆可访问值成为唯一 UIA 读数。
+
+        仍然要求"读回等于目标"；只是读数来源从芯片换成滑杆自己念出的第 N 项。
+        """
         choose = SCRIPTS / "chatgpt_choose.py"
         slider = {"knob": 1000, "cy": 10, "win": (0, 0, 800, 600)}
         ns = {
@@ -943,12 +954,23 @@ class ChatgptReadbackTests(Base):
             "_gap_limit": lambda w: 20,
             "_effort_of": lambda knob, w: ("high", 0),
             "open_effort": lambda s, w: True,
+            "_effort_item": lambda s: None,
             "_slider": lambda s: dict(slider),
             "safe_click": lambda s, point: (True, "ok"),
-            "_announce_effort": lambda s, root=None: {"effort": "high", "raw": ""},
+            "_announce_effort": lambda s, root=None, writer=None: {
+                "effort": "high", "raw": "高，第 3 项，共 3 项。", "source": "uia_slider"},
             "close_all": lambda s, w: None,
             "read_chip_effort": lambda s: {"effort": None, "raw": "", "source": "none"},
         }
+        fn = load_function(choose, "set_effort", ns)
+        got = fn(FakeScreen(), "high")
+        self.assertTrue(got["ok"])
+        self.assertEqual(got["read"], "uia_slider")
+        self.assertEqual(got["after"], "high")
+
+        # 两个来源都读不到时仍然 fail-closed
+        ns["_announce_effort"] = lambda s, root=None, writer=None: {
+            "effort": None, "raw": "", "source": "none"}
         fn = load_function(choose, "set_effort", ns)
         got = fn(FakeScreen(), "high")
         self.assertFalse(got["ok"])

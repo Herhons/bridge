@@ -1,0 +1,176 @@
+{
+  "job_id": "20261109T220126-b1e125f1",
+  "request_id": "b18cdfc8-3ed4-4f47-8fb9-b75a531b1fce",
+  "status": "failed",
+  "purpose": "test",
+  "prompt": "只回复下面这一行，不要任何解释、不要加标点：BRIDGE-B17-R4h-1d97c3af",
+  "created_at": "2026-11-09T14:01:26+00:00",
+  "started_at": "2026-11-09T14:01:26+00:00",
+  "finished_at": "2026-11-09T14:01:40+00:00",
+  "order": [
+    "codex",
+    "opencode",
+    "dsh",
+    "workbuddy"
+  ],
+  "endpoints": {
+    "codex": {
+      "status": "failed",
+      "reply": null,
+      "error": {
+        "code": "choose_failed",
+        "message": "窗口提不到前台（你可能正在用别的窗口），已退出，不硬点",
+        "step": "choose",
+        "exit_code": 4
+      },
+      "error_code": "choose_failed",
+      "exit_code": 4,
+      "choose": {
+        "ok": false,
+        "dimension": "model",
+        "target": "gpt6_luna",
+        "readback": null,
+        "targets": {
+          "model": "gpt6_luna"
+        },
+        "confirmed": false,
+        "exit_code": 4,
+        "timeout": false,
+        "elapsed": 2.047,
+        "error_code": "choose_failed",
+        "error_message": "窗口提不到前台（你可能正在用别的窗口），已退出，不硬点",
+        "stderr": ""
+      },
+      "use": null,
+      "started_at": "2026-11-09T14:01:26+00:00",
+      "finished_at": "2026-11-09T14:01:28+00:00",
+      "elapsed": 2.19,
+      "evidence_l1": {
+        "job_id": "20261109T220126-b1e125f1",
+        "request_id": "b18cdfc8-3ed4-4f47-8fb9-b75a531b1fce",
+        "at": "2026-11-09T14:01:26+00:00",
+        "source": "server"
+      }
+    },
+    "opencode": {
+      "status": "failed",
+      "reply": null,
+      "error": {
+        "code": "choose_failed",
+        "message": "窗口提不到前台，已退出，不硬点",
+        "step": "choose",
+        "exit_code": 4
+      },
+      "error_code": "choose_failed",
+      "exit_code": 4,
+      "choose": {
+        "ok": false,
+        "dimension": "model",
+        "target": "deepseek_v41_flash_free",
+        "readback": null,
+        "targets": {
+          "model": "deepseek_v41_flash_free"
+        },
+        "confirmed": false,
+        "exit_code": 4,
+        "timeout": false,
+        "elapsed": 3.282,
+        "error_code": "choose_failed",
+        "error_message": "窗口提不到前台，已退出，不硬点",
+        "stderr": ""
+      },
+      "use": null,
+      "started_at": "2026-11-09T14:01:28+00:00",
+      "finished_at": "2026-11-09T14:01:32+00:00",
+      "elapsed": 3.44,
+      "evidence_l1": {
+        "job_id": "20261109T220126-b1e125f1",
+        "request_id": "b18cdfc8-3ed4-4f47-8fb9-b75a531b1fce",
+        "at": "2026-11-09T14:01:26+00:00",
+        "source": "server"
+      }
+    },
+    "dsh": {
+      "status": "failed",
+      "reply": null,
+      "error": {
+        "code": "choose_failed",
+        "message": "窗口提不到前台，已退出，不硬点",
+        "step": "choose",
+        "exit_code": 4
+      },
+      "error_code": "choose_failed",
+      "exit_code": 4,
+      "choose": {
+        "ok": false,
+        "dimension": "model",
+        "target": "deepseek_v41_flash",
+        "readback": null,
+        "targets": {
+          "model": "deepseek_v41_flash"
+        },
+        "confirmed": false,
+        "exit_code": 4,
+        "timeout": false,
+        "elapsed": 3.281,
+        "error_code": "choose_failed",
+        "error_message": "窗口提不到前台，已退出，不硬点",
+        "stderr": ""
+      },
+      "use": null,
+      "started_at": "2026-11-09T14:01:32+00:00",
+      "finished_at": "2026-11-09T14:01:35+00:00",
+      "elapsed": 3.41,
+      "evidence_l1": {
+        "job_id": "20261109T220126-b1e125f1",
+        "request_id": "b18cdfc8-3ed4-4f47-8fb9-b75a531b1fce",
+        "at": "2026-11-09T14:01:26+00:00",
+        "source": "server"
+      }
+    },
+    "workbuddy": {
+      "status": "failed",
+      "reply": null,
+      "error": {
+        "code": "choose_failed",
+        "message": "Traceback (most recent call last):\r\n  File \"F:\\Bridge\\v0.0.9_codex_wip\\src\\scripts\\workbuddy_choose.py\", line 11, in <module>\r\n    raise SystemExit(uilock.entry(\"workbuddy_choose\", main))\r\n  File \"F:\\Bridge\\v0.0.9_codex_wip\\src\\qi\\uilock.py\", line 59\n...[truncated 165 chars]...\nBridge\\v0.0.9_codex_wip\\src\\qi\\workbuddy.py\", line 1280, in _run\r\n    screen = open_app()\r\n  File \"F:\\Bridge\\v0.0.9_codex_wip\\src\\qi\\workbuddy.py\", line 67, in open_app\r\n    raise RuntimeError(\"WorkBuddy 窗口无法获得焦点\")\r\nRuntimeError: WorkBuddy 窗口无法获得焦点\r\n",
+        "step": "choose",
+        "exit_code": 1
+      },
+      "error_code": "choose_failed",
+      "exit_code": 1,
+      "choose": {
+        "ok": false,
+        "dimension": "model",
+        "target": "DeepSeek-V4.1-Flash",
+        "readback": null,
+        "targets": {
+          "model": "DeepSeek-V4.1-Flash"
+        },
+        "confirmed": false,
+        "exit_code": 1,
+        "timeout": false,
+        "elapsed": 4.375,
+        "error_code": "choose_failed",
+        "error_message": "Traceback (most recent call last):\r\n  File \"F:\\Bridge\\v0.0.9_codex_wip\\src\\scripts\\workbuddy_choose.py\", line 11, in <module>\r\n    raise SystemExit(uilock.entry(\"workbuddy_choose\", main))\r\n  File \"F:\\Bridge\\v0.0.9_codex_wip\\src\\qi\\uilock.py\", line 59\n...[truncated 165 chars]...\nBridge\\v0.0.9_codex_wip\\src\\qi\\workbuddy.py\", line 1280, in _run\r\n    screen = open_app()\r\n  File \"F:\\Bridge\\v0.0.9_codex_wip\\src\\qi\\workbuddy.py\", line 67, in open_app\r\n    raise RuntimeError(\"WorkBuddy 窗口无法获得焦点\")\r\nRuntimeError: WorkBuddy 窗口无法获得焦点\r\n",
+        "stderr": "Traceback (most recent call last):\r\n  File \"F:\\Bridge\\v0.0.9_codex_wip\\src\\scripts\\workbuddy_choose.py\", line 11, in <module>\r\n    raise SystemExit(uilock.entry(\"workbuddy_choose\", main))\r\n  File \"F:\\Bridge\\v0.0.9_codex_wip\\src\\qi\\uilock.py\", line 596, in entry\r\n    return int(func())\r\n  File \"F:\\Bridge\\v0.0.9_codex_wip\\src\\qi\\workbuddy.py\", line 1189, in main\r\n    return _run(args, sending=sending)\r\n  File \"F:\\Bridge\\v0.0.9_codex_wip\\src\\qi\\workbuddy.py\", line 1280, in _run\r\n    screen = open_app()\r\n  File \"F:\\Bridge\\v0.0.9_codex_wip\\src\\qi\\workbuddy.py\", line 67, in open_app\r\n    raise RuntimeError(\"WorkBuddy 窗口无法获得焦点\")\r\nRuntimeError: WorkBuddy 窗口无法获得焦点\r\n"
+      },
+      "use": null,
+      "started_at": "2026-11-09T14:01:35+00:00",
+      "finished_at": "2026-11-09T14:01:40+00:00",
+      "elapsed": 4.53,
+      "evidence_l1": {
+        "job_id": "20261109T220126-b1e125f1",
+        "request_id": "b18cdfc8-3ed4-4f47-8fb9-b75a531b1fce",
+        "at": "2026-11-09T14:01:26+00:00",
+        "source": "server"
+      }
+    }
+  },
+  "quorum": {
+    "required": 3,
+    "recovered": 0,
+    "met": false,
+    "clamped": false
+  }
+}

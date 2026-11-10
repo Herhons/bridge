@@ -20,6 +20,10 @@
 """
 from __future__ import annotations
 
+from offline_guard import ensure_offline
+ensure_offline()
+
+
 import contextlib
 import io
 import json
@@ -337,11 +341,25 @@ class CliTests(unittest.TestCase):
         self.runs.mkdir()
         self.progress = self.root / "progress.json"
         self.progress.write_text(json.dumps(record()), encoding="utf-8")
+        self.scripts = self.root / "src/scripts"
+        self.scripts.mkdir(parents=True)
+        (self.root / "docs").mkdir()
+        tiers = autopush_cli.tier_guard.load_tiers()
+        tiers["endpoints"]["workbuddy"]["dimensions"]["model"].update(
+            test=["fixture-low"], review=["fixture-high"], accept=["fixture-high"])
+        (self.root / "docs/tiers.json").write_text(json.dumps(tiers), encoding="utf-8")
+        patcher = mock.patch.object(autopush_cli, "SCRIPTS", self.scripts)
+        patcher.start()
+        self.addCleanup(patcher.stop)
         self.calls = []
-        self.reply = (0, '{"ok": true, "stage": "answered"}', "")
+        self.reply = (0, '{"ok": true, "stage": "answered", "submission": "accepted", "sent": true}', "")
 
     def runner(self, cmd, **_kwargs):
         self.calls.append(cmd)
+        if Path(cmd[1]).name == "workbuddy_choose.py":
+            target = cmd[-1]
+            autopush_cli.tier_guard.write_receipt("workbuddy", target=target, readback=target, root=self.root)
+            return 0, '{"ok":true}', ""
         return self.reply
 
     def run_cli(self, *extra, now=NOW):
@@ -374,8 +392,9 @@ class CliTests(unittest.TestCase):
         code, out = self.run_cli()
         self.assertEqual(code, 0)
         self.assertTrue(out["pushed"])
-        self.assertEqual(len(self.calls), 1)
-        cmd = self.calls[0]
+        self.assertEqual(len(self.calls), 2)
+        self.assertIn("workbuddy_choose.py", self.calls[0][1])
+        cmd = self.calls[1]
         self.assertIn("workbuddy_use.py", cmd[1])
         self.assertIn("--continue", cmd)
         self.assertIn(autopush.PROMPT, cmd)
@@ -444,8 +463,8 @@ class CliTests(unittest.TestCase):
 
     def test_push_command_purpose_is_configurable(self):
         self.run_cli("--purpose", "test")
-        self.assertIn("--purpose", self.calls[0])
-        self.assertEqual(self.calls[0][self.calls[0].index("--purpose") + 1], "test")
+        self.assertIn("--purpose", self.calls[-1])
+        self.assertEqual(self.calls[-1][self.calls[-1].index("--purpose") + 1], "test")
 
 
 # ================================================================ 4. 接线

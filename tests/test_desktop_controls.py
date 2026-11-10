@@ -5,6 +5,10 @@ No test starts an app, changes the clipboard, clicks the desktop, or sends a mes
 """
 from __future__ import annotations
 
+from offline_guard import ensure_offline
+ensure_offline()
+
+
 import argparse
 import ast
 import contextlib
@@ -97,6 +101,7 @@ class DesktopControlTests(unittest.TestCase):
                     _assert_fg=lambda: None,
                     hotkey=lambda *keys: events.append(("hotkey", keys)),
                     _invalidate=lambda: None,
+                    _mark_input=lambda: None,
                 )
                 fn = load_function(script, "type_text", {
                     "ctypes": ctypes, "time": Clock(),
@@ -159,6 +164,13 @@ class DesktopControlTests(unittest.TestCase):
             "open_menu": lambda *args: [(100, 140)],
             "panel_bbox": lambda *args: next(panels),
             "_search_box": lambda panel: (200, 30),
+            # 2026-11-07：set_model 改成"按占位模板定位搜索框 / 用 panel_open 判面板"，
+            # 这里把新增依赖一起打桩；断言（精确读回、事件序列）一个字没改。
+            "search_box": lambda *args: (200, 30),
+            "panel_open": lambda *args: False,
+            "close_panel": lambda *args: True,
+            "TPL_SEARCH": "oc_search_ph",
+            "_content": lambda win: win,
             "read_model": lambda *args: {"model": actual, "score": 1.0},
         }
         return load_function(script, "set_model", namespace), desk
@@ -202,6 +214,10 @@ class DesktopControlTests(unittest.TestCase):
             "set_model": lambda *args: calls.append("model") or {"ok": model_ok},
             "set_effort": lambda *args: calls.append("effort") or {"ok": effort_ok},
             "ask": lambda *args: calls.append("ask") or {"ok": True},
+            # 2026-11-07：main 先认"现在是不是一个能输入的会话"（首页会拦成
+            # session_not_open）。这里给一个"就在会话里"的桩；断言（调用顺序、
+            # 退出码）一个字没改。
+            "session_state": lambda *args: {"state": "session"},
             "_CURRENT_HWND": {"v": None},
         }
         argv = [script, "--model", "target", "--effort", "low", "--force"]

@@ -66,6 +66,9 @@ CHATGPT_CHIP = "选择 ChatGPT 模型"
 # CARD-06c 第 1 条：聊天模式三档是 即时/中/高，档名 instant/mid/high；
 # 工作模式的「轻度」才是 low。两个词不会同时出现在同一模式下，所以分开映射。
 EFFORT_WORDS = (
+    # B17：「最高」是工作模式第 5 档（max）的 UIA 播报词（实测
+    # `最高，第 5 项，共 5 项。`）。必须排在「高」前面，否则会先命中「高」判成 high。
+    ("最高", "max"),
     ("极高", "xhigh"), ("Extra High", "xhigh"), ("extra high", "xhigh"),
     ("即时", "instant"), ("Instant", "instant"), ("instant", "instant"),
     ("轻度", "low"), ("Light", "low"), ("light", "low"),
@@ -114,7 +117,9 @@ def _cfgs():
     from .choose import Chooser
 
     return {
-        "grok": Chooser(name="grok", anchor="grok_composer", open_offset=(530, 0),
+        # B16：与 grok_choose.CFG 保持一致（新聊天页芯片右移 54px）。
+        # 这里只用来 read_current，不点菜单，但两处参数不同迟早要出事。
+        "grok": Chooser(name="grok", anchor="grok_composer", open_offset=(584, 8),
                         prefix="grok_", options={}, has_chip=TEMPLATE_CHIPS["grok"]),
         "gemini": Chooser(name="gemini", anchor="gem_composer", open_offset=(0, 0),
                           prefix="gem_", options={}, has_chip=TEMPLATE_CHIPS["gemini"],
@@ -225,12 +230,56 @@ def _parse_effort(text: str) -> str | None:
     return None
 
 
+#: **聊天模式**的芯片只显示短名（实测 raw = "选择 ChatGPT 模型 5.6 即时"）。
+#: 长名表按"最长优先"匹配不到时，才用这张兜底表 —— 不去污染长名表，
+#: 避免 "6" 这种单字符误命中 "GPT-6.1 Sol" 之类。
+CHATGPT_MODEL_SHORT = {"5.6": "gpt56", "6": "gpt6"}
+
+
 def _parse_model(text: str) -> str | None:
     # 长名优先：GPT-6.1 Sol 不能先命中 GPT-6
     for name in sorted(CHATGPT_MODEL_NAMES, key=len, reverse=True):
         if name in text:
             return CHATGPT_MODEL_NAMES[name]
+    for name in sorted(CHATGPT_MODEL_SHORT, key=len, reverse=True):
+        if name in text:
+            return CHATGPT_MODEL_SHORT[name]
     return None
+
+
+def chatgpt_snapshot(screen) -> dict:
+    """All axes from ONE fresh tree; no menus, clicks, Esc, or inferred model."""
+    tree = _tree(screen, "chatgpt")
+    states, duplicate = {}, False
+    chips = []
+    labels = {"聊天": "chat", "Chat": "chat", "工作": "work", "Work": "work"}
+    for node in tree.walk():
+        if node.kind != "ButtonControl":
+            continue
+        try:
+            if node.control.IsOffscreen:
+                continue
+        except Exception:
+            continue
+        name = (node.name or "").strip()
+        if name == CHATGPT_CHIP:
+            chips.append(node)
+        if name in labels:
+            key = labels[name]
+            try:
+                value = int(node.control.GetTogglePattern().ToggleState)
+            except Exception:
+                continue
+            if key in states:
+                duplicate = True
+            states[key] = value
+    on = [key for key, value in states.items() if value == 1]
+    off = [key for key, value in states.items() if value == 0]
+    writer = on[0] if len(on) == len(off) == 1 and not duplicate else None
+    raw = _button_text(chips[0]) if len(chips) == 1 else ""
+    values = {"model": _parse_model(raw), "effort": _parse_effort(raw)}
+    return {"writer": writer, "dimensions": values, "source": "uia_snapshot", "raw": raw,
+            "value": values if writer and all(values.values()) else None}
 
 
 def _read_chatgpt_uia(screen, dimension: str) -> dict | None:
@@ -295,6 +344,8 @@ def read(screen, endpoint: str, dimension: str = "model", *, calm: bool = True) 
     `value=None` 表示"没读到"，调用方必须拒发（卡面第 1 条），绝不当成"没变化"。
     """
     endpoint = str(endpoint).lower()
+    if endpoint == "chatgpt" and dimension == "composite":
+        return chatgpt_snapshot(screen)
     hwnd = getattr(screen, "target_hwnd", None)
     zoom_pct = zoom.percent(hwnd)
     template = None

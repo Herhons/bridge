@@ -85,7 +85,14 @@ def main(argv: list[str] | None = None) -> int:
 
     url = os.environ.get("BRIDGE_NOTIFY_URL", "").strip()
     if not url:
-        print(f"progress.json written ({record['status']}); BRIDGE_NOTIFY_URL unset, notify skipped")
+        # T4-1 第 3 条：通知模块"未配置"必须明确登记，不能只是个静默 skip。
+        # 保留原有的人类可读行（有脚本/习惯依赖），再追加一行结构化状态供检索。
+        print(f"progress.json written ({record['status']}); "
+              f"notify NOT_CONFIGURED (BRIDGE_NOTIFY_URL unset, notify skipped)")
+        print(json.dumps({"notify": "NOT_CONFIGURED",
+                          "reason": "BRIDGE_NOTIFY_URL_unset",
+                          "card": record.get("card_id"),
+                          "status": record.get("status")}, ensure_ascii=False))
         return 0
 
     key = os.environ.get("BRIDGE_NOTIFY_KEY", "").strip()

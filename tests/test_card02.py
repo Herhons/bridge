@@ -2,6 +2,10 @@
 
 全部用假节点，不碰真窗口、不 import uiautomation 以外的东西。
 """
+
+from offline_guard import ensure_offline
+ensure_offline()
+
 import sys
 import unittest
 from pathlib import Path

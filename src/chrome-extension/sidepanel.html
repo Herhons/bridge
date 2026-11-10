@@ -116,6 +116,17 @@
           <p id="jobs-empty" class="field-hint">还没有提交过任务。提交后会在这里按时间列出，关掉侧栏再打开仍在。</p>
         </section>
 
+        <!-- T4-2 F4 工作流卡片。默认「测试模式」：**只读写 progress-test.json**，
+             正式 progress.json 在前端是永久只读的（三重防护见 sidepanel.js 的
+             workflowFile / canWrite / assertWritable）。 -->
+        <section class="panel workflow-panel" aria-labelledby="workflow-heading">
+          <div class="section-heading">
+            <div class="heading-group"><h2 id="workflow-heading">工作流卡片</h2><span id="workflow-status" class="quiet">未连接</span></div>
+            <button id="workflow-mode" class="subtle-button" type="button" aria-pressed="true">测试模式：开</button>
+          </div>
+          <div id="workflow-list" class="workflow-list" role="list"></div>
+        </section>
+
         <section class="panel execution-panel" aria-labelledby="execution-heading">
           <div class="section-heading"><h2 id="execution-heading">执行安排</h2><span class="quiet execution-hint">会审后，交给合适的伙伴</span></div>
           <div class="execution-selectors">

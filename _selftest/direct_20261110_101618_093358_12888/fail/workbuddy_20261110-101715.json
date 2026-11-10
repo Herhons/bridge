@@ -1,0 +1,30 @@
+{
+ "schema_version": 1,
+ "endpoint": "workbuddy",
+ "stage": "model_reset_after_new",
+ "reason": "reselect_failed",
+ "code": 5,
+ "at": "2026-11-10T10:17:15+0800",
+ "hwnd": 1,
+ "window": {
+  "rect": null,
+  "zoom_percent": null
+ },
+ "templates": [],
+ "hint": "--new 之后 WorkBuddy 把模型重置成了 'DeepSeek-V4.1-Flash'，按回执重选 'Hy3' 后读回是 'DeepSeek-V4.1-Flash'：按卡面 fail-closed，未发送；先重跑 workbuddy_choose --model 再发",
+ "result": {
+  "ok": false,
+  "stage": "model_reset_after_new",
+  "reason": "reselect_failed",
+  "code": 5,
+  "model": "Hy3",
+  "before": "DeepSeek-V4.1-Flash",
+  "after": "DeepSeek-V4.1-Flash",
+  "sent": false,
+  "submission": "not_sent",
+  "hint": "--new 之后 WorkBuddy 把模型重置成了 'DeepSeek-V4.1-Flash'，按回执重选 'Hy3' 后读回是 'DeepSeek-V4.1-Flash'：按卡面 fail-closed，未发送；先重跑 workbuddy_choose --model 再发"
+ },
+ "extra": {},
+ "screenshot": null,
+ "deduped": null
+}

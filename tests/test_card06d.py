@@ -12,6 +12,10 @@
 """
 from __future__ import annotations
 
+from offline_guard import ensure_offline
+ensure_offline()
+
+
 import contextlib
 import io
 import json

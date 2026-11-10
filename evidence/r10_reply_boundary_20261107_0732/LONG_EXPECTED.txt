@@ -1,0 +1,155 @@
+BRIDGE-R10-LONG-START-20261107-A1
+SECTION-01|BEGIN
+PAYLOAD-01|This is exact numbered segment 01. Preserve every word and delimiter; older reports are not part of this answer.
+MODELS-01|Hy4; DeepSeek-V4.1-Flash; Gemini Argon; Claude Opus 5.5.
+DETAIL-01|0123456789 ABCDEFGHIJKLMNOPQRSTUVWXYZ abcdefghijklmnopqrstuvwxyz :: provenance-before-and-after :: END-SEGMENT-01
+SECTION-01|END
+SECTION-02|BEGIN
+PAYLOAD-02|This is exact numbered segment 02. Preserve every word and delimiter; older reports are not part of this answer.
+MODELS-02|Hy4; DeepSeek-V4.1-Flash; Gemini Argon; Claude Opus 5.5.
+DETAIL-02|0123456789 ABCDEFGHIJKLMNOPQRSTUVWXYZ abcdefghijklmnopqrstuvwxyz :: provenance-before-and-after :: END-SEGMENT-02
+SECTION-02|END
+SECTION-03|BEGIN
+PAYLOAD-03|This is exact numbered segment 03. Preserve every word and delimiter; older reports are not part of this answer.
+MODELS-03|Hy4; DeepSeek-V4.1-Flash; Gemini Argon; Claude Opus 5.5.
+DETAIL-03|0123456789 ABCDEFGHIJKLMNOPQRSTUVWXYZ abcdefghijklmnopqrstuvwxyz :: provenance-before-and-after :: END-SEGMENT-03
+SECTION-03|END
+SECTION-04|BEGIN
+PAYLOAD-04|This is exact numbered segment 04. Preserve every word and delimiter; older reports are not part of this answer.
+MODELS-04|Hy4; DeepSeek-V4.1-Flash; Gemini Argon; Claude Opus 5.5.
+DETAIL-04|0123456789 ABCDEFGHIJKLMNOPQRSTUVWXYZ abcdefghijklmnopqrstuvwxyz :: provenance-before-and-after :: END-SEGMENT-04
+SECTION-04|END
+SECTION-05|BEGIN
+PAYLOAD-05|This is exact numbered segment 05. Preserve every word and delimiter; older reports are not part of this answer.
+MODELS-05|Hy4; DeepSeek-V4.1-Flash; Gemini Argon; Claude Opus 5.5.
+DETAIL-05|0123456789 ABCDEFGHIJKLMNOPQRSTUVWXYZ abcdefghijklmnopqrstuvwxyz :: provenance-before-and-after :: END-SEGMENT-05
+SECTION-05|END
+SECTION-06|BEGIN
+PAYLOAD-06|This is exact numbered segment 06. Preserve every word and delimiter; older reports are not part of this answer.
+MODELS-06|Hy4; DeepSeek-V4.1-Flash; Gemini Argon; Claude Opus 5.5.
+DETAIL-06|0123456789 ABCDEFGHIJKLMNOPQRSTUVWXYZ abcdefghijklmnopqrstuvwxyz :: provenance-before-and-after :: END-SEGMENT-06
+SECTION-06|END
+SECTION-07|BEGIN
+PAYLOAD-07|This is exact numbered segment 07. Preserve every word and delimiter; older reports are not part of this answer.
+MODELS-07|Hy4; DeepSeek-V4.1-Flash; Gemini Argon; Claude Opus 5.5.
+DETAIL-07|0123456789 ABCDEFGHIJKLMNOPQRSTUVWXYZ abcdefghijklmnopqrstuvwxyz :: provenance-before-and-after :: END-SEGMENT-07
+SECTION-07|END
+SECTION-08|BEGIN
+PAYLOAD-08|This is exact numbered segment 08. Preserve every word and delimiter; older reports are not part of this answer.
+MODELS-08|Hy4; DeepSeek-V4.1-Flash; Gemini Argon; Claude Opus 5.5.
+DETAIL-08|0123456789 ABCDEFGHIJKLMNOPQRSTUVWXYZ abcdefghijklmnopqrstuvwxyz :: provenance-before-and-after :: END-SEGMENT-08
+SECTION-08|END
+SECTION-09|BEGIN
+PAYLOAD-09|This is exact numbered segment 09. Preserve every word and delimiter; older reports are not part of this answer.
+MODELS-09|Hy4; DeepSeek-V4.1-Flash; Gemini Argon; Claude Opus 5.5.
+DETAIL-09|0123456789 ABCDEFGHIJKLMNOPQRSTUVWXYZ abcdefghijklmnopqrstuvwxyz :: provenance-before-and-after :: END-SEGMENT-09
+SECTION-09|END
+SECTION-10|BEGIN
+PAYLOAD-10|This is exact numbered segment 10. Preserve every word and delimiter; older reports are not part of this answer.
+MODELS-10|Hy4; DeepSeek-V4.1-Flash; Gemini Argon; Claude Opus 5.5.
+DETAIL-10|0123456789 ABCDEFGHIJKLMNOPQRSTUVWXYZ abcdefghijklmnopqrstuvwxyz :: provenance-before-and-after :: END-SEGMENT-10
+SECTION-10|END
+SECTION-11|BEGIN
+PAYLOAD-11|This is exact numbered segment 11. Preserve every word and delimiter; older reports are not part of this answer.
+MODELS-11|Hy4; DeepSeek-V4.1-Flash; Gemini Argon; Claude Opus 5.5.
+DETAIL-11|0123456789 ABCDEFGHIJKLMNOPQRSTUVWXYZ abcdefghijklmnopqrstuvwxyz :: provenance-before-and-after :: END-SEGMENT-11
+SECTION-11|END
+SECTION-12|BEGIN
+PAYLOAD-12|This is exact numbered segment 12. Preserve every word and delimiter; older reports are not part of this answer.
+MODELS-12|Hy4; DeepSeek-V4.1-Flash; Gemini Argon; Claude Opus 5.5.
+DETAIL-12|0123456789 ABCDEFGHIJKLMNOPQRSTUVWXYZ abcdefghijklmnopqrstuvwxyz :: provenance-before-and-after :: END-SEGMENT-12
+SECTION-12|END
+SECTION-13|BEGIN
+PAYLOAD-13|This is exact numbered segment 13. Preserve every word and delimiter; older reports are not part of this answer.
+MODELS-13|Hy4; DeepSeek-V4.1-Flash; Gemini Argon; Claude Opus 5.5.
+DETAIL-13|0123456789 ABCDEFGHIJKLMNOPQRSTUVWXYZ abcdefghijklmnopqrstuvwxyz :: provenance-before-and-after :: END-SEGMENT-13
+SECTION-13|END
+SECTION-14|BEGIN
+PAYLOAD-14|This is exact numbered segment 14. Preserve every word and delimiter; older reports are not part of this answer.
+MODELS-14|Hy4; DeepSeek-V4.1-Flash; Gemini Argon; Claude Opus 5.5.
+DETAIL-14|0123456789 ABCDEFGHIJKLMNOPQRSTUVWXYZ abcdefghijklmnopqrstuvwxyz :: provenance-before-and-after :: END-SEGMENT-14
+SECTION-14|END
+SECTION-15|BEGIN
+PAYLOAD-15|This is exact numbered segment 15. Preserve every word and delimiter; older reports are not part of this answer.
+MODELS-15|Hy4; DeepSeek-V4.1-Flash; Gemini Argon; Claude Opus 5.5.
+DETAIL-15|0123456789 ABCDEFGHIJKLMNOPQRSTUVWXYZ abcdefghijklmnopqrstuvwxyz :: provenance-before-and-after :: END-SEGMENT-15
+SECTION-15|END
+BRIDGE-R10-LONG-MIDDLE-20261107-B2
+DeepSeek-V4.1-Flash
+Hy4
+SECTION-16|BEGIN
+PAYLOAD-16|This is exact numbered segment 16. Preserve every word and delimiter; older reports are not part of this answer.
+MODELS-16|Hy4; DeepSeek-V4.1-Flash; Gemini Argon; Claude Opus 5.5.
+DETAIL-16|0123456789 ABCDEFGHIJKLMNOPQRSTUVWXYZ abcdefghijklmnopqrstuvwxyz :: provenance-before-and-after :: END-SEGMENT-16
+SECTION-16|END
+SECTION-17|BEGIN
+PAYLOAD-17|This is exact numbered segment 17. Preserve every word and delimiter; older reports are not part of this answer.
+MODELS-17|Hy4; DeepSeek-V4.1-Flash; Gemini Argon; Claude Opus 5.5.
+DETAIL-17|0123456789 ABCDEFGHIJKLMNOPQRSTUVWXYZ abcdefghijklmnopqrstuvwxyz :: provenance-before-and-after :: END-SEGMENT-17
+SECTION-17|END
+SECTION-18|BEGIN
+PAYLOAD-18|This is exact numbered segment 18. Preserve every word and delimiter; older reports are not part of this answer.
+MODELS-18|Hy4; DeepSeek-V4.1-Flash; Gemini Argon; Claude Opus 5.5.
+DETAIL-18|0123456789 ABCDEFGHIJKLMNOPQRSTUVWXYZ abcdefghijklmnopqrstuvwxyz :: provenance-before-and-after :: END-SEGMENT-18
+SECTION-18|END
+SECTION-19|BEGIN
+PAYLOAD-19|This is exact numbered segment 19. Preserve every word and delimiter; older reports are not part of this answer.
+MODELS-19|Hy4; DeepSeek-V4.1-Flash; Gemini Argon; Claude Opus 5.5.
+DETAIL-19|0123456789 ABCDEFGHIJKLMNOPQRSTUVWXYZ abcdefghijklmnopqrstuvwxyz :: provenance-before-and-after :: END-SEGMENT-19
+SECTION-19|END
+SECTION-20|BEGIN
+PAYLOAD-20|This is exact numbered segment 20. Preserve every word and delimiter; older reports are not part of this answer.
+MODELS-20|Hy4; DeepSeek-V4.1-Flash; Gemini Argon; Claude Opus 5.5.
+DETAIL-20|0123456789 ABCDEFGHIJKLMNOPQRSTUVWXYZ abcdefghijklmnopqrstuvwxyz :: provenance-before-and-after :: END-SEGMENT-20
+SECTION-20|END
+SECTION-21|BEGIN
+PAYLOAD-21|This is exact numbered segment 21. Preserve every word and delimiter; older reports are not part of this answer.
+MODELS-21|Hy4; DeepSeek-V4.1-Flash; Gemini Argon; Claude Opus 5.5.
+DETAIL-21|0123456789 ABCDEFGHIJKLMNOPQRSTUVWXYZ abcdefghijklmnopqrstuvwxyz :: provenance-before-and-after :: END-SEGMENT-21
+SECTION-21|END
+SECTION-22|BEGIN
+PAYLOAD-22|This is exact numbered segment 22. Preserve every word and delimiter; older reports are not part of this answer.
+MODELS-22|Hy4; DeepSeek-V4.1-Flash; Gemini Argon; Claude Opus 5.5.
+DETAIL-22|0123456789 ABCDEFGHIJKLMNOPQRSTUVWXYZ abcdefghijklmnopqrstuvwxyz :: provenance-before-and-after :: END-SEGMENT-22
+SECTION-22|END
+SECTION-23|BEGIN
+PAYLOAD-23|This is exact numbered segment 23. Preserve every word and delimiter; older reports are not part of this answer.
+MODELS-23|Hy4; DeepSeek-V4.1-Flash; Gemini Argon; Claude Opus 5.5.
+DETAIL-23|0123456789 ABCDEFGHIJKLMNOPQRSTUVWXYZ abcdefghijklmnopqrstuvwxyz :: provenance-before-and-after :: END-SEGMENT-23
+SECTION-23|END
+SECTION-24|BEGIN
+PAYLOAD-24|This is exact numbered segment 24. Preserve every word and delimiter; older reports are not part of this answer.
+MODELS-24|Hy4; DeepSeek-V4.1-Flash; Gemini Argon; Claude Opus 5.5.
+DETAIL-24|0123456789 ABCDEFGHIJKLMNOPQRSTUVWXYZ abcdefghijklmnopqrstuvwxyz :: provenance-before-and-after :: END-SEGMENT-24
+SECTION-24|END
+SECTION-25|BEGIN
+PAYLOAD-25|This is exact numbered segment 25. Preserve every word and delimiter; older reports are not part of this answer.
+MODELS-25|Hy4; DeepSeek-V4.1-Flash; Gemini Argon; Claude Opus 5.5.
+DETAIL-25|0123456789 ABCDEFGHIJKLMNOPQRSTUVWXYZ abcdefghijklmnopqrstuvwxyz :: provenance-before-and-after :: END-SEGMENT-25
+SECTION-25|END
+SECTION-26|BEGIN
+PAYLOAD-26|This is exact numbered segment 26. Preserve every word and delimiter; older reports are not part of this answer.
+MODELS-26|Hy4; DeepSeek-V4.1-Flash; Gemini Argon; Claude Opus 5.5.
+DETAIL-26|0123456789 ABCDEFGHIJKLMNOPQRSTUVWXYZ abcdefghijklmnopqrstuvwxyz :: provenance-before-and-after :: END-SEGMENT-26
+SECTION-26|END
+SECTION-27|BEGIN
+PAYLOAD-27|This is exact numbered segment 27. Preserve every word and delimiter; older reports are not part of this answer.
+MODELS-27|Hy4; DeepSeek-V4.1-Flash; Gemini Argon; Claude Opus 5.5.
+DETAIL-27|0123456789 ABCDEFGHIJKLMNOPQRSTUVWXYZ abcdefghijklmnopqrstuvwxyz :: provenance-before-and-after :: END-SEGMENT-27
+SECTION-27|END
+SECTION-28|BEGIN
+PAYLOAD-28|This is exact numbered segment 28. Preserve every word and delimiter; older reports are not part of this answer.
+MODELS-28|Hy4; DeepSeek-V4.1-Flash; Gemini Argon; Claude Opus 5.5.
+DETAIL-28|0123456789 ABCDEFGHIJKLMNOPQRSTUVWXYZ abcdefghijklmnopqrstuvwxyz :: provenance-before-and-after :: END-SEGMENT-28
+SECTION-28|END
+SECTION-29|BEGIN
+PAYLOAD-29|This is exact numbered segment 29. Preserve every word and delimiter; older reports are not part of this answer.
+MODELS-29|Hy4; DeepSeek-V4.1-Flash; Gemini Argon; Claude Opus 5.5.
+DETAIL-29|0123456789 ABCDEFGHIJKLMNOPQRSTUVWXYZ abcdefghijklmnopqrstuvwxyz :: provenance-before-and-after :: END-SEGMENT-29
+SECTION-29|END
+SECTION-30|BEGIN
+PAYLOAD-30|This is exact numbered segment 30. Preserve every word and delimiter; older reports are not part of this answer.
+MODELS-30|Hy4; DeepSeek-V4.1-Flash; Gemini Argon; Claude Opus 5.5.
+DETAIL-30|0123456789 ABCDEFGHIJKLMNOPQRSTUVWXYZ abcdefghijklmnopqrstuvwxyz :: provenance-before-and-after :: END-SEGMENT-30
+SECTION-30|END
+BRIDGE-R10-LONG-END-20261107-C3

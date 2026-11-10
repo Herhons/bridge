@@ -51,11 +51,50 @@ def _env() -> dict:
     return env
 
 
-def _creationflags() -> int:
+#: 让子进程**不继承父控制台**：父 shell 退出时不会给它发 CTRL_CLOSE_EVENT。
+#: 2026-11-08（B14）：这是"start 起的后端随父 shell 一起死"的根因修复。
+DETACHED_PROCESS = 0x00000008
+#: 允许子进程脱离父进程所在的 job 对象（否则 job 关闭会连带杀掉它）。
+#: 只在父 job 允许 breakaway 时才成功，否则 CreateProcess 直接 ERROR_ACCESS_DENIED。
+CREATE_BREAKAWAY_FROM_JOB = 0x01000000
+ERROR_ACCESS_DENIED = 5
+
+
+def _creationflags(*, breakaway: bool = True) -> int:
+    """后台子进程的创建标志（纯函数，便于直接断言整数）。
+
+    **不再带 `CREATE_NO_WINDOW` / `CREATE_NEW_PROCESS_GROUP`**：
+    前者与 `DETACHED_PROCESS` 同时使用时会被系统忽略，留着只会让人误以为
+    "已经做了隔离"；后者只影响 Ctrl+C 的分发组，对 `taskkill /T` 无效。
+    """
     if os.name != "nt":
         return 0
-    return (getattr(subprocess, "CREATE_NO_WINDOW", 0)
-            | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
+    flags = DETACHED_PROCESS
+    if breakaway:
+        flags |= CREATE_BREAKAWAY_FROM_JOB
+    return flags
+
+
+def _spawn_detached(argv: list[str], handle) -> tuple[subprocess.Popen, str]:
+    """起一个脱离当前 shell 的常驻子进程，返回 (child, how)。
+
+    先试带 `CREATE_BREAKAWAY_FROM_JOB`；父 job 不允许脱离时系统会拒绝
+    （`ERROR_ACCESS_DENIED`），此时**降级**为仅 `DETACHED_PROCESS` 重试一次。
+    其它 `OSError` 原样抛出，仍走调用方的 `spawn_failed` 分支。
+    """
+
+    def _launch(breakaway: bool) -> subprocess.Popen:
+        return subprocess.Popen(
+            list(argv), cwd=str(ROOT), env=_env(), stdin=subprocess.DEVNULL,
+            stdout=handle, stderr=handle,
+            creationflags=_creationflags(breakaway=breakaway))
+
+    try:
+        return _launch(True), "breakaway"
+    except OSError as exc:
+        if getattr(exc, "winerror", None) != ERROR_ACCESS_DENIED:
+            raise
+        return _launch(False), "plain"
 
 
 def _health(port: int, timeout: float = 1.0) -> tuple[bool, dict | None, str]:
@@ -149,11 +188,11 @@ def start(port: int | None = None, *, foreground: bool = False) -> int:
 
     LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
     handle = open(LOG_PATH, "a", encoding="utf-8")
+    detached = "plain"
     try:
-        child = subprocess.Popen(
+        child, detached = _spawn_detached(
             [sys.executable, "-m", "qi.server", "--serve", "--port", str(listen)],
-            cwd=str(ROOT), env=_env(), stdin=subprocess.DEVNULL,
-            stdout=handle, stderr=handle, creationflags=_creationflags())
+            handle)
     except OSError as exc:
         handle.close()
         return _emit({"ok": False, "action": "start", "error": "spawn_failed",
@@ -179,8 +218,10 @@ def start(port: int | None = None, *, foreground: bool = False) -> int:
                       **_state()}, 1)
 
     return _emit({"ok": True, "action": "start", "port": health.get("port", listen),
-                  "pid": health.get("pid"), "health": health,
-                  "token": "***", "log": str(LOG_PATH), **_state()})
+                  # `/health` 只回 {ok, version} 是公开契约，**不许**加 pid；
+                  # 所以 pid 只能取自 child（原来写 health.get("pid") 恒为 null）。
+                  "pid": child.pid, "detached": detached,
+                  "health": health, "token": "***", "log": str(LOG_PATH), **_state()})
 
 
 # ---------------------------------------------------------------- stop
@@ -244,8 +285,16 @@ def status() -> int:
     listen = int((info or {}).get("port") or server.load_config()["port"])
     ok, health, error = _health(listen)
     running = bool(ok and health)
+    pid = (info or {}).get("pid")
+    # pid_alive 返回 True/False/None。**None 不等于活着**（问不动就是没证据）。
+    alive = uilock.pid_alive(pid) if pid else None
     payload = {"ok": running, "action": "status", "running": running,
-               "port": listen, "pid": (health or {}).get("pid") or (info or {}).get("pid"),
+               "port": listen, "pid": pid, "pid_alive": alive,
+               # pid 文件在、但里面那个进程已经没了：下次 start 会自己清掉
+               "stale_pid_file": bool(pid) and alive is not True,
+               # 端口上有人应答，但应答的不是 pid 文件里那个进程
+               # （最常见：另一份 checkout 的后端占着同一个端口）
+               "mismatch": bool(running and alive is not True),
                "health": health, "token": "***", **_state()}
     if not running and error:
         payload["detail"] = error

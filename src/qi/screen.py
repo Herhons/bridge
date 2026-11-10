@@ -15,9 +15,14 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+from . import uilock
+
 ROOT = Path(__file__).resolve().parents[2]
 LIBRARY = ROOT / "src" / "assets" / "library"
 EVIDENCE = ROOT / "evidence"
+
+#: 恢复并激活窗口（不改位置/大小）。前台是桌面时，只有它能让 SetForegroundWindow 生效。
+SW_RESTORE = 9
 
 user32 = ctypes.windll.user32
 gdi32 = ctypes.windll.gdi32
@@ -172,6 +177,27 @@ class Screen:
         self.last_best: float | None = None
         # 点击前是否要求目标窗口在前台。默认要：点到别的窗口上比不点更糟。
         self.require_foreground = True
+        # B15：tabs 模式下"我这一页是哪个网站的标签"。
+        # 设了它，grab/_assert_foreground 会先确认活动标签是自己的（只读也要确认——
+        # 轮询段每轮放锁，别的席位会把标签切走）。桌面端 / per_site 模式保持 None。
+        self.tab_site: str | None = None
+
+    def _ensure_tab(self) -> None:
+        """tabs 模式下把活动标签切回自己。非该模式 / 没设 site 时是空操作。
+
+        B16：切标签本身要进临界区——标签条是四个席位共用的，不在锁里切会出现
+        "A 刚切过去、B 立刻切走、A 拍到 B 的页面"。与 `browser.ensure_site` /
+        `ui.document` 用同一把 `runs/ui.lock`（`section` 只是 owner 标签不同），
+        同线程重入由 `hold` 按 canonical path 放行，不会自锁。
+        """
+        site = self.tab_site
+        if not site or self.target_hwnd is None:
+            return
+        from . import browser
+        if browser.window_mode() != "tabs":
+            return
+        with uilock.section(f"tab:{site}", timeout=uilock.SECTION_TIMEOUT):
+            browser.acquire_tab(site, self.target_hwnd)
 
     # ---------------------------------------------------------------- 找图
     def bounds(self) -> tuple[int, int, int, int]:
@@ -249,6 +275,10 @@ class Screen:
         2026-11-02 CARD-06a (c)：顺手把最小化的窗口恢复掉（轮询确认，失败也不抛——
         真正的判定留给 `window_rect`）。放在 bind 里而不是各脚本里，是因为
         "绑定一个还在最小化的窗口"在每个调用方都是同一个错误，没必要抄 8 遍。
+
+        B16 注意：**不要给 bind 加 site 参数**。网页端改成在 bind/focus 成功之后
+        直接写 `screen.tab_site = <站点名>`（见各 choose / use 入口）——仓库里
+        大量测试桩的 `bind(self, hwnd)` 只收一个参数，改签名会把它们全打红。
         """
         if not hwnd or not user32.IsWindow(int(hwnd)):
             return False
@@ -261,12 +291,28 @@ class Screen:
         return True
 
     def focus(self) -> bool:
-        """把自己**绑定的**窗口提到前台。没绑定就返回 False（不猜）。"""
+        """把自己**绑定的**窗口提到前台。没绑定就返回 False（不猜）。
+
+        并发（`BRIDGE_UI_SECTIONED=1`）时"抢前台"本身也要进锁：否则 A 刚把
+        自己的窗口提上来、B 立刻提走，A 的点击就抛 `ForegroundLost`
+        （2026-11-08 真机，codex 与 workbuddy 互抢）。单跑不加锁，行为不变。
+        """
         hwnd = self.target_hwnd
         if not hwnd:
             return False
+        if uilock.sectioned():
+            with uilock.section("focus", timeout=uilock.SECTION_TIMEOUT):
+                return self._focus_locked(hwnd)
+        return self._focus_locked(hwnd)
+
+    def _focus_locked(self, hwnd) -> bool:
         if user32.GetForegroundWindow() == hwnd:
             return True
+        # **必须先 SW_RESTORE**：2026-11-08 实测，前台是桌面（WorkerW）时，
+        # 即使 `IsIconic` 为假，直接 SetForegroundWindow 也一律失败；
+        # ShowWindow(SW_RESTORE) 之后再 SetForegroundWindow 就能成功。
+        # 它只做"恢复/激活"，不改窗口位置与大小。
+        user32.ShowWindow(hwnd, SW_RESTORE)
         fg = user32.GetForegroundWindow()
         tid_cur = kernel32.GetCurrentThreadId()
         tid_fg = user32.GetWindowThreadProcessId(fg, None) if fg else 0
@@ -280,6 +326,18 @@ class Screen:
             if attached:
                 user32.AttachThreadInput(tid_cur, tid_fg, False)
         time.sleep(0.25)
+        if user32.GetForegroundWindow() == hwnd:
+            return True
+        # Windows 的前台锁：只有"当前前台进程"或"刚收到用户输入的进程"能改前台。
+        # AttachThreadInput 在并发互抢时会失效（2026-11-08 真机：codex 与 workbuddy
+        # 互相把对方挤下去，谁的点按都抛 ForegroundLost）。兜底用 desk 那套三段策略：
+        # 轻敲 Alt 解除前台锁 / topmost 闪一下；**并且重试**——单次失败往往只是
+        # 对方正在打字，200ms 后就能抢到。
+        from . import desk
+        for _ in range(3):
+            if desk.activate(hwnd, tries=1):
+                return True
+            time.sleep(0.2)
         return user32.GetForegroundWindow() == hwnd
 
     def bring_to_front(self, title_hint: str, *, on_secondary: bool = False) -> bool:
@@ -352,6 +410,8 @@ class Screen:
         return img
 
     def grab(self, region: tuple[int, int, int, int] | None = None) -> np.ndarray:
+        # 截图读的是屏幕合成结果：被遮挡/标签不是自己 → 读到的是别人的画面。
+        self._ensure_tab()
         vx, vy = user32.GetSystemMetrics(SM_XVIRTUALSCREEN), user32.GetSystemMetrics(SM_YVIRTUALSCREEN)
         vw, vh = user32.GetSystemMetrics(SM_CXVIRTUALSCREEN), user32.GetSystemMetrics(SM_CYVIRTUALSCREEN)
         x, y, w, h = (vx, vy, vw, vh) if region is None else region
@@ -645,6 +705,7 @@ class Screen:
         """
         if not self.require_foreground or self.target_hwnd is None:
             return
+        self._ensure_tab()
         fg = user32.GetForegroundWindow()
         if fg != self.target_hwnd:
             raise ForegroundLost(
@@ -652,6 +713,12 @@ class Screen:
                 "你可能切到了别的窗口，已中止，不猜位置。")
 
     def click_xy(self, x: int, y: int) -> None:
+        # 并发模式（`BRIDGE_UI_CONCURRENT=1`）下"前台"是共享资源：别的席位新建窗口
+        # （比如网页端开自己的 Chrome 窗）会把前台抢走，这不是"用户接管"。
+        # 所以点之前先把自己的窗口抢回来；单跑模式保持原样——用户抢走就中止。
+        if uilock.concurrent_mode() and self.target_hwnd is not None:
+            if user32.GetForegroundWindow() != self.target_hwnd:
+                self.focus()
         self._assert_foreground()
         self.move_to(x, y)
         time.sleep(0.03)
@@ -741,7 +808,17 @@ class Screen:
                 time.sleep(interval)
         self._mark_input()
 
+    def _ensure_foreground(self) -> None:
+        """并发模式下把前台抢回来；单跑模式什么都不做（保持"用户抢走就中止"）。
+
+        键盘输入也是发给**前台窗口**的：抢不回来就会把内容打进别人的窗口。
+        """
+        if uilock.concurrent_mode() and self.target_hwnd is not None:
+            if user32.GetForegroundWindow() != self.target_hwnd:
+                self.focus()
+
     def press(self, key: str, *, times: int = 1) -> None:
+        self._ensure_foreground()
         self._assert_foreground()
         vk = VK[key.lower()]
         for _ in range(times):
@@ -752,6 +829,7 @@ class Screen:
         self._mark_input()
 
     def hotkey(self, *keys: str) -> None:
+        self._ensure_foreground()
         self._assert_foreground()
         codes = [VK[k.lower()] for k in keys]
         for c in codes:

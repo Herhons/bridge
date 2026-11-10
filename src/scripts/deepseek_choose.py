@@ -181,6 +181,7 @@ def main() -> int:
     if not s.focus():
         print("窗口提不到前台")
         return 1
+    s.tab_site = "deepseek"
     time.sleep(1.2)
     try:
         # 页面缩放预检（CARD-06b 第 6 条）：非 100% 先 Ctrl+0，仍不是就退出
@@ -222,4 +223,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     console.setup()          # 入口编码：GBK 控制台不再被 \u200b 打崩（CARD-08 第 1 条）
-    raise SystemExit(uilock.run("deepseek_choose", main))
+    raise SystemExit(uilock.entry("deepseek_choose", main))

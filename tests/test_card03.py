@@ -2,6 +2,10 @@
 
 全部打桩：不建窗口、不读真实 UIA 树、不发消息。只验入口的闸门和 --list 的只读输出。
 """
+
+from offline_guard import ensure_offline
+ensure_offline()
+
 import contextlib
 import io
 import json

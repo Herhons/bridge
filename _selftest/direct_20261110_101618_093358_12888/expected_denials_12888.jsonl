@@ -1,0 +1,9 @@
+{"kind": "outside_write", "detail": "F:\\codex\\2026-11-06\\bridge-v0-0-9-codex-draft\\work\\guard_probe_3c70a3c8b2e2402b8837a5f3c3a8eee3.txt", "pid": 12888, "expected": true}
+{"kind": "real_ui_api", "detail": "user32.SendInput", "pid": 12888, "expected": true}
+{"kind": "real_ui_api", "detail": "user32.OpenClipboard", "pid": 12888, "expected": true}
+{"kind": "real_ui_api", "detail": "user32.PrintWindow", "pid": 12888, "expected": true}
+{"kind": "real_ui_api", "detail": "gdi32.BitBlt", "pid": 12888, "expected": true}
+{"kind": "external_network", "detail": "('203.0.113.1', 443)", "pid": 12888, "expected": true}
+{"kind": "unregistered_loopback", "detail": "('127.0.0.1', 18765)", "pid": 12888, "expected": true}
+{"kind": "non_test_process", "detail": "bridge-forbidden-app-must-not-run.exe", "pid": 12888, "expected": true}
+{"kind": "child_guard_missing", "detail": "C:\\Users\\Administrator\\AppData\\Local\\Programs\\Python\\Python310\\python.exe", "pid": 12888, "expected": true}

@@ -46,6 +46,9 @@ SITE = Site(
     sidebar=None,            # 侧栏是一直展开的，没有折叠态
     send_mode="exists",
     send_threshold=0.88,
+    # B19：gemini 的占位文字不在公共 KNOWN_PLACEHOLDERS 里，`flow.clear_composer`
+    # 会把它当成"还有 10 个字没清掉"（真机报 draft_clear_failed）。这里补上。
+    placeholders=("问问 Gemini", "Ask Gemini"),
 )
 
 # 模式切换用（对话 / 任务）。模板是"整组按钮"各一张，读法见 qi/choose.py。
@@ -108,4 +111,4 @@ def main() -> int:
 if __name__ == "__main__":
     console.setup()          # 入口编码：GBK 控制台不再被 \u200b 打崩（CARD-08 第 1 条）
     # UI 前台锁（CARD-09a 第 6 条）：和服务端抢同一把 runs\ui.lock
-    raise SystemExit(uilock.run("gemini_use", main))
+    raise SystemExit(uilock.entry("gemini_use", main))

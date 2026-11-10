@@ -117,20 +117,21 @@ def _release(handle) -> None:
 
 
 @contextmanager
-def locked(root: str | Path | None = None, *, timeout: float = LOCK_TIMEOUT):
+def locked(root: str | Path | None = None, *, timeout: float = LOCK_TIMEOUT,
+           file_path: str | Path | None = None):
     """同目录文件锁。锁文件本身不删——删一把别人可能正持有的锁是竞态。
 
     **打开也要重试**：Windows 的字节范围锁是强制锁，别人持锁时连
     `open(..., "a+b")` 都可能直接被拒（PermissionError 13）。
     所以"打开 + 加锁"整段放进同一个超时循环里。
     """
-    target = path(root)
+    target = Path(file_path) if file_path is not None else path(root)
     target.parent.mkdir(parents=True, exist_ok=True)
     deadline = time.monotonic() + timeout
     handle = None
     while True:
         try:
-            handle = open(lock_path(root), "a+b")
+            handle = open(target.with_name(target.name + ".lock"), "a+b")
             break
         except OSError:
             if time.monotonic() >= deadline:

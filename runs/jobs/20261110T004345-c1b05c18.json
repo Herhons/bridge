@@ -1,0 +1,64 @@
+{
+  "job_id": "20261110T004345-c1b05c18",
+  "request_id": "d1df5a75-f389-4aef-b9c4-c8262ad4a698",
+  "status": "running",
+  "purpose": "review",
+  "prompt": "【B18-汇总】下面是三个模型对同一份架构统计各自给出的评审意见，原文附后。请你作为总结方回答三件事：一、归纳它们的共识；二、指出分歧并给出你的裁决与理由；三、给出一份按优先级排序的最终优化清单，每条写清改哪个模块、预期收益、风险、如何离线验证。如果某条建议你认为不该做，直接说不做并给理由。用中文，1500 字以内。\r\n\r\n===== chatgpt 的意见 =====\r\n1.\r\n统一输入事务\r\n：在\r\n`ui\r\n`、\r\n`qi/flow.py\r\n`及各\r\n`*_use\r\n`新增\r\n`paste_and_confirm()\r\n`：粘贴后有界轮询全文，确认后恢复剪贴板、允许发送；超时或焦点丢失则失败退出。恢复前核对剪贴板版本，避免覆盖用户新内容。风险：UIA不暴露完整值的端需要专门适配。离线验证：假时钟、控件和剪贴板重放“3字→1.3秒后全文”、持续截断、焦点漂移、外部改剪贴板；断言恢复与发送顺序。\r\n2.\r\n让回执具有明确有效期\r\n：修改\r\n`conversation\r\n`、\r\n`tier_guard\r\n`及各\r\n`choose/use\r\n`，将新建会话统一放在选档之前；配置区分模型、强度的作用域。新增\r\n`validate_receipt()\r\n`，会话操作使会话级回执失效，发送前重新实读全部要求档位。风险：增加读取耗时；本地会话代次无法独自发现外部切换。离线验证：状态机模拟“新建重置模型但保留强度”、空对话跳过新建、外部切换后档位改变，断言旧回执不能直接放行。\r\n3.\r\n回答采集绑定目标回合\r\n：在\r\n`dsh_use\r\n`、\r\n`lastreply\r\n`新增\r\n`copy_reply(turn_ref)\r\n`，定位本次回答块及其动作条，点击后等待剪贴板版本变化；复制前后消息结构变化则重新定位，所有重试共享总截止时间。风险：持续重绘可能耗尽预算。离线验证：重放旧坐标落在提问、动作条延迟、条数变化、剪贴板未更新、回答恰好等于提问；验证归属依据是目标回答块，不能靠“文本不同”验真。\r\n4.\r\n把定位结果变成动作前置条件\r\n：在\r\n`screen\r\n`、\r\n`ui\r\n`及各\r\n`*_choose\r\n`新增\r\n`resolve_panel()\r\n`与\r\n`select_search_text()\r\n`；前者保留候选矩形及合并依据，后者统一核对搜索框锚点、当前焦点和残留文本后才发Ctrl+A。风险：几何合并可能误连两个独立面板。离线验证：用现有numpy生成244灰条切割、同宽双面板、间隙临界值等图像，再配合焦点落页面的假控件序列，验证合并边界及快捷键不会越权发出。\r\n5.\r\n副本问题单独结论：倾向合并端内公共实现，保留choose/use入口。\r\n判据是行为契约一致：相同输入和假UI轨迹下，候选函数的状态变化、副作用、异常及证据输出一致，才抽入共享driver；阶段差异用明确参数或小函数表达。若同名函数实际依赖不同会话阶段，先保留。发问、收答继续属于use。相似度只是寻找候选的线索，不能证明整文件可合并；也不应据此把不同端硬塞进一个大流程。\r\n\r\n===== grok 的意见 =====\r\n架构评审结论（B18）\r\n当前最大风险是“读回确认”脆弱 + 高入度枢纽（uilock/tier_guard/ui/window）+ 三对 choose/use 近乎复制。串行焦点与无新依赖约束下，优先修确认路径与时序，再处理重复与未测模块。\r\n优化建议（按收益/风险比排序，最多5条）\r\n1. \r\n面板白块误切与选中行定位（最高优先级）\r\n改 \r\nui\r\n/\r\nwindow\r\n 中白块检测与最大块选取逻辑（相关函数如 detect_white_blocks / pick_largest_block）。增加“选中行浅灰”容差与连续块合并：检测浅灰边界后强制合并相邻白块，优先取顶部搜索框区域而非模型行。点击后强制读回模板相似度，低于阈值（如 0.7）则回退并重试搜索框定位。\r\n风险\r\n：过度合并可能误点其他浅灰元素。\r\n离线验证\r\n：构造含浅灰选中行的面板截图 + 模板，断言最大块始终指向搜索框，相似度恢复 >0.9。\r\n2. \r\nGrok 粘贴时序与剪贴板还原\r\n改 \r\nuilock\r\n 与相关粘贴路径（paste_and_confirm / restore_clipboard）。粘贴后轮询 UIA 文本直到稳定（或超时 2.5s），再还原剪贴板；失败时记录部分写入并重试。\r\n风险\r\n：轮询增加单步延迟，极端卡顿可能超时。\r\n离线验证\r\n：模拟 UIA 延迟 1.3s 的文本注入，断言完整文本写入且剪贴板最终还原正确。\r\n3. \r\nDSH 复制动作条渲染时序\r\n改 \r\ndsh\r\n 的 use 侧复制逻辑（copy_answer / wait_action_bar）。复制前显式等待动作条可见（UIA 属性或模板匹配），超时则重试或标记失败；禁止在动作条未渲染时直接复制。\r\n风险\r\n：等待可能被抢占打断。\r\n离线验证\r\n：构造“动作条延迟出现”的截图序列，断言复制内容是回答而非提问。\r\n4. \r\nChatGPT 会话隔离与新聊天重置\r\n改 \r\ntier_guard\r\n 与对应 choose/use（select_model / new_chat_guard）。点新聊天前记录当前模型，点后强制读回并比对；不一致则重新选档并写回执。把“会话隔离”规则下沉到 tier_guard 统一处理。\r\n风险\r\n：额外读回增加步骤，可能触发额外动画。\r\n离线验证\r\n：模拟新聊天后模型重置的 UIA 状态，断言最终回执与预期模型一致。\r\n5. \r\n未测模块补测 + 三对 choose/use 公共层提取（中长期）\r\n为 \r\ndesk_sites\r\n、\r\nlastreply\r\n、\r\nreject\r\n 增加离线用例（至少覆盖主路径）。对 dsh/codex/opencode 的 choose 与 use：提取公共基类或函数（同名 35–42 个函数中的稳定部分），站点差异用策略对象或覆盖函数保留。先提取只读确认与选档骨架。\r\n风险\r\n：提取过程引入回归，需分批。\r\n离线验证\r\n：现有 1452 用例全绿 + 新增模块覆盖率 >80%；相似度函数调用路径保持不变。\r\n三对 0.9 相似度副本：合并还是保留？\r\n建议：提取公共层 + 保留站点差异，不完全合并。\r\n\r\n判据：\r\n• \r\n相似度 >0.9 且同名函数 >30，说明存在可复用骨架，继续复制会放大时序/确认类故障。\r\n• \r\n但站点差异（ChatGPT 会话隔离、DSH 动作条、Grok 延迟等）已显现，完全合并会让一处改动影响三端。\r\n• \r\n判据量化：公共函数占比 >70% 且近期故障中有跨站点同类时序问题 → 提取；差异函数涉及焦点/动画/会话状态 → 保留覆盖。\r\n先做第5条的骨架提取，再根据回归情况决定是否进一步合并。\r\n\r\n===== deepseek 的意见 =====\r\n一、先修\r\nscreen\r\n白块取最大块：改为“按候选行高与搜索框先验打分选块”，并加浅灰行容忍。\r\n模块：\r\nscreen\r\n（与\r\nbrowser\r\n的互 import 只保留调用方向）。函数级：把\r\npick_largest_block\r\n拆成\r\nscore_block\r\n（面积、宽高比、距顶距离、是否含输入框模板、是否被浅灰行切成两段）和\r\npick_best_block\r\n；浅灰行在二值化后做形态学闭运算再分块。风险：误选面板小图标；先验阈值过拟合 dsh。离线验证：用故障一截图跑模板相似度，断言选中框命中搜索框且相似度恢复到 ≥0.9；对 4 席历史截图做回归，禁止选到模型行。收益/风险最高。\r\n二、\r\nconversation\r\n粘贴后改为“UIA 文本稳定读回”再还原剪贴板。\r\n模块：\r\nconversation\r\n，复用\r\nlastreply\r\n的读回逻辑（当前无测试）。函数级：\r\npaste_and_confirm(text)\r\n轮询 UIA 的\r\nValuePattern\r\n/\r\nTextPattern\r\n，连续两次读回与期望前缀一致且长度达阈值才\r\nrestore_clipboard\r\n；超时走重试而非立即还原。风险：轮询增加串行时长，占用 uilock；需设上限避免卡死。离线验证：用可注入延迟的假 UIA 桩，模拟 1.3 秒进文本，断言只还原一次且写入完整；对 3 字故障做回放。收益高、风险中。\r\n三、\r\ntier_guard\r\n加“会话级档位回执缓存”，修 chatgpt 新聊天重置。\r\n模块：\r\ntier_guard\r\n（入度 19，集中改）。函数级：\r\nensure_tier(endpoint, session_key)\r\n先查\r\ntier_receipt[session_key]\r\n，命中则跳过写档；新聊天检测到 session_key 变化时强制重写并更新回执。风险：缓存过期导致档位错；需在每次收答后失效。离线验证：构造“切新聊天”序列桩，断言写档次数与回执状态；对四席各跑一轮，断言读回确认仍发生。收益中高、风险低。\r\n四、合并三对 choose/use 副本为参数化模板，但保留薄适配层。\r\n模块：\r\ndsh\r\n、\r\ncodex\r\n、\r\nopencode\r\n的 choose/use。函数级：抽\r\nchoose_common(site_profile)\r\n与\r\nuse_common(site_profile)\r\n，35–42 个同名函数按 profile 表驱动；三处只留\r\ndsh_profile\r\n等常量与 2–3 个差异钩子。风险：动画/抢占差异被抽象掉，回归面大；先只合并 choose，use 延后。离线验证：对三站历史录制跑双跑对比（旧实现 vs 新实现），断言选中行、读回文本、证据落盘逐字段一致；差异函数单独覆盖。收益中、风险中。\r\n五、补\r\ndesk_sites\r\n、\r\nlastreply\r\n、\r\nreject\r\n的离线测试，并把\r\nuilock\r\n持锁粒度从整轮降到“单席动作段”。\r\n模块：测试层 +\r\nuilock\r\n（入度 26）。函数级：\r\nwith_uilock\r\n改为可重入的\r\nacquire_action/release_action\r\n，每席只在选档→读回→写回执→提问→收答各段持锁，段间让出；\r\nlastreply\r\n抽出\r\nwait_stable_text\r\n供第二条复用。风险：段间被抢占，需保证焦点切换前完成读回；改动面大，放最后。离线验证：用假 UIA 调度器注入抢占，断言无跨席焦点串扰、读回仍成立；三模块补最小用例。收益中、风险偏高。\r\n三对 choose/use 副本：默认合并，判据是“差异是否可表为数据而非控制流”。若三站差异仅在模板、坐标、等待阈值、读回字段名，且同名函数语义一致率 ≥0.9，则抽公共实现 + profile 表；若某站存在独占的控制流（如 chatgpt 会话隔离、dsh 浅灰行特判）或动画时序不同，则该函数保留薄适配层，不强行合并。合并前必须有三站历史录制的双跑等价验证；无等价证据则保留，先加共享测试。",
+  "created_at": "2026-11-09T16:43:45+00:00",
+  "started_at": "2026-11-09T16:43:45+00:00",
+  "finished_at": null,
+  "order": [
+    "gemini"
+  ],
+  "endpoints": {
+    "gemini": {
+      "status": "running",
+      "reply": null,
+      "error": null,
+      "error_code": null,
+      "exit_code": null,
+      "choose": {
+        "ok": true,
+        "dimension": "model",
+        "target": "argon",
+        "readback": "argon",
+        "targets": {
+          "model": "argon"
+        },
+        "confirmed": true,
+        "exit_code": 0,
+        "timeout": false,
+        "elapsed": 6.234,
+        "error_code": null,
+        "error_message": null,
+        "stderr": ""
+      },
+      "use": null,
+      "started_at": "2026-11-09T16:43:45+00:00",
+      "finished_at": null,
+      "elapsed": null,
+      "evidence_l1": {
+        "job_id": "20261110T004345-c1b05c18",
+        "request_id": "d1df5a75-f389-4aef-b9c4-c8262ad4a698",
+        "at": "2026-11-09T16:43:45+00:00",
+        "source": "server"
+      },
+      "progress": {
+        "schema_version": 1,
+        "job_id": "20261110T004345-c1b05c18",
+        "endpoint": "gemini",
+        "pid": 31856,
+        "at": "2026-11-10T00:45:28+0800",
+        "stage": "waiting",
+        "busy": true,
+        "copies": 0
+      }
+    }
+  },
+  "quorum": {
+    "required": 1,
+    "recovered": 0,
+    "met": false,
+    "clamped": true
+  }
+}

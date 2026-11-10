@@ -1,0 +1,30 @@
+{
+ "schema_version": 1,
+ "endpoint": "workbuddy",
+ "stage": "tier_unconfirmed",
+ "reason": "table_unconfigured",
+ "code": 5,
+ "at": "2026-11-10T10:18:20+0800",
+ "hwnd": null,
+ "window": {
+  "rect": null,
+  "zoom_percent": null
+ },
+ "templates": [],
+ "hint": "workbuddy/model/accept 未配置用途档位，拒绝发送；先核实最低/最高档并配置 docs/tiers.json，再重新 choose",
+ "result": {
+  "ok": false,
+  "stage": "tier_unconfirmed",
+  "reason": "table_unconfigured",
+  "code": 5,
+  "hint": "workbuddy/model/accept 未配置用途档位，拒绝发送；先核实最低/最高档并配置 docs/tiers.json，再重新 choose",
+  "detail": {
+   "expected": [],
+   "tier_check": "table_unconfigured",
+   "age": 0.059
+  }
+ },
+ "extra": {},
+ "screenshot": null,
+ "deduped": null
+}

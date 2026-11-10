@@ -17,6 +17,10 @@
 """
 from __future__ import annotations
 
+from offline_guard import ensure_offline
+ensure_offline()
+
+
 import http.client
 import io
 import json
@@ -63,7 +67,7 @@ class FakeRunner:
         self.calls: "list[list[str]]" = []
         self.started = threading.Event()
 
-    def __call__(self, cmd, *, timeout, cwd):
+    def __call__(self, cmd, *, timeout, cwd, env=None):
         self.calls.append(list(cmd))
         script = Path(cmd[1]).name
         endpoint = script.split("_")[0]
@@ -329,7 +333,7 @@ class HttpGuardTests(ServerCase):
         status, body, _ = self.request("GET", "/health", token=None)
         self.assertEqual(status, 200)
         self.assertTrue(body["ok"])
-        self.assertEqual(body["port"], self.port)
+        self.assertEqual(set(body), {"ok", "version"})
         self.assertNotIn("token", json.dumps(body))
 
     def test_endpoints_without_token_is_401(self):
@@ -508,6 +512,14 @@ class AskTests(ServerCase):
         self.assertIn(job_id, [row["job_id"] for row in restarted.list_jobs()])
 
     def test_empty_tier_table_fails_closed(self):
+        # 显式把这份临时副本的 workbuddy 白名单清空：门禁语义（空表必拒发）必须
+        # 继续被覆盖，不能依赖"生产配置恰好是空的"——T4-1 之后它已经有值了。
+        path = self.root / "docs" / "tiers.json"
+        data = json.loads(path.read_text(encoding="utf-8"))
+        for key in ("test", "review", "accept"):
+            data["endpoints"]["workbuddy"]["dimensions"]["model"][key] = []
+        path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+
         _, body, _ = self.ask(["workbuddy"])
         job = self.engine.wait_job(body["job_id"], 5)
         record = job["endpoints"]["workbuddy"]
@@ -747,7 +759,11 @@ class CliTests(unittest.TestCase):
     def test_start_refuses_when_pid_is_alive(self):
         port = _free_port()
         server.write_pid(port)                   # 当前进程，一定活着
-        code, out = _quiet(bridge_cli.start, port)
+        # The port deliberately has no listener. Model connection refusal
+        # explicitly rather than probing an unowned local service.
+        with mock.patch.object(bridge_cli.http.client, "HTTPConnection") as connection:
+            connection.return_value.request.side_effect = ConnectionRefusedError("offline fixture")
+            code, out = _quiet(bridge_cli.start, port)
         self.assertEqual(code, 1)
         self.assertEqual(out["error"], "already_running")
         self.assertEqual(out["pid"], os.getpid())
@@ -755,7 +771,9 @@ class CliTests(unittest.TestCase):
     def test_status_reports_not_running(self):
         port = _free_port()
         with mock.patch.object(bridge_cli.server, "load_config",
-                               return_value={"port": port}):
+                               return_value={"port": port}), \
+             mock.patch.object(bridge_cli.http.client, "HTTPConnection") as connection:
+            connection.return_value.request.side_effect = ConnectionRefusedError("offline fixture")
             code, out = _quiet(bridge_cli.status)
         self.assertEqual(code, 1)
         self.assertFalse(out["running"])

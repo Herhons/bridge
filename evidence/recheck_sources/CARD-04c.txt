@@ -1,0 +1,32 @@
+Bridge v0.0.9 · Codex 独立只读复验 · 2026-11-06（北京时间）
+工作目录：F:\Bridge\v0.0.9
+共同回归命令：py -3.10 -X utf8 -B -m unittest discover -s tests -v
+Python 3.10.11；最终隔离复跑 Ran 731 tests in 24.369s；OK；EXIT=0；无跳过。
+正式日志 unittest_isolated.txt；首轮731/23.319s原日志unittest.txt保留。两轮使用同一src/tests，第二轮只在运行期重定向写盘并拦截越界写入/真实输入。
+执行偏差：首轮测试漏隔离导致目录外日志/合成输入标记/失败截图写盘，详 READONLY_INCIDENT.txt；不把首轮冒称完全只读。最终隔离复跑目录外变更为0。
+保护对象 src/tests/cards/PLAN.md/progress.json 共402个既有文件SHA256不变；未新增受保护文件，详integrity_final.json。
+独立反例：independent_probes.py/.txt/_result.json；补充 independent_additional.py/.txt/_result.json，共15项，不计入731单测。
+判定口径：PASS仅针对本卡；FAIL区分实现缺陷与证据不足。未主动运行真机choose/use发送入口或外部通知，不重放旧提问。
+后续卡明确改变的行为按后续要求评估，不把合法后续变更算成旧卡回归。
+
+VERDICT FAIL
+缺口性质：明确的错误信息保留缺口；原先打回的两条核心复现已修好。
+卡片：cards/CARD-04c-fix-runlog2.md:2-5。
+
+逐条核对
+1. 三端 idle_seconds 异常恰好记一次、原样抛出：PASS。
+   codex_use.main:1633-1698，dsh_use.main:870 起，opencode_use.main:917 起，把等待纳入保护区；done 内 logged 防重。
+   tests/test_card04c.py:102、130、145 对 codex/dsh/opencode 各做故障注入，断言异常对象不变、record 调用及落盘均一行。
+2. Codex --list 失败 hint 进入 runlog：PASS。
+   codex_use.py:1843 起将 out 交 done；src/qi/runlog.py:29-69 由 failure_note 选取原因。
+   tests/test_card04c.py:164、177、192 验打不开卡片、打不开模型列表、未知模型。
+3. 卡片第 3 行还要求 hint/note/error 一起传给 runlog：FAIL。
+   runlog.failure_note 只选 hint 或 error，完全不读取 note。
+   独立 P04C_note_dropped：{ok:false,stage:list,note:NOTE-MUST-SURVIVE} 得到 stage=list (no hint)，原 note 丢失。
+   现有 FailureNote 四项测试只覆盖 hint/error/stage/success，没有 note-only 分支。
+4. 单测门槛 >=108：PASS；本卡模块 10 项，全量 731 OK。
+5. --help 兼容：对照 _backup_20261031/src/scripts/*_use.py.bak-card04c，三个 main 的既有 add_argument AST 完全相同；新增 --purpose 来自后续 06a/06c，不能拿当前 help 的合法新增参数反判本卡。未调用任何真机 CLI。
+6. 三端历史 --list EXIT=0：原始证据 evidence/card04c_list.txt:6-21；后续复核原文在 evidence/reaccept_0404/。本轮未重跑 UI 查询。
+7. 备份、CHANGES 与施工收尾：指定 04c 备份存在；CHANGES-20261030.md:534 记录收尾。本轮按用户新规则不再运行 notify_done。
+
+建议返工卡：04c-log-note。将 note 纳入失败原因保留策略，补 note-only 与 hint/note/error 优先级测试；保持原核心异常与 hint 回归。

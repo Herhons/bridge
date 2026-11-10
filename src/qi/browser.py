@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import ctypes
 import json
+import os
 import time
 from ctypes import wintypes
 from pathlib import Path
@@ -144,6 +145,29 @@ def _on_secondary(hwnd: int) -> bool:
     return not (0 <= cx < pw and 0 <= cy < ph)
 
 
+def _best_tab_window() -> int | None:
+    """tabs 模式选窗口：**标签最多的那个**（同数量再比面积）。
+
+    理由：四端共用一窗的前提是那窗里已经有这几家的标签。记忆里的 hwnd 可能是
+    上一次 per_site 模式留下的单标签窗（2026-11-08 就踩到：chatgpt 记着一个只有
+    一个标签的窗，四个端全绑过去，另外三家的标签根本不在里面）。
+    """
+    from . import ui                    # 模块级没导入：漏了它 NameError 会被下面吞成 0
+
+    best, best_key = None, (0, 0)
+    for h in _chrome_hwnds():
+        try:
+            count = len(ui.tabs(h))
+        except (RuntimeError, OSError, AttributeError):   # 读不到标签条就当 0
+            count = 0
+        r = wintypes.RECT()
+        user32.GetWindowRect(h, ctypes.byref(r))
+        area = (r.right - r.left) * (r.bottom - r.top)
+        if (count, area) > best_key:
+            best, best_key = h, (count, area)
+    return best
+
+
 def _largest_chrome() -> int | None:
     best, area = None, 0
     for h in _chrome_hwnds():
@@ -222,12 +246,193 @@ def _load() -> dict:
 
 
 def _save(hwnd: int, site: str = "") -> None:
-    STATE.write_text(json.dumps({"hwnd": int(hwnd), "site": site}, ensure_ascii=False),
-                     encoding="utf-8")
+    """写窗口记忆。
+
+    2026-11-08（B13b）：并发会审要**一端一窗**。原来只有一份 `{hwnd, site}`，
+    `ensure_site` 复用同一个窗口切标签 —— 于是 chatgpt/gemini/grok/deepseek
+    任何时刻只有一个标签在前台，`ui.document` 只能拿到它，并发无从谈起。
+
+    现在多存一层 `by_site`，**顶层 `hwnd/site` 照旧**（老代码/老文件都能读）。
+    """
+    data = _load()
+    data["hwnd"] = int(hwnd)
+    data["site"] = site or ""
+    data["v"] = 2
+    if site:
+        bucket = data.get("by_site")
+        if not isinstance(bucket, dict):
+            bucket = {}
+        bucket[str(site)] = int(hwnd)
+        data["by_site"] = bucket
+    STATE.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
 
 
-def current() -> int | None:
-    h = _load().get("hwnd")
+TAB_TIMEOUT = 2.5
+#: 切标签后用它确认"切对了"。只认 URL host —— 标签名会被 Chrome 加上
+#: "内存用量 / 闲置标签页" 之类的后缀，名字只能当提示（真机探针 2026-11-08）。
+HOSTS = None          # 延迟到 ui 导入后取，避免模块级循环导入
+
+
+def window_mode() -> str:
+    """网页端开窗形态：`tabs`（一窗多标签）或 `per_site`（一端一窗）。
+
+    代码默认 `per_site` —— 与 B13b 之后的行为逐字节一致；
+    真正切到 `tabs` 是 `docs/bridge_server.json` 里配的，由服务端下发环境变量。
+    """
+    return os.environ.get("BRIDGE_WEB_WINDOW_MODE", "per_site") == "tabs" and "tabs" or "per_site"
+
+
+def _hosts() -> dict:
+    from . import ui
+    return ui.HOSTS
+
+
+def _tab_record(site: str) -> dict:
+    bucket = _load().get("tabs")
+    if not isinstance(bucket, dict):
+        return {}
+    item = bucket.get(str(site))
+    return item if isinstance(item, dict) else {}
+
+
+def _save_tab(hwnd: int, site: str, item=None) -> None:
+    """记住"这个 site 用哪个窗口的哪个标签"。`by_site` 仍然写（四端同值）。"""
+    data = _load()
+    tabs = data.get("tabs")
+    if not isinstance(tabs, dict):
+        tabs = {}
+    record = {"hwnd": int(hwnd), "bound_at": time.strftime("%Y-%m-%dT%H:%M:%S")}
+    if isinstance(item, dict):
+        record.update({k: v for k, v in item.items() if k in ("rid", "name")})
+    tabs[str(site)] = record
+    data["tabs"] = tabs
+    data["v"] = 3
+    if site:
+        bucket = data.get("by_site")
+        if not isinstance(bucket, dict):
+            bucket = {}
+        bucket[str(site)] = int(hwnd)
+        data["by_site"] = bucket
+    data["hwnd"] = int(hwnd)
+    data["site"] = site or data.get("site") or ""
+    STATE.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+
+
+def _active_url(hwnd: int) -> tuple[str, int]:
+    """当前活动标签的 (url, 文档数)。后台窗口 URL 会是空串（ui.documents 的既定行为）。"""
+    from . import ui
+    try:
+        docs = ui.documents(hwnd)
+    except Exception:                    # noqa: BLE001 - 读不到就算没读到
+        return "", 0
+    if len(docs) != 1:
+        return "", len(docs)
+    return (docs[0][1] or ""), 1
+
+
+def _await_site(hwnd: int, site: str, seconds: float = TAB_TIMEOUT) -> bool:
+    from urllib.parse import urlsplit
+
+    host = _hosts().get(site)
+    if not host:
+        return True
+    end = time.monotonic() + seconds
+    while time.monotonic() < end:
+        url, count = _active_url(hwnd)
+        if count == 1 and url and urlsplit(url).hostname == host:
+            return True
+        time.sleep(0.2)
+    return False
+
+
+class TabUnbound(RuntimeError):
+    """认不出"哪个标签是我的"。**fail-closed**：绝不猜一个标签就往上写字。"""
+
+    stage = "tab_unbound"
+    code = 10
+
+    def __init__(self, message: str, *, stage: str = "tab_unbound", facts=None):
+        super().__init__(message)
+        self.stage = stage
+        self.facts = facts or {}
+
+
+def acquire_tab(site: str, hwnd: int, *, tab: int | None = None,
+                verbose: bool = False) -> None:
+    """把 hwnd 的活动标签确保成 `site` 那一个。**幂等**：已经对就 0 次切换。
+
+    每次读/点/截图之前都要调一次：轮询段每轮放锁，别的席位会把标签切走。
+    判据只认 URL host（`ui.HOSTS`）；标签名只用来缩小候选（会被 Chrome 加后缀）。
+    """
+    from urllib.parse import urlsplit
+
+    from . import ui
+
+    host = _hosts().get(site)
+    if not host:
+        return                            # 桌面端没有标签概念
+    url, count = _active_url(hwnd)
+    if count == 1 and url and urlsplit(url).hostname == host:
+        return                            # 已经是我这一页
+    items = ui.tabs(hwnd)
+    if not items:
+        raise TabUnbound(f"{site}: 读不到标签条（窗口={hwnd}）", stage="tab_strip_missing",
+                         facts={"hwnd": hwnd})
+    keyword = (SITES.get(site) or ("", site))[1].lower()
+    others = [k for name, (_, k) in SITES.items() if name != site]
+    if tab is not None and 1 <= int(tab) <= len(items):
+        candidates = [items[int(tab) - 1]]
+    else:
+        named = [it for it in items if keyword in (it.name or "").lower()]
+        if len(named) == 1:
+            candidates = named
+        else:
+            # 名字不唯一（Chrome 会加"内存用量"后缀、也可能有两个同站标签）：
+            # 先试名字命中的，再试其余"明显不是别家"的，逐个 Select + URL 复核。
+            candidates = named + [it for it in items
+                                  if it not in named
+                                  and not any(k in (it.name or "").lower() for k in others)]
+    last_error = None
+    for item in candidates:
+        try:
+            item.control.GetSelectionItemPattern().Select()
+        except Exception as exc:          # noqa: BLE001 - 元素失效：换下一个
+            last_error = exc
+            continue
+        if _await_site(hwnd, site):
+            try:
+                rid = list(item.control.GetRuntimeId() or [])
+            except (TypeError, AttributeError):
+                rid = []                   # UIA 偶发不返回数组；rid 只是提示，不当证据
+            _save_tab(hwnd, site, {"rid": rid, "name": item.name})
+            if verbose:
+                print(f"  切到标签 {item.name!r}（{site}）")
+            return
+    raise TabUnbound(
+        f"{site}: 切不到自己的标签（窗口={hwnd}；读到 {len(items)} 个标签："
+        f"{[it.name for it in items][:6]}）" + (f"；最后一次错误 {last_error}" if last_error else ""),
+        stage="tab_ambiguous" if len(candidates) > 1 else "tab_unbound",
+        facts={"hwnd": hwnd, "tabs": [it.name for it in items][:8]})
+
+
+def acquire_document(site: str, hwnd: int, *, wake=None):
+    """取文档。tabs 模式的"先切标签"已经在 `ui.document` 里统一做了。"""
+    from . import ui
+    return ui.document(hwnd, site, wake=wake)
+
+
+def concurrent() -> bool:
+    """并发会审模式：每个端用自己的窗口，不切别人的标签。"""
+    return os.environ.get("BRIDGE_UI_CONCURRENT") == "1"
+
+
+def current(site: str | None = None) -> int | None:
+    data = _load()
+    if site:
+        bucket = data.get("by_site")
+        h = bucket.get(site) if isinstance(bucket, dict) else None
+        return int(h) if h and alive(int(h)) else None
+    h = data.get("hwnd")
     return int(h) if h and alive(int(h)) else None
 
 
@@ -264,47 +469,153 @@ def _open_url(hwnd: int, url: str, wait: float = 1.2) -> None:
     _wait_ready(hwnd)
 
 
-def _spawn(url: str, position, size, timeout: float, verbose: bool) -> int | None:
+def _cleanup_spawn(hwnd, verbose=False):
+    try:
+        close(hwnd)
+    except Exception as exc:                   # cleanup must preserve the cause
+        if verbose:
+            print(f"  新窗口清理失败 hwnd={hwnd}: {type(exc).__name__}: {exc}")
+
+
+#: 新窗口归属 nonce 的适用范围（T1-1 P1）。
+#: 只对"已确认会保留查询串"的站点启用；deepseek 未验证，先走弱证据路径
+#: （恰好一个新增窗口），避免站点吞掉 query 后永远认领不到窗口。
+#: 真要一键关掉整条 P1 路径，把这里改成空集合即可。
+SPAWN_NONCE_SITES = frozenset({"chatgpt", "gemini", "grok"})
+
+
+def _spawn_nonce(name: str) -> str | None:
+    """给本次启动生成一个一次性归属 nonce；不在白名单返回 None（不启用 P1）。"""
+    if name not in SPAWN_NONCE_SITES:
+        return None
+    import secrets
+
+    return secrets.token_hex(8)
+
+
+def _with_nonce(url: str, nonce: str) -> str:
+    """把归属 nonce 拼进查询串（保留原有 query 与 fragment）。"""
+    from urllib.parse import urlencode, urlsplit, urlunsplit
+
+    parts = urlsplit(url)
+    extra = urlencode({"bridge": nonce})
+    query = f"{parts.query}&{extra}" if parts.query else extra
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, query, parts.fragment))
+
+
+def _spawn_proves_nonce(hwnd: int, nonce: str, seconds: float = 4.0) -> bool:
+    """这个窗口里有没有一条文档的 URL 带本次 nonce。
+
+    读不到文档、或读到但与 nonce 对不上，都返回 False（fail-closed）。
+    页面刚打开时 URL 可能还没出来，所以轮询几秒；仍然读不到就算不成立。
+    """
+    from . import ui
+
+    end = time.monotonic() + seconds
+    while time.monotonic() < end:
+        try:
+            docs = ui.documents(hwnd)
+        except Exception:                  # noqa: BLE001 - 读不到就继续等
+            docs = []
+        if any(nonce in (value or "") for _, value in docs):
+            return True
+        time.sleep(0.4)
+    return False
+
+
+def _spawn(url: str, position, size, timeout: float, verbose: bool,
+           nonce: str | None = None) -> int | None:
+    """启动一个新窗口并绑定它。**只有证明得了归属才认领，认领了才允许关闭。**
+
+    归属证据（T1-1）：
+      · 给了 `nonce`  -> URL 里带它，且窗口里某条文档的 URL 也能读回它（强证据）
+      · 没给 `nonce`  -> 只能靠"启动前后恰好多了 1 个窗口"（弱证据，但仍**不关**
+        任何未认领的窗口）
+
+    **绝不做的事**：超时后再"看一眼有没有迟到窗口"就把它当成自己的。
+    迟到 1 秒出现的 Chrome 窗口没有任何归属证据，它极可能是用户自己新开的；
+    旧代码就是这么把一个无证据的窗口赋给 `hwnd`、然后被 `finally` 关掉的。
+    """
     before = _chrome_hwnds()
-    arg = " ".join([
-        "--new-window",
-        "--no-first-run",
-        "--no-default-browser-check",
-        f"--window-position={position[0]},{position[1]}",
-        f"--window-size={size[0]},{size[1]}",
-        url,
-    ])
+    target = _with_nonce(url, nonce) if nonce else url
+    arg = " ".join(["--new-window", "--no-first-run", "--no-default-browser-check",
+                    f"--window-position={position[0]},{position[1]}",
+                    f"--window-size={size[0]},{size[1]}", target])
     rc = shell32.ShellExecuteW(None, "open", CHROME, arg, None, SW_SHOWMINNOACTIVE) or 0
     if rc <= 32:
-        if verbose:
-            print(f"  启动失败 rc={rc}")
         return None
+    hwnd, keep, proven = None, False, False
+    try:
+        end = time.time() + timeout
+        while time.time() < end:
+            time.sleep(0.4)
+            new = _chrome_hwnds() - before
+            if len(new) > 1:
+                # Ownership is ambiguous; never pick/close an arbitrary window.
+                if verbose:
+                    print("  出现多个新窗口，无法确认归属，停止绑定")
+                return None
+            if new:
+                hwnd = next(iter(new))
+                break
+        if hwnd is None:
+            # 超时没有任何新窗口：就是没有。**不再回头认领迟到窗口**——
+            # 那一步既证明不了归属，又会把用户自己新开的窗口关掉。
+            if verbose:
+                print("  超时没有等到新窗口；不认领任何迟到窗口")
+            return None
+        # 归属**先证、后动窗口**（F2，2026-11-07 独立复核实测 A4/A5）：
+        # 旧顺序是先 place/focus 再验 nonce，一旦 place/focus 失败就进 finally 关窗，
+        # 而那时归属还没证。现在把取证提到最前，验证不过就原地保留。
+        if nonce:
+            if not _spawn_proves_nonce(hwnd, nonce):
+                # 有窗口但读不到本次 nonce：归属不成立。**保留窗口不关**，
+                # 交给人和日志去判断（可能是站点丢了 query，也可能是别人开的）。
+                if verbose:
+                    print(f"  窗口 hwnd={hwnd} 里读不到本次 nonce，不认领（保留，不关闭）")
+                return None
+            proven = True
+        place(hwnd, position, size)
+        if not _focus(hwnd) or not _wait_ready(hwnd):
+            return None
+        if verbose:
+            print(f"  新窗口 hwnd={hwnd}" + ("（nonce 已证）" if proven else "（弱证据）"))
+        keep = True
+        return hwnd
+    finally:
+        # 只关**证明得了归属**的窗口。弱证据（启动前后恰好多 1 个）不足以杀掉
+        # 用户自己的窗口：宁可留一个孤儿窗口，也不误关（施工单 T1-1）。
+        if hwnd is not None and not keep and proven:
+            _cleanup_spawn(hwnd, verbose)
 
-    hwnd = None
-    end = time.time() + timeout
-    while time.time() < end:
-        time.sleep(0.4)
-        new = _chrome_hwnds() - before
-        if new:
-            hwnd = max(new)
-            break
-    if hwnd is None:
-        # 可能只是慢半拍：把这段时间里冒出来的新窗口一并关掉，不留垃圾。
-        time.sleep(1.0)
-        for late in _chrome_hwnds() - before:
-            close(late)
-        if verbose:
-            print("  没等到新窗口")
-        return None
-    place(hwnd, position, size)
-    # 2026-11-01 CARD-WEB：开完必须提到前台。Chrome 后台窗口读不到页面 URL，
-    # 不置前就会一直判"不是目标页"（旧代码在这里白等 25 秒然后报 no_window）。
-    if not _focus(hwnd) and verbose:
-        print(f"  新窗口 hwnd={hwnd} 提不到前台")
-    _wait_ready(hwnd)
-    if verbose:
-        print(f"  新窗口 hwnd={hwnd}")
-    return hwnd
+
+def _site_ready(hwnd: int, name: str, *, remembered: bool = False) -> bool:
+    """这个窗口里有没有本站的页面。
+
+    判据与 `ui._pick` 同构，**顺序不可换**：
+
+    ① 有非空 URL 且 host 对得上 → 就绪（强证据）；
+    ② URL **全读不到**、窗口里只有一个文档、且这个窗口是**我们记住的**那个
+       → 就绪。`ui.documents` 的 docstring 明写：URL 为空是"窗口不在前台"，
+       不是"没有这个文档"；`ui._pick` 也是靠这一条兜底绑定的。
+    ③ 其余一律不就绪（fail-closed）。
+
+    为什么 ② 只对记住的窗口放行：假阴（说没就绪）只会多开一个窗，可逆；
+    假阳（说就绪但那是别人的窗口）会往别人的对话里写字，不可逆。
+    """
+    from urllib.parse import urlsplit
+
+    from . import ui
+    host = ui.HOSTS.get(name)
+    try:
+        docs = ui.documents(hwnd)
+    except Exception:                      # noqa: BLE001 - 读不到就是没准备好
+        return False
+    if any(url and host and urlsplit(url).hostname == host for _c, url in docs):
+        return True
+    if remembered and len(docs) == 1 and not (docs[0][1] or "").strip():
+        return True
+    return False
 
 
 def ensure_site(name: str, *, tab: int | None = None, continue_session: bool = False,
@@ -319,6 +630,43 @@ def ensure_site(name: str, *, tab: int | None = None, continue_session: bool = F
     if name not in SITES:
         raise KeyError(f"未知站点 {name}，可选 {list(SITES)}")
     url, keyword = SITES[name]
+
+    if window_mode() == "tabs":
+        # 单窗多标签：四端共用一个 Chrome 窗口，靠"读之前切过去"实现等待并行。
+        # 这里只负责**找/开那个窗口**；切标签在 acquire_tab（每次读前都做）。
+        own = _best_tab_window() or current(name)
+        if own and alive(own):
+            # **必须现在就切到本站标签**：choose 脚本拿到窗口后立刻去找芯片/模板，
+            # 不切就等于在别人那一页上找（2026-11-08 真机：三个端全在 Gemini 页上失败）。
+            # 整段进锁：切标签 + 抢前台是共享资源。
+            from . import uilock
+            with uilock.section(f"tab:{name}", timeout=uilock.SECTION_TIMEOUT):
+                _focus(own)
+                acquire_tab(name, own, tab=tab, verbose=verbose)
+            _save_tab(own, name)
+            if verbose:
+                print(f"  复用单窗 hwnd={own}（{name}，标签模式）")
+            return own
+        spawned = _spawn(url, position, size, timeout, verbose)
+        if spawned:
+            _save_tab(spawned, name)
+        return spawned
+
+    if concurrent():
+        # 并发会审：**只认自己那个端的窗口**，没有就开一个新的。
+        # 绝不在别人的窗口里切标签 —— 那会让别人的页面从树里消失。
+        own = current(name)
+        if own and _site_ready(own, name, remembered=True):
+            if verbose:
+                print(f"  复用本端窗口 hwnd={own}（{name}）")
+            return own
+        if own and verbose:
+            # 记住的窗口还在、但里面读不到本站页面：宁可贵一次开窗，也不误用别人的
+            print(f"  本端窗口 hwnd={own} 读不到 {name} 的页面，另开一个（弱证据）")
+        spawned = _spawn(url, position, size, timeout, verbose)
+        if spawned:
+            _save(spawned, name)
+        return spawned
 
     def docs_of(hwnd):
         try:
@@ -456,13 +804,14 @@ def ensure_site(name: str, *, tab: int | None = None, continue_session: bool = F
         if verbose and target:
             print("  现有 Chrome 在主屏，不动它 → 新开窗口")
 
-    hwnd = _spawn(url, position, size, timeout, verbose)
-    if hwnd and await_page(hwnd):
-        _save(hwnd, name)
-        return hwnd
-    if hwnd:
-        # 自己开的窗口绑不上就收尾，别留在桌面上。
-        if verbose:
-            print(f"  绑定 {name} 失败，关掉自己开的窗口 hwnd={hwnd}（{why(hwnd)}）")
-        close(hwnd)
-    return None
+    hwnd = _spawn(url, position, size, timeout, verbose, nonce=_spawn_nonce(name))
+    keep = False
+    try:
+        if hwnd and await_page(hwnd):
+            _save(hwnd, name)
+            keep = True
+            return hwnd
+        return None
+    finally:
+        if hwnd and not keep:
+            _cleanup_spawn(hwnd, verbose)

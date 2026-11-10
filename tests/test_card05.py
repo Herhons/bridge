@@ -11,6 +11,10 @@ hold 的进/拒/回、连推 3 次判 stuck 且中途 move 清零、顶层 statu
 """
 from __future__ import annotations
 
+from offline_guard import ensure_offline
+ensure_offline()
+
+
 import copy
 import hashlib
 import json

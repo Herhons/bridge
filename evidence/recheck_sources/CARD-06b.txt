@@ -1,0 +1,39 @@
+Bridge v0.0.9 · Codex 独立只读复验 · 2026-11-06（北京时间）
+工作目录：F:\Bridge\v0.0.9
+共同回归命令：py -3.10 -X utf8 -B -m unittest discover -s tests -v
+Python 3.10.11；最终隔离复跑 Ran 731 tests in 24.369s；OK；EXIT=0；无跳过。
+正式日志 unittest_isolated.txt；首轮731/23.319s原日志unittest.txt保留。两轮使用同一src/tests，第二轮只在运行期重定向写盘并拦截越界写入/真实输入。
+执行偏差：首轮测试漏隔离导致目录外日志/合成输入标记/失败截图写盘，详 READONLY_INCIDENT.txt；不把首轮冒称完全只读。最终隔离复跑目录外变更为0。
+保护对象 src/tests/cards/PLAN.md/progress.json 共402个既有文件SHA256不变；未新增受保护文件，详integrity_final.json。
+独立反例：independent_probes.py/.txt/_result.json；补充 independent_additional.py/.txt/_result.json，共15项，不计入731单测。
+判定口径：PASS仅针对本卡；FAIL区分实现缺陷与证据不足。未主动运行真机choose/use发送入口或外部通知，不重放旧提问。
+后续卡明确改变的行为按后续要求评估，不把合法后续变更算成旧卡回归。
+
+VERDICT FAIL
+缺口性质：WorkBuddy未接入写后复核；其档位失败也未统一留证。
+卡片：cards/CARD-06b-web-tier-input.md:5-17（条款1-11）。
+
+逐条核对
+1. 档位读不到拒发：公共 tier_guard.gate 及Web chip机制 PASS；test_card06b.TierUnreadableTests/ChipReadTests覆盖低分、空值、异常、重复命中。
+   Codex明确声明unsupported的旧边界有文档，但不能把能读模型的WorkBuddy当作没有通道。
+2. 漂移拒发、不在use重选：公共门禁 PASS，TierDriftTests覆盖。
+   后续06d明确允许WorkBuddy --new按回执恢复模型，属于卡面授权的特例，不把它误判成旧卡违规。
+3. 写后、点发送前的最后复核及页面变更拒发：FAIL（WorkBuddy）。
+   workbuddy._run:828-834 先 gate_or_exit 消费回执，之后:837-840 创建会话并 ask；workbuddy.ask:667 调 send_and_wait 时没有传 pre_send。
+   因此档位在写入期间被改也没有第二次复核。独立 P06B_wb_gate_order 实际执行本入口及共享写/提交流程（全部假输入），事件是 [tier_gate,write,submit]，与本卡顺序相反。
+   LastMomentTests:414-470 只对共享conversation.ask人为传入pre_send；没有核对workbuddy入口实际是否传它，因此漏掉接线问题。
+   其他Web路径sendgate.pre_send/page_confirm及对应测试存在。
+4. 原子回执/消费时身份三项校验：PASS，ReceiptIdentityTests；06a空白名单的用途缺陷另记06a。
+5. 两侧归一、正文不改、首差异上下文：PASS，qi.textcmp、conversation.ask；InputNormalizeTests检验行首符/小数/换行/真实正文与提示。
+6. 缩放检测、Ctrl+0复检、限定0.8–1.25、唯一性：Web接线与ZoomTests PASS；非浏览器明确跳过，不对桌面app发Ctrl+0。
+7. 最小化统一函数与7：PASS，MinimizeTests和06a WindowTests。
+8. 人机验证/Unknown error拒点不重试：公共human/pre_send及HumanCheckTests PASS；WorkBuddy未经过pre_send，与第3条集成缺口相关。
+9. 所有tier/zoom/human/input失败统一截图+JSON+分数/缩放：FAIL（WorkBuddy）。
+   Web ask/cli、三桌面done接 failure.record；WorkBuddy _run gate_or_exit 失败直接 return，未调用 failure.record。P09F_wb_consumed_rerun也可看到该直接出口。
+   FailureEvidenceTests验证公共函数能写；没有遍历每个实际use失败出口，所以不等于全部端已接线。
+10. ChatGPT任一维度未读回不可报整体成功：PASS，chatgpt_choose:1582-1631 聚合done_dims；ChatgptReadbackTests有真实读回失败分支。两维用途联合验证仍缺失，归06c。
+11. OpenCode重复语句删除：PASS，NoDuplicateLinesTests全仓AST及指定赋值断言。
+全量：本卡72项，全量731 OK。
+原始实测：card06b_live.txt:109-174 包括列表符成功和错芯片图退出5；:183-209 有ChatGPT实际读回；:298起明示未制造的人机/导航分支。未要求每种故障都真机制造，离线证明可接受，但不能绕过本次发现的实际入口缺口。
+
+建议返工卡：06b-workbuddy-presend。把真正的只读复核/消费放到写后提交前，并在正确窗口/文档核对；将失败留证接上。新增WorkBuddy入口级顺序/写入中漂移/失败截图测试，而不只单测公共门禁。

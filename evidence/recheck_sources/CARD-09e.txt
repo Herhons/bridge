@@ -1,0 +1,38 @@
+Bridge v0.0.9 · Codex 独立只读复验 · 2026-11-06（北京时间）
+工作目录：F:\Bridge\v0.0.9
+共同回归命令：py -3.10 -X utf8 -B -m unittest discover -s tests -v
+Python 3.10.11；最终隔离复跑 Ran 731 tests in 24.369s；OK；EXIT=0；无跳过。
+正式日志 unittest_isolated.txt；首轮731/23.319s原日志unittest.txt保留。两轮使用同一src/tests，第二轮只在运行期重定向写盘并拦截越界写入/真实输入。
+执行偏差：首轮测试漏隔离导致目录外日志/合成输入标记/失败截图写盘，详 READONLY_INCIDENT.txt；不把首轮冒称完全只读。最终隔离复跑目录外变更为0。
+保护对象 src/tests/cards/PLAN.md/progress.json 共402个既有文件SHA256不变；未新增受保护文件，详integrity_final.json。
+独立反例：independent_probes.py/.txt/_result.json；补充 independent_additional.py/.txt/_result.json，共15项，不计入731单测。
+判定口径：PASS仅针对本卡；FAIL区分实现缺陷与证据不足。未主动运行真机choose/use发送入口或外部通知，不重放旧提问。
+后续卡明确改变的行为按后续要求评估，不把合法后续变更算成旧卡回归。
+
+VERDICT FAIL
+缺口性质：自身输入时间戳排除只接共享guard，三个单文件use仍误报忙；WorkBuddy本人重启的必需真机证据也缺。
+卡片：cards/CARD-09e-stability.md:3-11。
+
+逐条核对
+1. notify_done读改写合并/同目录原子/文件锁/verdicts与queue保留：PASS。
+   src/qi/progress.py:120-212 locked/save/merge/write；notify_done调用此接口。test_card09e.ProgressMerge与NotifyDoneKeepsVerdicts测试保留、原子清理、互斥、多写者及真实notify入口（外部通知已mock/禁用）。
+   server.workflow_move不遵守同锁引发的并发丢更新由09a归责；不是假称progress.write自身会主动清掉verdicts。
+2. WorkBuddy UIA丢失一次正常重启、等文档、失败6、runlog：实现及mock覆盖基本PASS。
+   workbuddy.main/_restart_and_retry:732-791，restart.restart:33-151做close→等待消失→AppID/exe→窗口→文档，第二次失败不循环；RestartChannel及WorkBuddyRestartWiring验证顺序和失败。
+   实测证据不足：card09e_live.txt:135-163、189-192明确没在WorkBuddy上真关重启，只用OpenCode运行相同函数。AppID/关闭行为是端点变量，不能以另一app替代卡面明确的WorkBuddy重启冒烟。
+3. ChatGPT UIA最后回复/完成标记兜底、--read：PASS。
+   qi.lastreply、flow.uia_answer/_watch_for/read_last及chatgpt_use标志；LastReplyMarkers/FlowUiaFallback/WatchHook/ReadOnlyMode覆盖新旧轮、busy、没发出、稳定、参数。
+4. ChatGPT --new清残留草稿，读回空才继续：PASS，flow.clear_composer及ClearDraft四项含失败不发；card09e_live.txt:13-32给种草稿→new→cleared→token回复原文。
+   当前按名称优先，通用fallback只排除search/搜索；建议再补“只剩非消息编辑框”负例，避免未来误识别，但不把尚未复现的地址栏误点写成已发生事实。
+5. Markdown/URL/空白两侧归一及粘贴兜底：PASS。
+   qi.textcmp:43-117、conversation.ask/rewrite_plain；Normalize/PasteFallback真实执行，源正文不改；card09e_live:34-51有同轮Markdown/URL发送与回复。粘贴故障真机未触发由离线mock覆盖，卡面不要求一定制造真实剪贴板事故。
+6. Gemini dialog两种检测/模板命中后读回：PASS，qi.choose的UIA slider/模板回退与WriterJudgement负例，card09e_live:92-129有roundtrip与--new token原始输出。
+7. 各use排除脚本自身刚产生的输入：FAIL（codex/dsh/opencode）。
+   qi.guard.idle_seconds:57-70会把 last_input_tick==synthetic_tick 视为OWN_IDLE=999；Screen输入原语记标记。
+   但 codex_use.py:288、dsh_use.py:113、opencode_use.py:189仍自行用 GetTickCount-lii.dwTime，完全不读合成输入标记；其main仍调用这些局部函数。
+   独立补充 P09E_standalone_self_input 对三个真实AST函数注入同一个假系统tick=100000、last/synthetic=99000：共享guard返回999秒，三端各返回1.0秒，仍触发默认2秒等待。
+   OwnInputIsNotUser/ScreenMarksOwnInput只验证共享guard和Screen，未核对三端实际入口/Desk输入，漏掉范围接线。
+全量：本卡64项，全量731 OK。
+历史实测：ChatGPT与Gemini改动有成功记录；WorkBuddy完整重启缺失是明确记录的未验，不冒充代码一定坏。
+
+建议返工卡：09e-self-input-all-entries（统一所有use/choose/Desk输入时间戳）；09e-workbuddy-restart-evidence（在允许真机操作、且不占施工会话的任务中补原始输出）。本轮没有关任何app或补发消息。

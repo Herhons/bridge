@@ -1,0 +1,18 @@
+{
+ "consumed": true,
+ "consumed_at": "2026-11-09T14:28:06.089431+00:00",
+ "created_at": "2026-11-09T14:28:03.548739+00:00",
+ "created_monotonic": 217133.968,
+ "dimension": "model",
+ "endpoint": "codex",
+ "hwnd": 132456,
+ "monotonic_origin": 217133.968,
+ "pid": 18816,
+ "process_start_time": 134384909798080621,
+ "raw": "{\"after\": \"gpt6_luna\", \"before\": \"gpt6_luna\", \"ok\": true, \"stage\": \"already\"}",
+ "readback": "gpt6_luna",
+ "schema_version": 1,
+ "tab": null,
+ "target": "gpt6_luna",
+ "writer": null
+}

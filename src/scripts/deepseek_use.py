@@ -36,6 +36,17 @@ SITE = Site(
     stop="ds_stop",
     send_mode="color",
     send_blue_min=100.0,
+    # B19：三处只在 deepseek 打开的加固。
+    # 1) 粘贴必须确认落地（2450 字时只写进前 3 个字的根因）
+    write_verify=True,
+    # 2) 输入框里若是本提问的前缀，认成自己上一轮的残草，清掉继续
+    adopt_self_draft=True,
+    # 3) 判空以输入框文本为准：有草稿时发送键本来就深蓝，旧判据会把
+    #    自己的残草当用户草稿，之后每次 draft_present
+    empty_by_text=True,
+    # 4) 单次粘贴超过 2000 字会被整段吞掉（实测 2000 进、2001 不进，不截断
+    #    也不报错）；分 1500 字一块粘，总量可以远超 2000。
+    paste_chunk=1500,
 )
 
 REQUIRED = ["ds_composer", "ds_send_on", "ds_actions", "ds_copy"]
@@ -55,4 +66,4 @@ def main() -> int:
 if __name__ == "__main__":
     console.setup()          # 入口编码：GBK 控制台不再被 \u200b 打崩（CARD-08 第 1 条）
     # UI 前台锁（CARD-09a 第 6 条）：和服务端抢同一把 runs\ui.lock
-    raise SystemExit(uilock.run("deepseek_use", main))
+    raise SystemExit(uilock.entry("deepseek_use", main))

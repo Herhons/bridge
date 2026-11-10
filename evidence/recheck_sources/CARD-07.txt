@@ -1,0 +1,32 @@
+Bridge v0.0.9 · Codex 独立只读复验 · 2026-11-06（北京时间）
+工作目录：F:\Bridge\v0.0.9
+共同回归命令：py -3.10 -X utf8 -B -m unittest discover -s tests -v
+Python 3.10.11；最终隔离复跑 Ran 731 tests in 24.369s；OK；EXIT=0；无跳过。
+正式日志 unittest_isolated.txt；首轮731/23.319s原日志unittest.txt保留。两轮使用同一src/tests，第二轮只在运行期重定向写盘并拦截越界写入/真实输入。
+执行偏差：首轮测试漏隔离导致目录外日志/合成输入标记/失败截图写盘，详 READONLY_INCIDENT.txt；不把首轮冒称完全只读。最终隔离复跑目录外变更为0。
+保护对象 src/tests/cards/PLAN.md/progress.json 共402个既有文件SHA256不变；未新增受保护文件，详integrity_final.json。
+独立反例：independent_probes.py/.txt/_result.json；补充 independent_additional.py/.txt/_result.json，共15项，不计入731单测。
+判定口径：PASS仅针对本卡；FAIL区分实现缺陷与证据不足。未主动运行真机choose/use发送入口或外部通知，不重放旧提问。
+后续卡明确改变的行为按后续要求评估，不把合法后续变更算成旧卡回归。
+
+VERDICT FAIL
+缺口性质：WorkBuddy等待主循环没有验证回复比发送前更新，能把旧回答报成本轮成功。
+卡片：cards/CARD-07-reply-input.md:5-13。
+
+逐条核对
+1. WorkBuddy每轮UIA完整回复/两轮稳定/超时前最后读：功能存在，但“本轮回复”保证 FAIL。
+   workbuddy.wait_reply:571-622 接收baseline参数；final_read:641只在最后一读比较复制键数量。
+   主循环:593-616在 prompt_at=None 时仍调用last_reply；last_reply:474-496对at=None不限制归属，稳定两轮就返回成功，完全未用baseline。
+   独立 P07_old_reply：发送前baseline=1、树中没有本次新提问、只有OLD-ANSWER，wait_reply在两轮后给 ok=true/stage=answered/reply=OLD-ANSWER，submission还为unknown。
+   tests/test_card07.py:279-285只测final_read拒绝旧轮；:225-233主循环成功测试恰好没有本提问，也未传发送前baseline，因此把缺陷当正常完成。
+   缺测试：主循环“提问认领不到且回复数未增加”的拒绝；旧复制键替换/虚拟化也需可靠本轮锚点。
+2. Gemini停止键消失+连续两次稳定、UIA/文本兜底、runlog判据：PASS。
+   gemini.py:658-730和_final_read；test_card07.GeminiCompletionTests、DomTextTests、CriteriaReachesTheLog有直接执行与busy/变化反例。
+3. Codex restore/前台/输入区聚焦/composer模板失配回UIA：PASS。
+   codex_use.py:759-883 _prepare_window/uia_edit_box/focus_composer/locate_with_composer_fallback；CodexComposerTests与CodexWindowPrepTests覆盖先聚焦后模板、UIA落点、禁用/离屏、恢复失败7。
+4. Gemini模板重截/备份/100%读回：已有证据和素材备份检查支持。
+   TemplateBackups两项检查.bak-card07且资源库不加载bak；card07_live.txt:87-89 --new --list读writer=dialog/model=argon，EXIT=0；:90起有备份/修复说明。未把旧06c的低分继续当现状。
+5. 全量：本卡40项，全量731 OK。
+6. 四项真机：card07_live.txt:18-26 WB读回，:45-53 Gemini低档读回，:66-73 Codex Luna token，:87-89 Gemini档位。Codex UIA兜底及Gemini新无动作条分支实机未触发，源代码+离线故障用例可证明存在；不能证明第1条未覆盖的归属分支。
+
+建议返工卡：07-reply-attribution。主循环与final_read共用本轮归属规则，认领不到提问时必须有新回复证据；补本次独立反例。不要只加更长等待或只断言reply非空。

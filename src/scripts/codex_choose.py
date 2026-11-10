@@ -1,6 +1,6 @@
 """codex（Codex 桌面端 / ChatGPT.exe）：选模型 + 读/调强度。
 
-**单文件，只依赖 cv2 / numpy / ctypes，不 import 本项目的任何模块。**
+**定位主体使用 cv2/numpy/ctypes；运行入口共用 qi 的锁和自身输入标记。**
 （和 codex_use.py 是同一套定位代码，区别只是这个脚本不发消息、不取回答。）
 
 用法：
@@ -243,9 +243,8 @@ class _LII(ctypes.Structure):
 
 
 def idle_seconds():
-    lii = _LII(ctypes.sizeof(_LII), 0)
-    user32.GetLastInputInfo(ctypes.byref(lii))
-    return (kernel32.GetTickCount() - lii.dwTime) / 1000.0
+    from qi.guard import idle_seconds as shared_idle
+    return shared_idle()
 
 
 def _pid_of(hwnd):
@@ -360,42 +359,19 @@ def place(hwnd, pos, size):
 
 
 def activate(hwnd, tries=3):
-    """把窗口提到前台。返回是否真的提到了。
-
-    SetForegroundWindow 会被**前台锁**拒绝：只有"当前前台进程"或"刚收到用户输入
-    的进程"才能改前台。所以后台脚本直接调它经常无效。
-    可靠做法是 AttachThreadInput 把自己的线程附到当前前台线程上，这样系统就当成
-    同一个线程，SetForegroundWindow 才生效；调完立刻解除附加。
-
-    2026-10-29：实测在斗鱼客户端占着前台时，只用 SetForegroundWindow 提不上来，
-    附加线程后一次就成。
-    """
-    hwnd = int(hwnd)
-    if user32.GetForegroundWindow() == hwnd:
-        return True
-    for _ in range(tries):
-        fg = user32.GetForegroundWindow()
-        tid_fg = user32.GetWindowThreadProcessId(wintypes.HWND(fg), None)
-        tid_me = kernel32.GetCurrentThreadId()
-        attached = False
-        if tid_fg and tid_fg != tid_me:
-            attached = bool(user32.AttachThreadInput(tid_me, tid_fg, True))
-        try:
-            user32.BringWindowToTop(wintypes.HWND(hwnd))
-            user32.SetForegroundWindow(wintypes.HWND(hwnd))
-            user32.SetFocus(wintypes.HWND(hwnd))
-        finally:
-            if attached:
-                user32.AttachThreadInput(tid_me, tid_fg, False)
-        time.sleep(0.2)
-        if user32.GetForegroundWindow() == hwnd:
-            return True
-    return False
+    # B16：与 *_use.py 同路径（section + SW_RESTORE + Alt 解前台锁 + topmost 闪）。
+    # 只改函数体：名字、签名、调用点都不动（测试按名字打桩）。
+    from qi import desk as _desk
+    return _desk.ensure_foreground(hwnd, tries=max(3, int(tries)))
 
 
 # ============================================================ 操作器
 
 class Desk:
+    def _mark_input(self):
+        from qi.guard import mark_synthetic
+        mark_synthetic("desk")
+
     def __init__(self, hwnd):
         self.hwnd = int(hwnd)
         self._clicks = []
@@ -536,6 +512,7 @@ class Desk:
         time.sleep(0.05)
         user32.mouse_event(0x0004, 0, 0, 0, 0)
         self._clicks.append(time.time())
+        self._mark_input()
         self._invalidate()
 
     def press(self, key, times=1):
@@ -546,6 +523,7 @@ class Desk:
             time.sleep(0.02)
             user32.keybd_event(vk, 0, 2, 0)
             time.sleep(0.05)
+        self._mark_input()
         self._invalidate()
 
     def hotkey(self, *keys):
@@ -557,6 +535,7 @@ class Desk:
         for c in reversed(codes):
             user32.keybd_event(c, 0, 2, 0)
             time.sleep(0.02)
+        self._mark_input()
         self._invalidate()
 
     def type_text(self, text, interval=0.004):
@@ -596,6 +575,7 @@ class Desk:
                     inp = _IN(type=1, u=_U(ki=_K(0, code, flags, 0, 0)))
                     user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(_IN))
                     time.sleep(interval)
+        self._mark_input()
         self._invalidate()
 
     def set_clipboard(self, text):
@@ -1300,6 +1280,18 @@ def _effort_now(d, win, sl):
     guess = _effort_text(d, win, sl)
     if guess is not None:
         out.update({"effort": guess, "label": EFFORT_LABEL[guess], "from": "text"})
+        # 文字读到了名字，但**名字里没有几何**：set_effort 要把目标换算成"第几格"，
+        # 靠的是 stops/index。这里以前直接 return，于是"文字明明读到了 Max"却仍然
+        # 以 stops_unknown 拒绝动滑杆（2026-11-06 bootstrap 卡实测）。
+        # 补一次刻度点数（只补几何，不改名字）：文字仍然是档位的唯一权威。
+        grid = tick_grid(d, win, sl)
+        if grid is not None:
+            points, step = grid
+            idx = min(range(len(points)), key=lambda i: abs(points[i] - knob))
+            out.update({"stops": len(points), "index": idx, "step": int(round(step))})
+            keys = STOP_SETS.get(len(points))
+            if keys:
+                out["ticks_agree"] = keys[idx] == guess
     else:
         grid = tick_grid(d, win, sl)
         if grid is None:
@@ -1402,10 +1394,21 @@ def set_effort(d, win, key):
     # 目标档在**这张卡片自己的档位集合**里排第几：档数随模型变，
     # 用全局 6 个名字去 index 会算错（5 档卡片上 ultra 会算出第 6 格，推到轨道外）。
     keys = STOP_SETS.get(before.get("stops") or 0)
+    if keys and before.get("ticks_agree") is False:
+        # 文字说一档、刻度算另一档：两张证据打架，不动滑杆（fail-closed）
+        return {"ok": False, "stage": "stops_disagree",
+                "hint": (f"档位词读到 {before.get('effort')}，但按 {before.get('stops')} 个"
+                         f"刻度点算出来是 {keys[before.get('index', 0)]}：证据不一致，"
+                         "不动滑杆，请人工看一眼卡片"),
+                "before": before}
     if not keys:
+        told = ""
+        if before.get("from") == "text" and before.get("effort"):
+            told = (f"；档位词读到了 {before['effort']}，但没数出刻度点、"
+                    "换算不出它在这张卡上是第几格")
         return {"ok": False, "stage": "stops_unknown",
                 "hint": f"读不出这张卡片有几档（读到的档数 {before.get('stops')}），"
-                        f"不知道 {key} 在第几格，不动滑杆",
+                        f"不知道 {key} 在第几格，不动滑杆{told}",
                 "before": before}
     if key not in keys:
         return {"ok": False, "stage": "unsupported",
@@ -1732,4 +1735,7 @@ if __name__ == "__main__":
             except Exception:                          # noqa: BLE001
                 pass
     # UI 前台锁（CARD-09f 第 1 条）：choose 也要和服务端/use 抢同一把 runs\ui.lock
-    raise SystemExit(_lock.run("codex_choose", main) if _lock else main())
+    if _lock is None:
+        print(json.dumps({"ok": False, "stage": "ui_busy", "reason": "lock_runtime_unavailable"}))
+        raise SystemExit(8)
+    raise SystemExit(_lock.entry("codex_choose", main))

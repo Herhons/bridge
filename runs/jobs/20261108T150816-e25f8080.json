@@ -1,0 +1,199 @@
+{
+  "job_id": "20261108T150816-e25f8080",
+  "request_id": "ac9cd5c3-123a-4f05-a920-2af8fe8c6031",
+  "status": "failed",
+  "purpose": "test",
+  "prompt": "第一行原样输出下面这一行，不要改动、不要加标点：BRIDGE-T4-7a41c9fe\n然后空一行，用不超过 120 字说明你为什么这样输出。",
+  "created_at": "2026-11-08T07:08:16+00:00",
+  "started_at": "2026-11-08T07:08:16+00:00",
+  "finished_at": "2026-11-08T07:08:45+00:00",
+  "order": [
+    "codex",
+    "opencode",
+    "workbuddy",
+    "gemini"
+  ],
+  "endpoints": {
+    "codex": {
+      "status": "failed",
+      "reply": null,
+      "error": {
+        "code": "choose_failed",
+        "message": "目标窗口不在前台（前台=67822，目标=132456），已中止",
+        "step": "choose",
+        "exit_code": 4
+      },
+      "error_code": "choose_failed",
+      "exit_code": 4,
+      "choose": {
+        "ok": false,
+        "dimension": "model",
+        "target": "gpt6_luna",
+        "readback": null,
+        "confirmed": false,
+        "exit_code": 4,
+        "timeout": false,
+        "elapsed": 9.735,
+        "error_code": "choose_failed",
+        "error_message": "目标窗口不在前台（前台=67822，目标=132456），已中止",
+        "stderr": ""
+      },
+      "use": null,
+      "started_at": "2026-11-08T07:08:16+00:00",
+      "finished_at": "2026-11-08T07:08:26+00:00",
+      "elapsed": 9.84,
+      "evidence_l1": {
+        "job_id": "20261108T150816-e25f8080",
+        "request_id": "ac9cd5c3-123a-4f05-a920-2af8fe8c6031",
+        "at": "2026-11-08T07:08:16+00:00",
+        "source": "server"
+      }
+    },
+    "opencode": {
+      "status": "failed",
+      "reply": null,
+      "error": {
+        "code": "draft_present",
+        "message": "当前输入框已有草稿",
+        "step": "use",
+        "exit_code": 1
+      },
+      "error_code": "draft_present",
+      "exit_code": 1,
+      "choose": {
+        "ok": true,
+        "dimension": "model",
+        "target": "deepseek_v41_flash_free",
+        "readback": "deepseek_v41_flash_free",
+        "confirmed": true,
+        "exit_code": 0,
+        "timeout": false,
+        "elapsed": 7.735,
+        "error_code": null,
+        "error_message": null,
+        "stderr": ""
+      },
+      "use": {
+        "ok": false,
+        "stage": "draft_present",
+        "reply": null,
+        "exit_code": 1,
+        "timeout": false,
+        "elapsed": 11.843,
+        "error_code": "draft_present",
+        "error_message": "当前输入框已有草稿",
+        "stderr": ""
+      },
+      "started_at": "2026-11-08T07:08:16+00:00",
+      "finished_at": "2026-11-08T07:08:35+00:00",
+      "elapsed": 19.76,
+      "evidence_l1": {
+        "job_id": "20261108T150816-e25f8080",
+        "request_id": "ac9cd5c3-123a-4f05-a920-2af8fe8c6031",
+        "at": "2026-11-08T07:08:16+00:00",
+        "source": "server"
+      },
+      "progress": {
+        "schema_version": 1,
+        "job_id": "20261108T150816-e25f8080",
+        "endpoint": "opencode",
+        "pid": 23672,
+        "at": "2026-11-08T15:08:35+0800",
+        "stage": "finished",
+        "outcome": "draft_present"
+      }
+    },
+    "workbuddy": {
+      "status": "done",
+      "reply": "BRIDGE-T4-7a41c9fe\n按要求原样复制了第一行的字符串，没有改动任何字符，也没有添加标点；说明部分放在空行之后，并控制在 120字以内。",
+      "error": null,
+      "error_code": null,
+      "exit_code": 0,
+      "choose": {
+        "ok": true,
+        "dimension": "model",
+        "target": "DeepSeek-V4.1-Flash",
+        "readback": "DeepSeek-V4.1-Flash",
+        "confirmed": true,
+        "exit_code": 0,
+        "timeout": false,
+        "elapsed": 8.172,
+        "error_code": null,
+        "error_message": null,
+        "stderr": ""
+      },
+      "use": {
+        "ok": true,
+        "stage": "answered",
+        "reply": "BRIDGE-T4-7a41c9fe\n按要求原样复制了第一行的字符串，没有改动任何字符，也没有添加标点；说明部分放在空行之后，并控制在 120字以内。",
+        "exit_code": 0,
+        "timeout": false,
+        "elapsed": 21.172,
+        "error_code": null,
+        "error_message": null,
+        "stderr": ""
+      },
+      "started_at": "2026-11-08T07:08:16+00:00",
+      "finished_at": "2026-11-08T07:08:45+00:00",
+      "elapsed": 29.56,
+      "evidence_l1": {
+        "job_id": "20261108T150816-e25f8080",
+        "request_id": "ac9cd5c3-123a-4f05-a920-2af8fe8c6031",
+        "at": "2026-11-08T07:08:16+00:00",
+        "source": "server"
+      },
+      "progress": {
+        "schema_version": 1,
+        "job_id": "20261108T150816-e25f8080",
+        "endpoint": "workbuddy",
+        "pid": 15032,
+        "at": "2026-11-08T15:08:45+0800",
+        "stage": "finished",
+        "accepted": true,
+        "busy": false,
+        "copies": 1
+      }
+    },
+    "gemini": {
+      "status": "failed",
+      "reply": null,
+      "error": {
+        "code": "choose_failed",
+        "message": "芯片点到了但菜单项模板全部失配（模板可能过期）：已留现场图，未点任何选项、未下调阈值",
+        "step": "choose",
+        "exit_code": 1
+      },
+      "error_code": "choose_failed",
+      "exit_code": 1,
+      "choose": {
+        "ok": false,
+        "dimension": "model",
+        "target": "flash_lite",
+        "readback": null,
+        "confirmed": false,
+        "exit_code": 1,
+        "timeout": false,
+        "elapsed": 18.828,
+        "error_code": "choose_failed",
+        "error_message": "芯片点到了但菜单项模板全部失配（模板可能过期）：已留现场图，未点任何选项、未下调阈值",
+        "stderr": ""
+      },
+      "use": null,
+      "started_at": "2026-11-08T07:08:16+00:00",
+      "finished_at": "2026-11-08T07:08:35+00:00",
+      "elapsed": 18.92,
+      "evidence_l1": {
+        "job_id": "20261108T150816-e25f8080",
+        "request_id": "ac9cd5c3-123a-4f05-a920-2af8fe8c6031",
+        "at": "2026-11-08T07:08:16+00:00",
+        "source": "server"
+      }
+    }
+  },
+  "quorum": {
+    "required": 3,
+    "recovered": 1,
+    "met": false,
+    "clamped": false
+  }
+}

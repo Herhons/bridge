@@ -102,12 +102,17 @@ def page_confirm(screen, site: str, stamp: dict | None) -> dict:
 
 
 def pre_send(screen, site: str, purpose: str | None, *, root=None,
-             require_readback: bool | None = None) -> dict:
+             require_readback: bool | None = None, reread=None) -> dict:
     """写完之后、点击之前的门：人机验证 → 档位复核 → 页面指纹。
 
     抛 `human.HumanCheck`（stage=human_check）或
     `tier_guard.TierUnconfirmed`（stage=tier_unconfirmed）。
     `purpose=None` 时跳过档位（只读/不发送的路径不会走到这里）。
+
+    `reread(dimension) -> dict|None` 可以换掉默认的芯片读数。B17 起 chatgpt
+    的芯片不再暴露档位文本，页面上也没有任何只读的档位来源；那一端改用
+    「写入之前先做一次真读数快照」，把快照通过这个参数交给闸门复核——
+    默认路径（`chip.read`）一个字节没变。
     """
     hwnd = getattr(screen, "target_hwnd", None)
     title = ui.title_of(hwnd) if hwnd else ""
@@ -123,10 +128,11 @@ def pre_send(screen, site: str, purpose: str | None, *, root=None,
     if purpose is not None:
         if require_readback is None:
             require_readback = chip.supports(site)
+        reader = reread if callable(reread) else (
+            lambda dimension: chip.read(screen, site, dimension, calm=False))
         tier = tier_guard.gate(
             site, purpose, hwnd=hwnd, require_readback=require_readback,
             # 发送前这次读**不按 Esc、不移鼠标**：那两个动作会被 guard 当成
             # 用户输入，把发送判成 user_took_over（见 chip.read 的 calm 参数）。
-            reread=(lambda dimension: chip.read(screen, site, dimension, calm=False))
-            if chip.supports(site) else None)
+            reread=reader if chip.supports(site) else None)
     return {"ok": True, "stamp": page_stamp(screen, site), "tier": tier}

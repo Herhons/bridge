@@ -1,0 +1,129 @@
+{
+  "job_id": "20261108T213118-a93d2d6b",
+  "request_id": "f124c5fc-e740-44c1-abe1-fab0bfbb98d6",
+  "status": "done",
+  "purpose": "test",
+  "prompt": "只回复下面这一行，不要任何解释、不要加标点：BRIDGE-W15e-9a41d2c5",
+  "created_at": "2026-11-08T13:31:18+00:00",
+  "started_at": "2026-11-08T13:31:18+00:00",
+  "finished_at": "2026-11-08T13:32:05+00:00",
+  "order": [
+    "chatgpt",
+    "gemini"
+  ],
+  "endpoints": {
+    "chatgpt": {
+      "status": "done",
+      "reply": "BRIDGE-W15e-9a41d2c5",
+      "error": null,
+      "error_code": null,
+      "exit_code": 0,
+      "choose": {
+        "ok": true,
+        "dimension": "model",
+        "target": "gpt56",
+        "readback": "gpt56",
+        "targets": {
+          "model": "gpt56",
+          "effort": "instant"
+        },
+        "confirmed": true,
+        "exit_code": 0,
+        "timeout": false,
+        "elapsed": 17.75,
+        "error_code": null,
+        "error_message": null,
+        "stderr": "",
+        "writer": "chat"
+      },
+      "use": {
+        "ok": true,
+        "stage": "answered",
+        "reply": "BRIDGE-W15e-9a41d2c5",
+        "exit_code": 0,
+        "timeout": false,
+        "elapsed": 17.844,
+        "error_code": null,
+        "error_message": null,
+        "stderr": ""
+      },
+      "started_at": "2026-11-08T13:31:18+00:00",
+      "finished_at": "2026-11-08T13:32:05+00:00",
+      "elapsed": 47.31,
+      "evidence_l1": {
+        "job_id": "20261108T213118-a93d2d6b",
+        "request_id": "f124c5fc-e740-44c1-abe1-fab0bfbb98d6",
+        "at": "2026-11-08T13:31:18+00:00",
+        "source": "server"
+      },
+      "progress": {
+        "schema_version": 1,
+        "job_id": "20261108T213118-a93d2d6b",
+        "endpoint": "chatgpt",
+        "pid": 4920,
+        "at": "2026-11-08T21:32:05+0800",
+        "stage": "finished",
+        "outcome": "answered"
+      }
+    },
+    "gemini": {
+      "status": "done",
+      "reply": "BRIDGE-W15e-9a41d2c5",
+      "error": null,
+      "error_code": null,
+      "exit_code": 0,
+      "choose": {
+        "ok": true,
+        "dimension": "model",
+        "target": "flash_lite",
+        "readback": "flash_lite",
+        "targets": {
+          "model": "flash_lite"
+        },
+        "confirmed": true,
+        "exit_code": 0,
+        "timeout": false,
+        "elapsed": 2.953,
+        "error_code": null,
+        "error_message": null,
+        "stderr": ""
+      },
+      "use": {
+        "ok": true,
+        "stage": "answered",
+        "reply": "BRIDGE-W15e-9a41d2c5",
+        "exit_code": 0,
+        "timeout": false,
+        "elapsed": 41.375,
+        "error_code": null,
+        "error_message": null,
+        "stderr": ""
+      },
+      "started_at": "2026-11-08T13:31:18+00:00",
+      "finished_at": "2026-11-08T13:32:02+00:00",
+      "elapsed": 44.55,
+      "evidence_l1": {
+        "job_id": "20261108T213118-a93d2d6b",
+        "request_id": "f124c5fc-e740-44c1-abe1-fab0bfbb98d6",
+        "at": "2026-11-08T13:31:18+00:00",
+        "source": "server"
+      },
+      "progress": {
+        "schema_version": 1,
+        "job_id": "20261108T213118-a93d2d6b",
+        "endpoint": "gemini",
+        "pid": 4644,
+        "at": "2026-11-08T21:32:02+0800",
+        "stage": "finished",
+        "busy": false,
+        "copies": 1
+      }
+    }
+  },
+  "quorum": {
+    "required": 2,
+    "recovered": 2,
+    "met": true,
+    "clamped": true
+  }
+}

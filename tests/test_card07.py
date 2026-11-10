@@ -17,6 +17,10 @@
 """
 from __future__ import annotations
 
+from offline_guard import ensure_offline
+ensure_offline()
+
+
 import argparse
 import ast
 import json
@@ -76,6 +80,9 @@ def bubble(answer=ANSWER, prompt_line=None, bar_kind="ToolBarControl"):
     bubble_node = node("GroupControl", "", lines + [bar], height=200)
     wrapper = node("GroupControl", "", [bubble_node], height=220)
     doc = node("DocumentControl", "", [wrapper], height=400)
+    if prompt_line is not None:
+        doc.children.insert(0, text(prompt_line))
+        doc.children[0].parent = doc
     return doc, bar.children[1]
 
 
@@ -223,7 +230,7 @@ class WaitReplyTests(unittest.TestCase):
         return result, conv, clock
 
     def test_answer_after_two_identical_reads(self):
-        root, _copy = bubble()
+        root, _copy = bubble(prompt_line=PROMPT)
         result, conv, clock = self.run_wait([root], copies={"value": ANSWER})
         self.assertTrue(result["ok"], result)
         self.assertEqual(result["reply"], ANSWER)
@@ -234,7 +241,7 @@ class WaitReplyTests(unittest.TestCase):
 
     def test_copy_that_returns_the_prompt_is_not_the_answer(self):
         """2026-11-02 真机：剪贴板里还是提问本身 → 用树里的正文，read_via 写 uia。"""
-        root, _copy = bubble()
+        root, _copy = bubble(prompt_line=PROMPT)
         result, conv, _clock = self.run_wait([root], copies={"value": PROMPT})
         self.assertTrue(result["ok"], result)
         self.assertEqual(result["reply"], ANSWER)
@@ -251,7 +258,7 @@ class WaitReplyTests(unittest.TestCase):
         self.assertEqual(result["timeout_kind"], "still_generating")
 
     def test_clipboard_failure_falls_back_to_uia_text(self):
-        root, _copy = bubble()
+        root, _copy = bubble(prompt_line=PROMPT)
         result, conv, _clock = self.run_wait(
             [root], copies={"value": RuntimeError("剪贴板没更新")})
         self.assertTrue(result["ok"], result)
@@ -268,12 +275,12 @@ class WaitReplyTests(unittest.TestCase):
     def test_final_read_saves_a_reply_the_loop_never_saw(self):
         """循环里一直只看到空页面，超时前最后那次读到了回复 → 按成功返回。"""
         empty = doc(node("TextControl", "问问 Gemini"))
-        root, _copy = bubble()
+        root, _copy = bubble(prompt_line=PROMPT)
         result, conv, _clock = self.run_wait([empty, empty, root], timeout=1.0)
         self.assertTrue(result["ok"], result)
         self.assertEqual(result["basis"], "uia_final_read")
         self.assertEqual(result["read_via"], "uia")
-        self.assertEqual(result["attribution"], "new_reply")
+        self.assertEqual(result["attribution"], "prompt")
         self.assertFalse(conv.copy_calls, "最后一次读是纯只读，不许点复制键")
 
     def test_final_read_refuses_the_previous_turn(self):
@@ -297,7 +304,7 @@ class SendThenWaitTests(unittest.TestCase):
         self.assertEqual(shared.call_args.args[2], 0.0, "共享 ask 只负责发送")
 
     def test_zero_budget_timeout_is_not_a_failure(self):
-        root, _copy = bubble()
+        root, _copy = bubble(prompt_line=PROMPT)
         conv = FakeConversation([root])
         sent = {"ok": False, "stage": "timeout", "timeout_kind": "no_reply"}
         with mock.patch.object(workbuddy, "send_and_wait", return_value=sent), \

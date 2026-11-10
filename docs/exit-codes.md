@@ -46,6 +46,7 @@
 | `zoom_not_100` | 1 | 页面缩放不是 100% 且 Ctrl+0 之后仍不是（CARD-06b 第 6 条） |
 | `human_check` | 1 | 页面停在人机验证 / Unknown error，需要人来处理（CARD-06b 第 8 条） |
 | `no_model_selector` | 1 | 强度弹层里没有「选择模型」入口，本模式没有模型选择器（CARD-06c 第 3 条，fail-closed） |
+| `session_not_open` | 1 | 窗口停在首页/会话列表、没有 composer：开消息/选档**之前**就拒（UI-BOOTSTRAP-3；不点、不打字，也不用占位提问去把 composer 顶出来） |
 
 ## 三、档位回执（`src/qi/tier_guard.py`）
 
@@ -131,3 +132,40 @@
 | 5 | `runs\tier\<端>.json` 在不在、`age` 多少 | 重跑对应的 `*_choose`，**紧接着**发（120 秒内） |
 | 6 | `runs\YYYYMMDD.jsonl` 里 `result=uia_docs_lost` 的 `uia_probe` 行 | 看 `docs`/`urls` 每轮是多少；客户端该重启就由人重启，脚本不杀进程 |
 | 7 | 同上，`stage=window_minimized` | 手动把窗口还原再跑；脚本不会拿 `-32000` 哨兵坐标去点 |
+
+
+### WIP 06c: composite receipt
+
+ChatGPT requires `composite_version=1`, `writer`, and `dimensions.model/effort`
+with target/readback pairs from one final tree snapshot. The primary scalar
+fields remain for server receipt checks. A legacy single-axis receipt is rejected
+with `composite_missing` / exit 5. Before submit, one read-only UIA snapshot must
+confirm writer, model and effort; missing labels are `tier_unreadable`, any drift
+is `tier_drift`. If the current chip exposes only effort, sending fails closed.
+No model is inferred from a previous receipt or a menu selection command.
+
+---
+
+## 五、采集停摆错误码（T3-1，2026-11-07）
+
+读不到回答时不再一路静默等到超时。`wait_reply` 连续 3 次读到**同一类**结构问题时
+立刻返回，并在结果里带 `error_code`。`stage` 仍然是 `timeout`（老调用方按它分支），
+另加 `timeout_kind=stalled` 区分。
+
+| `error_code` | 含义 | 还能不能等 |
+|---|---|---|
+| `STREAMING_IN_PROGRESS` | 页面还在生成（停止键可点） | **能等**——这是唯一的例外 |
+| `CONTAINER_BOUNDARY_UNPROVEN` | 有文字，但没有可证明的消息容器边界 | 不能等，等下去也不会变好 |
+| `ATTRIBUTION_UNVERIFIED` | 读到了回复，但证明不了它是本轮答案 | 不能等 |
+| `SESSION_ID_MISSING` | 账本里没有会话 id，这条提交永远无法自动恢复 | 不能等 |
+| `REPLY_NEVER_APPEARED` | 已经收下了，但超过 `TRANSIENT_MAX_SECONDS`（120s）仍然读不到任何回答正文 | 不能等（B10 新增） |
+
+判定细则：
+- 只在**连续 3 次完全相同**的结构原因时判死；抖动（`loose_text`/`no_text` 交替）不判。
+- `no_text` / `no_copy` / `no_group` 属"这一轮还没读到"，**容忍 120 秒**
+  （B10 起不再是"永远不判死"：此前一个从头读不到复制键的页面会一路等到 900 秒）。
+- `busy=True` 时任何原因都不判死，继续等。
+- 早退目标 3–5 秒，远早于 F5 的 10 秒上限。
+
+实现见 `src/qi/replycodes.py`（纯函数，可离线穷举）与 `src/qi/workbuddy.py` 的
+`reply_text_detail` / `attributed_reply_detail` / `wait_reply`。

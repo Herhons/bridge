@@ -1,0 +1,77 @@
+{
+  "job_id": "20261110T084446-58bb5d6b",
+  "request_id": "a04706de-6be1-41d7-aa4d-f6c0fe7d7d7d",
+  "status": "done",
+  "purpose": "review",
+  "prompt": "【B18-会审】请做一次架构评审。这是一个用 Windows UI Automation 和像素模板驱动 4 个网页端与 4 个桌面端模型的工具；本地后端按端点逐个执行：选档、读回确认、写档位回执、提问、收答、落证据。约束：前台只有一个焦点，所以四席串行；一个 job 最多 4 席；只能用 UIA、模板、剪贴板；不加新依赖；界面有动画和抢占，因此读回确认比点击成功更重要。规模：内核 36 个模块、11397 代码行，CLI 20 个模块、9629 行，测试 1452 个用例且全部离线；内核内部依赖 126 条，CLI 到内核 96 条；枢纽入度 uilock 26、tier_guard 19、ui 17、window 15；存在 3 处互相 import；dsh、codex、opencode 三对 choose 与 use 相似度 0.91 到 0.94，各有 35 到 42 个同名函数；desk_sites、lastreply、reject 三个模块没在测试里出现。近期故障：面板的选中行是浅灰，白块检测把一块面板切成两段，代码取最大块导致点到模型行而不是搜索框，随后 Ctrl+A 选中整页，模板相似度从 0.956 掉到 0.348；grok 粘贴后约 1.3 秒文本才进 UIA，过早还原剪贴板只写进 3 个字；chatgpt 的模型按会话隔离，点新聊天会重置；dsh 复制回答时动作条还没渲染，复制到的是提问本身。请给最多 5 条优化，按收益与风险之比排序，每条写清改哪个模块、函数级改法、风险、可离线构造的验证；最后回答那三对 0.9 相似度的副本应该合并还是保留，并给判据。用中文，1200 字以内。",
+  "created_at": "2026-11-10T00:44:46+00:00",
+  "started_at": "2026-11-10T00:44:46+00:00",
+  "finished_at": "2026-11-10T00:48:08+00:00",
+  "order": [
+    "gemini"
+  ],
+  "endpoints": {
+    "gemini": {
+      "status": "done",
+      "reply": "本系统核心矛盾是“像素与焦点状态的异步漂移”与“CLI/内核边界失守（96条跨层依赖、3处循环依赖）”。在不引新依赖、全离线测试的约束下，按收益风险比（ROI）从高到低给出5项优化：1. 档位与会话时序反转，消除会话重置与回执失真（ROI：极高）修改模块：tier_guard、desk_sites（及Web端对应调度器）。函数级改法：重构执行管线函数（如 prepare_seat_session()），将状态机严格锁定为 new_chat() -> choose_tier() -> readback_verify() -> write_receipt()。在 tier_guard.verify_tier() 中增加会话ID/URL锚点校验；禁止在 choose 成功后调用任何会触发路由刷新的动作。风险：极低。纯时序调整，不改变底层UIA/模板逻辑。离线验证：在 desk_sites 补齐离线单元测试：Mock UIA树，令 click_new_chat() 触发档位属性重置为默认值，断言旧序列抛出 TierResetError，新序列读回确认通过并生成正确回执。2. 剪贴板“读回确认后置还原”与收答“防回声校验”（ROI：高）修改模块：ui、lastreply、reject。函数级改法：在 ui.paste_prompt(text) 中移除固定 sleep，改为写入剪贴板并发送 Ctrl+V 后，轮询目标输入框 UIA.ValuePattern 或文本长度（超时2.5秒），确认长度匹配后再执行 restore_clipboard()。在 lastreply.fetch_answer(prompt) 中增加防回声守卫：若剪贴板读回内容与 prompt 归一化后前缀重合度超90%，或模板未检出底部“动作条”锚点，则判定为“未渲染/误拷提问”，交由 reject.mark_retry() 退避重试。风险：低。轮询增加单步耗时上限，但消除了Grok截断与DSH拷错提问的致命静默故障。离线验证：补齐 lastreply 与 reject 的离线测试：构造延迟1.5秒才更新 Value 的假UIA节点验证剪贴板不早退；构造“剪贴板返回原提问文本”的Mock场景，断言 lastreply 拒绝落盘并触发 reject 重试。3. 视觉面板连通域容差合并与Ctrl+A焦点守卫（ROI：高）修改模块：ui、window。函数级改法：在 window.find_panel_bbox()（白块检测）中，将色值阈值从纯白放宽至兼容浅灰选中态（如 RGB 均大于 230），并对垂直间距小于单行高度（如 48px）的相邻矩形执行形态学闭运算（merge_vertical_boxes()），防止选中行将面板切碎；搜索框定位改为锚定合并后外接矩形的顶部偏移，而非盲取最大块。在 ui.clear_input() 发送 Ctrl+A 前，强制校验当前 UIA.FocusedElement.ControlType == Edit（或复核搜索框局部模板相似度高于 0.85），否则中止按键并重走焦点获取。风险：中低。色值放宽可能误吸浅色背景，需用面板宽高比约束过滤。离线验证：用故障现场截图（含浅灰选中行、面板被切分）作为离线Fixture输入 find_panel_bbox()，断言返回完整单一矩形且搜索框坐标落于顶部；构造焦点在 Document/Pane 的假UIA状态，断言 clear_input() 拦截 Ctrl+A。4. 斩断3处循环依赖，收敛CLI到内核的96条越界调用（ROI：中）修改模块：uilock、tier_guard、ui、window 及 CLI 入口模块。函数级改法：将4个高入度枢纽共用的纯数据结构（SeatContext、Receipt、坐标矩形、异常类）抽离至零依赖的底层定义区，消除3处互相 import（强制单向依赖：window -> ui -> uilock -> tier_guard）。在内核层提供统一门面函数 run_seat_pipeline(job_spec)，将 CLI 对内核的96条细粒度调用（直接操作UIA、锁、窗口）收敛为仅调用门面与配置查询。风险：中。涉及大量 import 路径调整，需依赖现有1452个离线用例护航。离线验证：编写静态AST检查测试，扫描全库 import 图，断言强连通分量（环）数量为 0，且 CLI 目录对内核模块的 import 边数降至 15 条以内。5. 补齐三大盲区模块的离线契约测试（ROI：中）修改模块：desk_sites、lastreply、reject 对应测试集。函数级改法：针对这三个零覆盖模块，基于录制的 UIA 树快照（JSON）与静态截图切片，为 desk_sites.dispatch()、lastreply.extract()、reject.handle_failure() 建立表驱动的离线回归用例。风险：零。仅增测试代码。离线验证：离线测试套件总数增加，且三模块行覆盖率由 0% 提升至 85% 以上。关于三对 0.91~0.94 相似度副本（dsh/codex/opencode 的 choose 与 use）的裁决：结论：按“纵向按端点隔离、横向按阶段合并”原则——同一端点内的 choose 与 use 必须合并；不同端点之间（dsh vs codex vs opencode）必须保留独立副本，严禁跨端点抽象合并。判据：为何同端点内 choose（选档）与 use（提问/使用）要合并：35~42个同名函数且相似度超 0.91，说明两者共享同一套窗口句柄、UIA树寻址、面板检测与焦点锁。分离会导致修补“浅灰切碎面板”或“剪贴板延迟”时必须在两处同步改，极易漏改。应合并为单端点模块（或提取同端点内的 _common），仅在顶层暴露 choose_tier() 和 ask_question() 两个入口。为何跨端点（dsh / codex / opencode）要保留副本：UI自动化最忌讳针对外部GUI做过早的DRY抽象。各家前端框架（Electron/Web）的DOM/UIA树演进、动画耗时、动作条渲染机制完全独立（如此次Grok粘帖慢、ChatGPT新会话重置、DSH动作条慢）。强行合并为一套参数化大类，会导致修DSH的bug引入Codex的回归。量化判据：凡属“纯算子”（矩形合并、模板匹配打分、剪贴板轮询算子）下沉至 ui/window 共享；凡含“端点坐标偏移、控件名、特定等待时序”的35+个胶水函数，留在各自端点文件内独立演进。",
+      "error": null,
+      "error_code": null,
+      "exit_code": 0,
+      "choose": {
+        "ok": true,
+        "dimension": "model",
+        "target": "argon",
+        "readback": "argon",
+        "targets": {
+          "model": "argon"
+        },
+        "confirmed": true,
+        "exit_code": 0,
+        "timeout": false,
+        "elapsed": 2.094,
+        "error_code": null,
+        "error_message": null,
+        "stderr": ""
+      },
+      "use": {
+        "ok": true,
+        "stage": "answered",
+        "reply": "本系统核心矛盾是“像素与焦点状态的异步漂移”与“CLI/内核边界失守（96条跨层依赖、3处循环依赖）”。在不引新依赖、全离线测试的约束下，按收益风险比（ROI）从高到低给出5项优化：1. 档位与会话时序反转，消除会话重置与回执失真（ROI：极高）修改模块：tier_guard、desk_sites（及Web端对应调度器）。函数级改法：重构执行管线函数（如 prepare_seat_session()），将状态机严格锁定为 new_chat() -> choose_tier() -> readback_verify() -> write_receipt()。在 tier_guard.verify_tier() 中增加会话ID/URL锚点校验；禁止在 choose 成功后调用任何会触发路由刷新的动作。风险：极低。纯时序调整，不改变底层UIA/模板逻辑。离线验证：在 desk_sites 补齐离线单元测试：Mock UIA树，令 click_new_chat() 触发档位属性重置为默认值，断言旧序列抛出 TierResetError，新序列读回确认通过并生成正确回执。2. 剪贴板“读回确认后置还原”与收答“防回声校验”（ROI：高）修改模块：ui、lastreply、reject。函数级改法：在 ui.paste_prompt(text) 中移除固定 sleep，改为写入剪贴板并发送 Ctrl+V 后，轮询目标输入框 UIA.ValuePattern 或文本长度（超时2.5秒），确认长度匹配后再执行 restore_clipboard()。在 lastreply.fetch_answer(prompt) 中增加防回声守卫：若剪贴板读回内容与 prompt 归一化后前缀重合度超90%，或模板未检出底部“动作条”锚点，则判定为“未渲染/误拷提问”，交由 reject.mark_retry() 退避重试。风险：低。轮询增加单步耗时上限，但消除了Grok截断与DSH拷错提问的致命静默故障。离线验证：补齐 lastreply 与 reject 的离线测试：构造延迟1.5秒才更新 Value 的假UIA节点验证剪贴板不早退；构造“剪贴板返回原提问文本”的Mock场景，断言 lastreply 拒绝落盘并触发 reject 重试。3. 视觉面板连通域容差合并与Ctrl+A焦点守卫（ROI：高）修改模块：ui、window。函数级改法：在 window.find_panel_bbox()（白块检测）中，将色值阈值从纯白放宽至兼容浅灰选中态（如 RGB 均大于 230），并对垂直间距小于单行高度（如 48px）的相邻矩形执行形态学闭运算（merge_vertical_boxes()），防止选中行将面板切碎；搜索框定位改为锚定合并后外接矩形的顶部偏移，而非盲取最大块。在 ui.clear_input() 发送 Ctrl+A 前，强制校验当前 UIA.FocusedElement.ControlType == Edit（或复核搜索框局部模板相似度高于 0.85），否则中止按键并重走焦点获取。风险：中低。色值放宽可能误吸浅色背景，需用面板宽高比约束过滤。离线验证：用故障现场截图（含浅灰选中行、面板被切分）作为离线Fixture输入 find_panel_bbox()，断言返回完整单一矩形且搜索框坐标落于顶部；构造焦点在 Document/Pane 的假UIA状态，断言 clear_input() 拦截 Ctrl+A。4. 斩断3处循环依赖，收敛CLI到内核的96条越界调用（ROI：中）修改模块：uilock、tier_guard、ui、window 及 CLI 入口模块。函数级改法：将4个高入度枢纽共用的纯数据结构（SeatContext、Receipt、坐标矩形、异常类）抽离至零依赖的底层定义区，消除3处互相 import（强制单向依赖：window -> ui -> uilock -> tier_guard）。在内核层提供统一门面函数 run_seat_pipeline(job_spec)，将 CLI 对内核的96条细粒度调用（直接操作UIA、锁、窗口）收敛为仅调用门面与配置查询。风险：中。涉及大量 import 路径调整，需依赖现有1452个离线用例护航。离线验证：编写静态AST检查测试，扫描全库 import 图，断言强连通分量（环）数量为 0，且 CLI 目录对内核模块的 import 边数降至 15 条以内。5. 补齐三大盲区模块的离线契约测试（ROI：中）修改模块：desk_sites、lastreply、reject 对应测试集。函数级改法：针对这三个零覆盖模块，基于录制的 UIA 树快照（JSON）与静态截图切片，为 desk_sites.dispatch()、lastreply.extract()、reject.handle_failure() 建立表驱动的离线回归用例。风险：零。仅增测试代码。离线验证：离线测试套件总数增加，且三模块行覆盖率由 0% 提升至 85% 以上。关于三对 0.91~0.94 相似度副本（dsh/codex/opencode 的 choose 与 use）的裁决：结论：按“纵向按端点隔离、横向按阶段合并”原则——同一端点内的 choose 与 use 必须合并；不同端点之间（dsh vs codex vs opencode）必须保留独立副本，严禁跨端点抽象合并。判据：为何同端点内 choose（选档）与 use（提问/使用）要合并：35~42个同名函数且相似度超 0.91，说明两者共享同一套窗口句柄、UIA树寻址、面板检测与焦点锁。分离会导致修补“浅灰切碎面板”或“剪贴板延迟”时必须在两处同步改，极易漏改。应合并为单端点模块（或提取同端点内的 _common），仅在顶层暴露 choose_tier() 和 ask_question() 两个入口。为何跨端点（dsh / codex / opencode）要保留副本：UI自动化最忌讳针对外部GUI做过早的DRY抽象。各家前端框架（Electron/Web）的DOM/UIA树演进、动画耗时、动作条渲染机制完全独立（如此次Grok粘帖慢、ChatGPT新会话重置、DSH动作条慢）。强行合并为一套参数化大类，会导致修DSH的bug引入Codex的回归。量化判据：凡属“纯算子”（矩形合并、模板匹配打分、剪贴板轮询算子）下沉至 ui/window 共享；凡含“端点坐标偏移、控件名、特定等待时序”的35+个胶水函数，留在各自端点文件内独立演进。",
+        "exit_code": 0,
+        "timeout": false,
+        "elapsed": 200.235,
+        "error_code": null,
+        "error_message": null,
+        "stderr": "",
+        "detail": {
+          "basis": "stop_gone_and_stable_text"
+        }
+      },
+      "started_at": "2026-11-10T00:44:46+00:00",
+      "finished_at": "2026-11-10T00:48:08+00:00",
+      "elapsed": 202.61,
+      "evidence_l1": {
+        "job_id": "20261110T084446-58bb5d6b",
+        "request_id": "a04706de-6be1-41d7-aa4d-f6c0fe7d7d7d",
+        "at": "2026-11-10T00:44:46+00:00",
+        "source": "server"
+      },
+      "progress": {
+        "schema_version": 1,
+        "job_id": "20261110T084446-58bb5d6b",
+        "endpoint": "gemini",
+        "pid": 34904,
+        "at": "2026-11-10T08:48:08+0800",
+        "stage": "finished",
+        "busy": false,
+        "copies": 0
+      }
+    }
+  },
+  "quorum": {
+    "required": 1,
+    "recovered": 1,
+    "met": true,
+    "clamped": true
+  }
+}

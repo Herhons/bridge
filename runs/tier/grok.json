@@ -1,0 +1,18 @@
+{
+ "consumed": true,
+ "consumed_at": "2026-11-09T16:41:26.571952+00:00",
+ "created_at": "2026-11-09T16:41:23.175832+00:00",
+ "created_monotonic": 225133.593,
+ "dimension": "model",
+ "endpoint": "grok",
+ "hwnd": 133502,
+ "monotonic_origin": 225130.687,
+ "pid": 13292,
+ "process_start_time": 134384951108743086,
+ "raw": "{\"after\": \"expert\", \"before\": \"expert\", \"chip_score\": 0.893, \"ok\": true, \"scale\": 1.0, \"stage\": \"already\", \"template\": {\"hit\": true, \"name\": \"grok_chip_expert\", \"scale\": 1.0, \"score\": 0.893, \"threshold\": 0.85}}",
+ "readback": "expert",
+ "schema_version": 1,
+ "tab": null,
+ "target": "expert",
+ "writer": null
+}

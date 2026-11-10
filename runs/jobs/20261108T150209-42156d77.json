@@ -1,0 +1,122 @@
+{
+  "job_id": "20261108T150209-42156d77",
+  "request_id": "95ae69db-9b57-4c72-a58c-085edca7bacf",
+  "status": "failed",
+  "purpose": "test",
+  "prompt": "原样输出下面这一行，不要改动、不要解释：BRIDGE-P2b-4e2a77c1",
+  "created_at": "2026-11-08T07:02:09+00:00",
+  "started_at": "2026-11-08T07:02:09+00:00",
+  "finished_at": "2026-11-08T07:02:27+00:00",
+  "order": [
+    "codex",
+    "workbuddy"
+  ],
+  "endpoints": {
+    "codex": {
+      "status": "done",
+      "reply": "BRIDGE-P2b-4e2a77c1",
+      "error": null,
+      "error_code": null,
+      "exit_code": 0,
+      "choose": {
+        "ok": true,
+        "dimension": "model",
+        "target": "gpt6_luna",
+        "readback": "gpt6_luna",
+        "confirmed": true,
+        "exit_code": 0,
+        "timeout": false,
+        "elapsed": 4.687,
+        "error_code": null,
+        "error_message": null,
+        "stderr": ""
+      },
+      "use": {
+        "ok": true,
+        "stage": "answered",
+        "reply": "BRIDGE-P2b-4e2a77c1",
+        "exit_code": 0,
+        "timeout": false,
+        "elapsed": 12.891,
+        "error_code": null,
+        "error_message": null,
+        "stderr": "",
+        "detail": {
+          "settle_basis": "text_stable"
+        }
+      },
+      "started_at": "2026-11-08T07:02:09+00:00",
+      "finished_at": "2026-11-08T07:02:27+00:00",
+      "elapsed": 17.7,
+      "evidence_l1": {
+        "job_id": "20261108T150209-42156d77",
+        "request_id": "95ae69db-9b57-4c72-a58c-085edca7bacf",
+        "at": "2026-11-08T07:02:09+00:00",
+        "source": "server"
+      },
+      "progress": {
+        "schema_version": 1,
+        "job_id": "20261108T150209-42156d77",
+        "endpoint": "codex",
+        "pid": 14848,
+        "at": "2026-11-08T15:02:27+0800",
+        "stage": "finished",
+        "outcome": "answered"
+      }
+    },
+    "workbuddy": {
+      "status": "failed",
+      "reply": null,
+      "error": {
+        "code": "bad_output",
+        "message": "Traceback (most recent call last):\r\n  File \"F:\\Bridge\\v0.0.9_codex_wip\\src\\scripts\\workbuddy_use.py\", line 12, in <module>\r\n    raise SystemExit(uilock.entry(\"workbuddy_use\", lambda: main(sending=True)))\r\n  File \"F:\\Bridge\\v0.0.9_codex_wip\\src\\qi\\uil\n...[truncated 768 chars]...\n\", line 655, in click_xy\r\n    self._assert_foreground()\r\n  File \"F:\\Bridge\\v0.0.9_codex_wip\\src\\qi\\screen.py\", line 650, in _assert_foreground\r\n    raise ForegroundLost(\r\nqi.screen.ForegroundLost: 目标窗口不在前台（前台=132456，目标=1378394）。你可能切到了别的窗口，已中止，不猜位置。\r\n",
+        "step": "use",
+        "exit_code": 1
+      },
+      "error_code": "bad_output",
+      "exit_code": 1,
+      "choose": {
+        "ok": true,
+        "dimension": "model",
+        "target": "DeepSeek-V4.1-Flash",
+        "readback": "DeepSeek-V4.1-Flash",
+        "confirmed": true,
+        "exit_code": 0,
+        "timeout": false,
+        "elapsed": 5.141,
+        "error_code": null,
+        "error_message": null,
+        "stderr": ""
+      },
+      "use": {
+        "ok": false,
+        "stage": null,
+        "reply": null,
+        "exit_code": 1,
+        "timeout": false,
+        "elapsed": 0.844,
+        "error_code": "bad_output",
+        "error_message": "Traceback (most recent call last):\r\n  File \"F:\\Bridge\\v0.0.9_codex_wip\\src\\scripts\\workbuddy_use.py\", line 12, in <module>\r\n    raise SystemExit(uilock.entry(\"workbuddy_use\", lambda: main(sending=True)))\r\n  File \"F:\\Bridge\\v0.0.9_codex_wip\\src\\qi\\uil\n...[truncated 768 chars]...\n\", line 655, in click_xy\r\n    self._assert_foreground()\r\n  File \"F:\\Bridge\\v0.0.9_codex_wip\\src\\qi\\screen.py\", line 650, in _assert_foreground\r\n    raise ForegroundLost(\r\nqi.screen.ForegroundLost: 目标窗口不在前台（前台=132456，目标=1378394）。你可能切到了别的窗口，已中止，不猜位置。\r\n",
+        "stderr": "Traceback (most recent call last):\r\n  File \"F:\\Bridge\\v0.0.9_codex_wip\\src\\scripts\\workbuddy_use.py\", line 12, in <module>\r\n    raise SystemExit(uilock.entry(\"workbuddy_use\", lambda: main(sending=True)))\r\n  File \"F:\\Bridge\\v0.0.9_codex_wip\\src\\qi\\uilock.py\", line 592, in entry\r\n    return int(func())\r\n  File \"F:\\Bridge\\v0.0.9_codex_wip\\src\\scripts\\workbuddy_use.py\", line 12, in <lambda>\r\n    raise SystemExit(uilock.entry(\"workbuddy_use\", lambda: main(sending=True)))\r\n  File \"F:\\Bridge\\v0.0.9_codex_wip\\src\\qi\\workbuddy.py\", line 1186, in main\r\n    return _run(args, sending=sending)\r\n  File \"F:\\Bridge\\v0.0.9_codex_wip\\src\\qi\\workbuddy.py\", line 1296, in _run\r\n    new_chat(screen, \"workbuddy\")\r\n  File \"F:\\Bridge\\v0.0.9_codex_wip\\src\\qi\\workbuddy.py\", line 1378, in new_chat\r\n    ui.click(screen, nodes[0])\r\n  File \"F:\\Bridge\\v0.0.9_codex_wip\\src\\qi\\ui.py\", line 595, in click\r\n    screen.click_xy((rect.left + rect.right) // 2, (rect.top + rect.bottom) // 2)\r\n  File \"F:\\Bridge\\v0.0.9_codex_wip\\src\\qi\\screen.py\", line 655, in click_xy\r\n    self._assert_foreground()\r\n  File \"F:\\Bridge\\v0.0.9_codex_wip\\src\\qi\\screen.py\", line 650, in _assert_foreground\r\n    raise ForegroundLost(\r\nqi.screen.ForegroundLost: 目标窗口不在前台（前台=132456，目标=1378394）。你可能切到了别的窗口，已中止，不猜位置。\r\n"
+      },
+      "started_at": "2026-11-08T07:02:09+00:00",
+      "finished_at": "2026-11-08T07:02:16+00:00",
+      "elapsed": 6.11,
+      "evidence_l1": {
+        "job_id": "20261108T150209-42156d77",
+        "request_id": "95ae69db-9b57-4c72-a58c-085edca7bacf",
+        "at": "2026-11-08T07:02:09+00:00",
+        "source": "server"
+      },
+      "progress": {
+        "stage": "dispatching"
+      }
+    }
+  },
+  "quorum": {
+    "required": 2,
+    "recovered": 1,
+    "met": false,
+    "clamped": true
+  }
+}

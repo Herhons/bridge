@@ -1,0 +1,34 @@
+Bridge v0.0.9 · Codex 独立只读复验 · 2026-11-06（北京时间）
+工作目录：F:\Bridge\v0.0.9
+共同回归命令：py -3.10 -X utf8 -B -m unittest discover -s tests -v
+Python 3.10.11；最终隔离复跑 Ran 731 tests in 24.369s；OK；EXIT=0；无跳过。
+正式日志 unittest_isolated.txt；首轮731/23.319s原日志unittest.txt保留。两轮使用同一src/tests，第二轮只在运行期重定向写盘并拦截越界写入/真实输入。
+执行偏差：首轮测试漏隔离导致目录外日志/合成输入标记/失败截图写盘，详 READONLY_INCIDENT.txt；不把首轮冒称完全只读。最终隔离复跑目录外变更为0。
+保护对象 src/tests/cards/PLAN.md/progress.json 共402个既有文件SHA256不变；未新增受保护文件，详integrity_final.json。
+独立反例：independent_probes.py/.txt/_result.json；补充 independent_additional.py/.txt/_result.json，共15项，不计入731单测。
+判定口径：PASS仅针对本卡；FAIL区分实现缺陷与证据不足。未主动运行真机choose/use发送入口或外部通知，不重放旧提问。
+后续卡明确改变的行为按后续要求评估，不把合法后续变更算成旧卡回归。
+
+VERDICT FAIL
+缺口性质：自动推送缺少取得新回执的步骤，与120秒/一次消费门禁不兼容；dry-run和runner桩没有验证真实发送条件。
+卡片：cards/CARD-08-encoding-autopush.md:5-12。
+
+逐条核对
+1. UTF-8入口、退回包装、去零宽但原文不变：PASS。
+   src/qi/console.py:43-125；各choose/use/workflow入口console.setup，单文件脚本有fallback。
+   tests/test_card08.py:95-201覆盖cp936严格流、无reconfigure、有buffer/无buffer、双调用不叠加、打印去零宽但对象保留、UTF8文件与真实子进程；EntryWiringTests核验全部入口。
+2. 7b自动推：判定/限频/三次停推/通知/日志/dry-run纯度单元层面 PASS；可执行链 FAIL。
+   qi.autopush.decide处理running、20分钟无活动、generating、30分钟冷却、同progress三次停；事件记录与无通知重复分支存在。
+   workbuddy_autopush.py:72-75 push_command只运行workbuddy_use --continue --purpose review；main:154-160未先choose，也没有刷新回执。
+   06a的tier_guard要求回执120秒内且只能消费一次；施工那张回执通常早已消费，或在停顿20分钟后过期。即使无任何UI故障，该推送也会被gate拒绝。
+   独立 P08_missing_choose记录实际命令，choose_in_command=false；停顿阈值1200秒，回执TTL=120秒。P09F_wb_consumed_rerun用真实门禁验证消费后入口退出5。
+   test_card08.CliTests的runner为假成功，没有让命令经过真实WorkBuddy门禁，因此“调用use”不等于能推送。
+   与09f还有交互：同一固定“继续按卡施工”已答时use可以只读成功，当前脚本仅凭exit0记autopush_push，未区分already_answered和确实提交。
+3. ChatGPT --list聊天模式档位：已有原文 PASS。
+   evidence/card08_chatgpt_list.txt及card08_live.txt:114-125读writer=chat、model=gpt6、effort=high，EXIT=0。
+4. dry-run现场与编码离线重放：PASS。
+   card08_live.txt:19-50同一零宽回复cp936先崩、setup后EXIT0且原文保留；:67-104当前progress dry-run、阈值/生成中/三次停推均有原始输出。
+5. 单测：本卡42项，全量731 OK。
+6. 调度状态：旧progress说明“仅dry-run、真推未发、未接调度”。卡面实测只要求dry-run，未据此单独判失败；但没有真推验证更不能掩盖第2条可从代码确定的回执断链。
+
+建议返工卡：08-autopush-integration。安全地串接用途档位选择→读回→新回执→continue，遵守同一UI锁且避免父子锁自锁；用真实门禁+假UI做集成测试，覆盖过期/已消费回执、并发实例及already_answered不算一次新推。不得在本次只读任务中真推。

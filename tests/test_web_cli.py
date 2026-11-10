@@ -1,6 +1,10 @@
 """CLI workflow regressions without importing Win32-backed application modules."""
 from __future__ import annotations
 
+from offline_guard import ensure_offline
+ensure_offline()
+
+
 import argparse
 import ast
 import contextlib

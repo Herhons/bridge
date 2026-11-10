@@ -26,6 +26,7 @@
 """
 from __future__ import annotations
 
+import os
 import time
 import uuid
 from dataclasses import dataclass
@@ -33,12 +34,29 @@ from urllib.parse import urlsplit
 
 from comtypes import COMError
 
-from . import guard, human, sendgate, textcmp, tier_guard, ui
+from . import guard, heartbeat, human, reject, sendgate, textcmp, tier_guard, ui, uilock
+from .browser import TabUnbound
 from .screen import ForegroundLost, Screen
 
 
 class UserTookOver(ForegroundLost):
     """发送前发现用户动了键鼠：没点发送就让位。（2026-10-30 第3项）"""
+
+
+class SendUnavailable(RuntimeError):
+    """发送键**存在**，但一个都点不了：一个字都没发出去。
+
+    必须与"找不到发送键"分开：找不到是脚本/UI 问题（页面改版、DOM 没渲染出来），
+    "存在但全部 disabled"是端不接受输入（额度耗尽后 Send 常年是灰的，实测见
+    `docs/完成矩阵.md:15`）。两者混成同一句 `找到 0 个控件`，正是当初那句
+    "无法区分是脚本问题还是额度问题"的代码来源。
+    """
+
+    stage = "send_unavailable"
+
+    def __init__(self, message: str, *, present: int = 0):
+        self.present = present
+        super().__init__(message)
 
 
 SEND = {"发送", "发送消息", "发送提示", "提交", "Send", "Send message", "Send prompt"}
@@ -65,6 +83,10 @@ class View:
     value: str
     busy: bool
     copies: list[ui.Node]
+    #: 每个"发送"键的可用态（名字命中 `SEND` 的那些）。带默认值是为了不打断
+    #: 既有按位置构造的调用方与测试。`reject.sends_blocked` 靠它区分
+    #: "找不到发送键"（脚本/UI 问题）与"发送键不可用"（端不接受输入）。
+    sends: tuple[bool, ...] = ()
 
 
 def is_reply_copy(node):
@@ -95,6 +117,123 @@ def is_reply_copy(node):
 
 MIN_EDITOR = 40     # 宽或高小于这个像素值的可见输入框，不当成消息输入框
 PREFIX_CHARS = 3    # CARD-09f 第 5 条：键入前几个字符激活编辑器，其余走粘贴
+# 2026-11-09（B17）：写入后的读回要**等一拍**。
+# grok 新界面把输入框换成 ComboBoxControl 之后，UIA 的 Value 比编辑器慢约 1s：
+# 写完 0.15s 就读，读到的是上一帧（只有开头 PREFIX_CHARS 个字），于是把
+# "已经写进去了"判成 input_mismatch（真机连续复现，见
+# evidence/batch17/grok_write_probe2.txt：同一段文本 1.3s 后读回才是全文）。
+# 只对"值是提问的前缀"这种滞后形态等，值完全对不上就不等——原判据不变。
+READBACK_SETTLE = 3.0
+READBACK_INTERVAL = 0.35
+# 2026-11-09（B17）：粘贴后**不能立刻还原剪贴板**。
+# grok 新界面实测：Ctrl+V 之后约 1.3s，文本才进 UIA 值（`AFTER_PASTE` 还是旧值、
+# `AFTER_WAIT` 才是全文）。旧代码固定 0.35s 就还原用户剪贴板，粘贴于是落空或
+# 粘到旧内容——外面看到的现象就是"只写进了前 3 个字"。改成有界轮询：编辑器
+# 吃到就立刻还原，最多等这么久。
+PASTE_SETTLE = 2.5
+PASTE_POLL = 0.25
+# 2026-11-10（B19）：长文本的粘贴确认要给够时间，而且**没落地必须报错**。
+# deepseek 实测：2450 字提问只写进了前 3 个字（`你是资`）。原因是每轮确认都要
+# 读一次输入框（旧实现走 `read()`，一次要截屏+多次模板匹配），2.5s 只够 2–4 轮，
+# 正文常常还没进 UIA 值；而 `_paste_via_clipboard` 到点后**不抛错**，`finally`
+# 立刻还原剪贴板就正常返回。于是"没写进去"被后面的 `input_mismatch` 顶了锅。
+# 超过 PASTE_LONG_CHARS 的文本用更长的窗口，并且只在确认落地后才算成功。
+PASTE_LONG_CHARS = 600
+PASTE_SETTLE_LONG = 8.0
+
+
+class WriteNotLanded(RuntimeError):
+    """粘贴没落地：剪贴板写过、Ctrl+V 也发过，但编辑器里始终没有这段文字。
+
+    与 `input_mismatch` 的区别：那个是"写完之后比对不符"，这个是"根本没写进去"。
+    真机上两者要分开看，否则会把粘贴失败当成模型/页面把文字改了。
+    """
+
+    stage = "input_not_landed"
+
+    def __init__(self, message: str, *, attempts: int = 0):
+        super().__init__(message)
+        self.attempts = attempts
+
+# 2026-11-09（B17）：只复制到"提问"不等于端只会复读。
+# dsh 实测：回答还在生成时，能复制的只有提问气泡上的那颗复制键，收集循环
+# 一读到"稳定文本"就去点它，把 `copied_prompt` 当成终局（R4c 真机）。
+# 这里给一段有界等待：复制键条数一变就重来，过了这段时间才认这个结论。
+PROMPT_COPY_GRACE = 20.0
+PROMPT_COPY_POLL = 0.4
+
+# 2026-11-07（R5）：接受之后"提问从树里消失了"不等于"对话被换掉了"。
+# 实测 opencode 的提问气泡在长任务跑到一半时就读不到了（回答还在生成）。
+# 所以：连续这么多次读不到、且页面**不在生成中**，才认定对话真的变了。
+MISSING_STABLE_READS = 5
+# 接受之后允许一次"换路由"（新会话首轮发送才会发生），且必须还没出现回复。
+ACCEPT_NAV_GRACE_READS = 2
+# 2026-11-07（B10）：**「读不出」不等于「变了」。**
+# 实测：opencode 长任务滚到底时正文污染标签带 → `proven` 从 true 掉成 false
+# （`header_mismatch`），而会话标题从头到尾没变。旧代码把这种情况当成
+# `session_changed`，在 13:12:52 主动放弃了本该拿到的终答复（594.6s）。
+# 现在：只有"两边都读得出、且标题真的不同"才判换会话；读不出就等，
+# 连续这么多次仍读不出才按 `identity_unreadable` 退出（与换会话分开记账）。
+IDENTITY_UNREADABLE_READS = 10
+
+# 2026-11-07（R6）：**同一个文档、同一个 URL** 的 SPA 会话切换。
+# opencode 的每个会话都是应用自己的一个标签页：切会话时 document runtime id 和
+# URL（`oc://renderer/index.html`）都不变，变的只有应用画出来的**会话名和标签条**。
+# 所以文档身份之外再收一份"会话戳"；读不到/不唯一/对不上，一律 fail-closed。
+TAB_BAND_H = 48        # 文档顶端往下 48px：应用自己的标签条
+HEADER_BAND_H = 96     # 48~96px：当前会话标题
+#: 标签带里只认这么长的文本。实测 opencode 长任务滚到底时，正文残片会落进
+#: 0~48px 这条带子（`'——与施工方自述一致。'`、`'Ran 1159 tests / OK / EXIT=0'`），
+#: 于是 tabs 里混进正文 → `tabs.count(title) != 1` → `proven=False`。
+#: 这是**传感器噪声**，不是会话变了。
+TAB_TEXT_MAX = 60
+#: 以这些字符收尾的，是句子不是标签。
+_SENTENCE_TAIL = "。！？…；;.!?"
+
+
+def _looks_like_tab(text) -> bool:
+    """这段文字像不像应用自己的标签/标题，而不是正文残片。
+
+    只做保守过滤（换行 / 超长 / 句子收尾），**不猜语义**：
+    宁可漏掉一个真标签（那只会让 `proven` 变 false，由下面的宽限兜住），
+    也不能把正文当成标签（那会让 `proven` 变成"读得出但读错"）。
+    """
+    value = str(text or "").strip()
+    if not value or len(value) > TAB_TEXT_MAX:
+        return False
+    if "\n" in value or "\r" in value:
+        return False
+    return value[-1] not in _SENTENCE_TAIL
+# 应用给新会话的占位名（还没按首条消息自动命名）。只用来允许**一次**改名。
+PROVISIONAL_TITLES = {"会话", "新会话", "新对话", "新建会话", "未命名",
+                      "new chat", "new session", "untitled", "untitled session"}
+
+# 2026-11-07（R7）：标题**不是**身份。
+# R6 用"会话名 + 标签条唯一"当证明，R6 自己也承认同名会话分不出来。标题可变、
+# 可重复，不能拿它证明"还是同一个会话"。能证明会话的只有**与标题无关**的会话 id：
+# 地址里的会话路径（Gemini `/app/<id>`、Grok `/chat/<id>`、ChatGPT `/c/<id>`）。
+# 桌面端（oc://、app://、file://）没有这个结构 -> 读不到 id -> 一律 fail-closed。
+SESSION_PATH_ROOTS = ("app", "chat", "c")
+SESSION_ID_PLACEHOLDERS = {"", "new", "home", "index", "app", "chat"}
+
+
+def session_id_of(url):
+    """从地址里取**与标题无关**的会话 id；没有就返回 None（不猜、不拿标题顶替）。
+
+    例：`https://gemini.google.com/app/abc123` -> `abc123`；
+        `https://grok.com/chat/xyz` -> `xyz`；`oc://renderer/index.html` -> None。
+    """
+    try:
+        parts = urlsplit(str(url or ""))
+    except (TypeError, ValueError):
+        return None
+    if parts.scheme not in ("http", "https"):
+        return None
+    segments = [s for s in (parts.path or "").split("/") if s]
+    if len(segments) < 2 or segments[0].lower() not in SESSION_PATH_ROOTS:
+        return None
+    sid = segments[1].strip()
+    return None if sid.lower() in SESSION_ID_PLACEHOLDERS else sid
 
 
 def _area(node):
@@ -148,9 +287,31 @@ def path_of(url):
 
 
 class Conversation:
-    def __init__(self, screen, site, empty=None, images=None):
+    def __init__(self, screen, site, empty=None, images=None, wake=None,
+                 write_verify=False, adopt_self_draft=False, paste_chunk=0):
         self.screen = screen
         self.site = site
+        #: 并发模式下不许抢前台（`BRIDGE_UI_WAKE=0`）；None = 按环境变量走。
+        self.wake = wake
+        # B19：粘贴必须确认落地（默认关，只有 deepseek 打开）。
+        #   False = 旧行为：到点没确认也照常返回，交给调用方比对。
+        #   True  = 到点没确认抛 WriteNotLanded，write() 会清空重试。
+        self.write_verify = bool(write_verify)
+        # B19：输入框里若是"本提问的前缀"，认成自己上一轮留下的残草并清掉，
+        # 而不是当成用户草稿拒发。只对打开了这个开关的端生效。
+        self.adopt_self_draft = bool(adopt_self_draft)
+        # B19：单次粘贴的字数上限（0 = 不分块）。deepseek 的输入框实测在
+        # **2000 字**：2000 能进，2001 整段被吞掉（不截断、不报错）。分两次
+        # 各 1500 字粘进去则总共 3000 字都在，所以这是"单次粘贴"的上限，
+        # 不是输入框总长上限。
+        self.paste_chunk = int(paste_chunk or 0)
+        # B15：网页端在 tabs 模式下要"每次读之前把标签切回自己"。
+        # 只对 4 个网页端设（桌面端没有标签概念）；per_site 模式下 _ensure_tab 是空操作。
+        if site in ui.HOSTS:
+            try:
+                screen.tab_site = site
+            except AttributeError:
+                pass                       # 假 screen 不支持就算了（测试桩）
         # 网页端传"发送键不可用即空输入框"的探针；桌面端用默认的文本判据。
         self.empty = empty or composer_empty
         # (动作条模板, 排内复制键模板)：有些端的动作条不进控件树，只能在画面上找
@@ -169,7 +330,10 @@ class Conversation:
         raise error
 
     def _read(self):
-        control, url = ui.document(self.screen.target_hwnd, self.site)
+        # tabs 模式：先切标签再取文档（否则读到的是别的席位那一页）。
+        from . import browser
+        control, url = browser.acquire_document(
+            self.site, self.screen.target_hwnd, wake=self.wake)
         root = ui.tree(control)
         editor = visible_editor(root, self.site)
         value = ui.edit_value(editor.control)
@@ -189,7 +353,12 @@ class Conversation:
                             r = n.control.BoundingRectangle
                             if r.left <= x < r.right and r.top <= y < r.bottom:
                                 copies.append(n)
-        return View(url, root, editor, value, busy, copies)
+        # 发送键的可用态（R11）：`ui.tree` 已把 CachedIsEnabled 写进 node.enabled，
+        # 读它是纯本地属性，不额外走 UIA。注意与 `busy` 的区别：`busy` 用 live
+        # `IsEnabled` 判断"此刻能不能点停止"，这里只需要快照里的可用态。
+        sends = tuple(bool(n.enabled) for n in root.walk()
+                      if n.kind == "ButtonControl" and n.name in SEND)
+        return View(url, root, editor, value, busy, copies, sends)
 
     def write(self, view, prompt):
         """点进输入框，键入前几个字符激活编辑器，其余走剪贴板粘贴（CARD-09f 第 5 条）。
@@ -198,7 +367,7 @@ class Conversation:
         粘贴走 paste 事件，只插文本节点、不做 Markdown 转换。元素失效就重读一版再试。
         """
         error = None
-        for _ in range(3):
+        for attempt in range(3):
             try:
                 ui.click(self.screen, view.editor)
                 prefix = prompt[:PREFIX_CHARS]
@@ -206,27 +375,94 @@ class Conversation:
                 if prefix:
                     self.screen.type_text(prefix)
                 if rest:
-                    self._paste_via_clipboard(rest)
+                    # expect=整段提问：判"落地"时用它做归一化比较（编辑器会合并空行）
+                    self._paste_rest(rest, prompt, attempts=attempt)
                 # 打字/粘贴本身是 SendInput，也会刷新"最后输入时间"；记下打完那一刻，
                 # 发送前时间变了才算用户动过（直接用 user_active 会被自己的输入误触发）
                 time.sleep(0.15)
                 self._input_mark = guard.last_input_tick()
                 return
+            except WriteNotLanded as exc:
+                # B19：没落地不要立刻退出——先清空，再从空框重写一次。
+                # 不清的话下一轮会在"前缀"后面再贴一遍，越写越乱。
+                error = exc
+                if self.write_verify:
+                    try:
+                        self.clear(self.read())
+                    except (RuntimeError, COMError):
+                        pass
+                view = self.read()
             except (RuntimeError, COMError) as exc:
                 error = exc
                 time.sleep(0.3)
                 view = self.read()
         raise error
 
-    def _paste_via_clipboard(self, text):
+    def _paste_rest(self, rest, prompt, *, attempts: int = 0):
+        """把正文粘进去；设了 `paste_chunk` 就分块粘（每块都单独确认落地）。
+
+        为什么分块：deepseek 单次粘贴超过 2000 字会被整段吞掉，但分块之后总量
+        可以远超 2000（实测 1500+1500=3000 全在）。中间块只校验本块是否出现，
+        最后一块才用整段提问做归一化比较。
+        """
+        size = self.paste_chunk
+        if not size or len(rest) <= size:
+            self._paste_via_clipboard(rest, attempts=attempts, expect=prompt)
+            return
+        chunks = [rest[i:i + size] for i in range(0, len(rest), size)]
+        for index, chunk in enumerate(chunks):
+            last = index == len(chunks) - 1
+            self._paste_via_clipboard(chunk, attempts=attempts,
+                                      expect=prompt if last else None)
+
+    def read_value(self):
+        """只读输入框文本，比 `read()` 轻得多。
+
+        B19：粘贴确认要在一个几秒的窗口里轮询好几次，而 `read()` 每轮都要
+        截屏 + 多次模板匹配（deepseek 长文本时 2.5s 只够 2–4 轮）。这里只取
+        文档树和输入框的 Value，不做任何找图。
+        """
+        from . import browser
+
+        control, _url = browser.acquire_document(
+            self.site, self.screen.target_hwnd, wake=self.wake)
+        root = ui.tree(control)
+        editor = visible_editor(root, self.site)
+        if editor is None:
+            raise RuntimeError("输入框不见了")
+        return ui.edit_value(editor.control) or ""
+
+    def _paste_via_clipboard(self, text, *, attempts: int = 0, expect=None):
         """把 text 写入剪贴板（用序列号确认确实更新）再 Ctrl+V；结束恢复原剪贴板。
 
         CARD-09f 第 5 条：粘贴前保存原剪贴板；写入后按剪贴板序列号确认内容真的
         更新了再 Ctrl+V；无论成败都要恢复原剪贴板（恢复失败也尽力）。
         序列号没变 = 剪贴板没更新 → 不粘贴、直接报错。
+
+        B19：打开 `write_verify` 后，**超时没确认也算失败**（抛 `WriteNotLanded`）。
+        旧行为是到点静默返回，于是"只写进前 3 个字"要等到后面的 `input_mismatch`
+        才暴露，而那时已经分不清是粘贴没落地还是页面改了文本。
+
+        `expect` 是整段提问（含前面键入的那几个字）。判"落地"用它做归一化比较，
+        不是拿正文做原始子串：多行提问里的连续空行会被编辑器合并，原始子串永远
+        比不中，会把"其实写进去了"误判成没落地（2285 字真机一次）。
         """
         previous = self.screen.clipboard()
         seq_before = self.screen.clipboard_seq()
+        needle = (text or "").strip()
+        want = (expect or "").strip() or needle
+        landed = not needle
+        limit = PASTE_SETTLE
+        if self.write_verify and len(needle) >= PASTE_LONG_CHARS:
+            limit = PASTE_SETTLE_LONG
+
+        def arrived(value: str) -> bool:
+            if not needle:
+                return True
+            if expect is not None:
+                return textcmp.equal(want, value or "")
+            return needle in (value or "")
+
         try:
             self.screen.set_clipboard(text)
             seq_after = self.screen.clipboard_seq()
@@ -234,19 +470,50 @@ class Conversation:
                     and seq_after == seq_before):
                 raise RuntimeError("剪贴板序列号没变：剪贴板未更新，不粘贴")
             self.screen.hotkey("ctrl", "v")
-            time.sleep(0.35)
+            # 等编辑器真的吃掉这次粘贴再还原（见 PASTE_SETTLE）：还原早了等于把
+            # 用户剪贴板换回去的同时把这次粘贴打断。
+            deadline = time.monotonic() + limit
+            while needle and time.monotonic() < deadline:
+                time.sleep(PASTE_POLL)
+                try:
+                    value = self.read_value() if self.write_verify else (self.read().value or "")
+                except (RuntimeError, COMError):
+                    break
+                if arrived(value):
+                    landed = True
+                    break
         finally:
             try:
                 self.screen.set_clipboard(previous)
             except Exception:                # noqa: BLE001 - 恢复失败也要尽力吞掉
                 pass
+        if self.write_verify and not landed:
+            raise WriteNotLanded(
+                f"粘贴没落地：{limit:.1f}s 内输入框里没有这段文字（{len(needle)} 字）",
+                attempts=attempts)
 
     def clear(self, view):
-        """清空输入框：点进去 → Ctrl+A → Delete（CARD-09e 第 4/5 条复用）。"""
+        """清空输入框：点进去 → Ctrl+A → Delete（CARD-09e 第 4/5 条复用）。
+
+        B17：grok 新界面把输入框换成 `ComboBoxControl` 之后，Ctrl+A/Delete 打
+        不干净（实测清完读回来还是原文，下一轮就 `draft_present`）。它同时带
+        可写的 ValuePattern，所以读回非空时用它兜底一次。只在"没清掉"时才走，
+        其他端一个字节不变。
+        """
         ui.click(self.screen, view.editor)
         self.screen.hotkey("ctrl", "a")
         self.screen.press("delete")
         time.sleep(0.2)
+        try:
+            if not (self.read().value or "").strip():
+                return
+        except (RuntimeError, COMError):
+            return
+        try:
+            view.editor.control.GetValuePattern().SetValue("")
+            time.sleep(0.3)
+        except Exception:                            # noqa: BLE001 - 没有就维持原状
+            pass
 
     def paste(self, view, prompt):
         """点击输入框后用剪贴板贴**纯文本**（CARD-09e 第 5 条 / CARD-09f 第 5 条）。
@@ -286,6 +553,8 @@ class Conversation:
         raise error
 
     def _submit(self, view):
+        # 持锁期间别的席位打不了字（它们的输入也在各自的 section 里），
+        # 所以这里读到的输入抖动只可能是"我们自己的输入"或"真用户"，判据仍然成立。
         if guard.user_moved_since(getattr(self, "_input_mark", None)):
             raise UserTookOver("发送前检测到键鼠输入，已让位，未点发送")
         if self.site == "deepseek":
@@ -300,14 +569,24 @@ class Conversation:
         # 文字刚打进去时 Electron 端可能还没把发送键设成可用（实测 Codex 桌面端
         # Send 一直是 disabled），等几轮再判死，别把"慢半拍"报成"没有发送键"。
         for attempt in range(4):
-            buttons = [n for n in view.root.walk() if n.kind == "ButtonControl"
-                       and n.name in SEND and n.control.IsEnabled]
+            named = [n for n in view.root.walk() if n.kind == "ButtonControl"
+                     and n.name in SEND]
+            buttons = [n for n in named if n.control.IsEnabled]
             if len(buttons) == 1:
                 ui.click(self.screen, buttons[0])
                 return
             if len(buttons) > 1:
                 raise RuntimeError(f"可用发送按钮: 找到 {len(buttons)} 个控件")
             if attempt == 3:
+                # R11：把"找不到发送键"和"发送键不可用"分开。
+                # 只有"存在但一个都点不了"才说明端不接受输入；找不到仍走原样报错。
+                if named and reject.sends_blocked(
+                        reject.profile(self.site),
+                        reject.Facts(sends_total=len(named), sends_on=0,
+                                     busy=bool(getattr(view, "busy", False)))):
+                    raise SendUnavailable(
+                        f"发送键存在但全部不可用（{len(named)} 个）：端不接受输入",
+                        present=len(named))
                 raise RuntimeError("可用发送按钮: 找到 0 个控件")
             time.sleep(0.5)
             view = self.read()
@@ -320,6 +599,21 @@ class Conversation:
         return self.copy_at((rect.left + rect.right) // 2, (rect.top + rect.bottom) // 2)
 
     def copy_at(self, x, y):
+        # B13：复制是**整段桌面操作**（抢焦点 + 点按钮 + 改剪贴板 + 轮询）。
+        # 两个端同时进来会互相踩：A 写完 marker、B 把自己的正文写进剪贴板，
+        # A 的 `value != marker` 判定就会把 B 的内容当成自己的答案。
+        # 所以它必须整段持短锁，而不是"点之前锁一下"。
+        with uilock.section(f"copy:{self.site}"):
+            return self._copy_at_locked(x, y)
+
+    def _copy_at_locked(self, x, y):
+        # 并发时点复制键前也要把自己的窗口抢回前台：否则上一个聚焦的席位
+        # 会让我们抛 ForegroundLost，而这一下通常发生在"答案已经出来了"之后，
+        # 白丢一整轮（2026-11-08 真机 codex：stage=user_took_over）。
+        if uilock.sectioned():
+            focus = getattr(self.screen, "focus", None)
+            if focus is not None and getattr(self.screen, "target_hwnd", None):
+                focus()
         old = self.screen.clipboard()
         marker = "bridge-copy-" + uuid.uuid4().hex
         self.screen.set_clipboard(marker)
@@ -334,7 +628,8 @@ class Conversation:
                     time.sleep(0.3)
             else:
                 raise error
-            deadline = time.monotonic() + 5
+            # 并发下最坏值是"四席同时收尾"，把上限定在 3s 而不是 5s。
+            deadline = time.monotonic() + 3
             while time.monotonic() < deadline:
                 value = self.screen.clipboard()
                 if value != marker and value.strip():
@@ -393,18 +688,23 @@ def prompt_nodes(view, prompt):
     return found
 
 
-def composer_empty(view) -> bool:
+def composer_empty(view, placeholders=()) -> bool:
     """输入框里没有用户输入。
 
     空 contenteditable 的 TextPattern 会返回占位文字，而且和控件名不是同一个串
     （Gemini：name「为 Gemini 输入提示」/ 文本「问问 Gemini」；Grok 的占位还轮播）。
     结构判据：值恰好等于**输入框框内**渲染出来的那个文本节点（它是输入框的兄弟节点，
     不是输入框的后代——有内容时文字在后者里面）。
+
+    B19：加了 `placeholders`，让各端把自己那串占位文字传进来
+    （gemini 的 `问问 Gemini` 不在 `KNOWN_PLACEHOLDERS` 里，于是被当成 10 字草稿，
+    `clear_composer` 每次都误报 `draft_clear_failed`）。
     """
     text = ui.canonical(view.value)
     if not text:
         return True
-    if text in {ui.canonical(p) for p in KNOWN_PLACEHOLDERS}:
+    known = set(KNOWN_PLACEHOLDERS) | {p for p in (placeholders or ()) if p}
+    if text in {ui.canonical(p) for p in known}:
         return True
     if view.editor is None:
         return False
@@ -429,6 +729,38 @@ def composer_empty(view) -> bool:
     return False
 
 
+def _looks_like_partial_write(prompt, value) -> bool:
+    """输入框里的值是不是"只写进去一截"（UIA 值逐段刷新的滞后形态）。
+
+    grok 实测：整段写完后 0.15s 读到的还是开头 3 个字（提问的前缀），1.3s 后
+    才是全文。前缀是**滞后**，值得等一拍；值完全对不上（比如 Markdown 把行首
+    标记吃掉了）就不是滞后，不等，交给原判据。
+    """
+    v = (value or "").strip()
+    p = (prompt or "").strip()
+    return p.startswith(v) and len(v) < len(p)
+
+
+def _read_written(conversation, prompt):
+    """写入后读回输入框，允许 UIA 慢一拍（见 READBACK_SETTLE）。
+
+    对上就立刻返回——正常一轮不额外 sleep。超时返回最后一版，调用方仍按
+    严格比对判 `input_mismatch`（这里不替它下结论）。
+    """
+    got = conversation.read()
+    if textcmp.equal(prompt, got.value) or not _looks_like_partial_write(prompt, got.value):
+        return got
+    deadline = time.monotonic() + READBACK_SETTLE
+    while time.monotonic() < deadline:
+        time.sleep(READBACK_INTERVAL)
+        got = conversation.read()
+        if textcmp.equal(prompt, got.value):
+            break
+        if not _looks_like_partial_write(prompt, got.value):
+            break
+    return got
+
+
 def _rewrite_plain(conversation, prompt):
     """清空后改用粘贴再写一次；任何异常都当作"没成"（返回 None）。
 
@@ -439,36 +771,90 @@ def _rewrite_plain(conversation, prompt):
         conversation.clear(view)
         conversation.paste(view, prompt)
         time.sleep(0.2)
-        return conversation.read()
+        return _read_written(conversation, prompt)
     except (RuntimeError, COMError):
         return None
 
 
+def _session_proof(conversation, view, prompt):
+    """发送前认领"页面已有本提问+回复"时，先证明**同一会话**。
+
+    R8（Hy4 E.3 / R7 §6.4）：`_existing_reply` 发生在采集会话 id 之前，原来只按
+    文本 + 当前文档认领；同一文档同一 URL 的 SPA 换到另一个会话时，里面恰好有
+    同一条提问和旧回答，会被当成本轮答案交回去。
+
+    唯一认的是**与标题无关的会话 id**（`session_id_of`，地址里的会话路径）：
+      · 记录里没有 id（老记录/桌面端） -> 证明不了；
+      · 当前页面读不到 id（oc://、app://、后台标签） -> 证明不了；
+      · 两者不相等 -> 证明不了。
+    证明不了时返回 (False, 原因, 记录状态)，调用方必须 fail-closed：不认领、
+    不发送、不清草稿；accepted/unknown 的事实原样保留。
+    """
+    site = getattr(conversation, "site", None)
+    if not isinstance(site, str) or not site.strip():
+        return False, "site_unreadable", None
+    try:
+        from . import submissions
+
+        prior = submissions.pending(site.strip(), prompt)
+    except Exception:                       # noqa: BLE001 - 记录读不出来按"状态不明"
+        return False, "journal_unreadable", "unknown"
+    if not prior:
+        return False, "no_journal", None
+    state = str(prior.get("state") or "unknown").lower()
+    scope = submissions.recovery_scope(prior) or {}
+    recorded = scope.get("session_id")
+    current = session_id_of(getattr(view, "url", None))
+    if not isinstance(recorded, str) or not recorded.strip():
+        return False, "session_id_missing", state
+    if not current:
+        return False, "session_id_unreadable", state
+    if recorded.strip() != current:
+        return False, "session_id_mismatch", state
+    return True, "matched", state
+
+
 def _existing_reply(conversation, view, prompt):
-    """对话里已有「本提问」且它之后有回复时，只读返回该回复正文；否则 None。
+    """对话里已有「本提问」且它之后有回复时，只读返回该回复正文。
 
     CARD-09f 第 6 条：中断后重跑、页面其实已答完时，绝不能重发。
     判据：认领到本提问（`prompt_nodes`），并且它后面有回复复制键（`view.copies`）。
     从最新一条往回试，复制到「提问本身」就跳过——宁可读不到也不冒充回答。
+
+    R8：**先证明同一会话，再复制**。返回 `(正文, 原因, 记录状态)`：
+      · `(text, None, state)`   身份已证明，可交卷（already_answered）；
+      · `(None, None, None)`    页面上根本没有本提问+回复，走正常发送；
+      · `(None, reason, state)` 有候选但证明不了 -> 调用方 fail-closed。
+    证明不了时**连复制都不做**（不读旧回答、不碰剪贴板）。
     """
     prompts = prompt_nodes(view, prompt)
     if not prompts:
-        return None
+        return None, None, None
     nodes = list(view.root.walk())
     prompt_at = {i for i, n in enumerate(nodes) if n in prompts}
+    candidates = []
     for node in reversed(view.copies):
         try:
             at = nodes.index(node)
         except (ValueError, COMError):
             continue
         if any(at > i for i in prompt_at):
-            try:
-                text = conversation.copy(node)
-            except (RuntimeError, COMError):
-                continue
-            if text and not textcmp.equal(prompt, text):
-                return text
-    return None
+            candidates.append(node)
+    if not candidates:
+        return None, None, None
+    proved, reason, state = _session_proof(conversation, view, prompt)
+    if not proved:
+        return None, reason, state
+    for node in candidates:
+        try:
+            text = conversation.copy(node)
+        except (RuntimeError, COMError):
+            continue
+        if text and not textcmp.equal(prompt, text):
+            return text, None, state
+    # 身份已证明、页面上也确实有"本提问+回复"，但复制回来的是提问本身/读不到：
+    # 不能当作"没有已答"去重发（那会违反 no-resend），同样 fail-closed。
+    return None, "reply_unreadable", state
 
 
 def _clear_draft_verified(conversation, view, is_empty) -> bool:
@@ -481,8 +867,288 @@ def _clear_draft_verified(conversation, view, is_empty) -> bool:
         return False
 
 
-def ask(conversation, prompt, timeout=180.0, pre_send=None, plain=False, watch=None):
+# T2-2：PRE_SUBMIT 探测期与提交前受控重试。只用于"点完发送之后、还没证明确实进去了"
+# 那一段；一旦证明已提交（POST_SUBMIT），后续任何情况下都**不许**再发（严禁重发）。
+PRE_SUBMIT_PROBE = 5.0          # 施工单：PRE_SUBMIT ≤5s
+SUBMIT_RETRY_TOTAL = 10.0       # 施工单：允许重试 1 次，总 ≤10s
+
+#: 回复容器最多往上爬几层去找"有文字的那个祖先"
+MAX_TEXT_CLIMB = 6
+
+#: 稳定判据的上限。有候选回复、但文本长度一直在变（计时器 / 百分比这类 UI 噪声）时，
+#: 到了这个时限就按当前内容交卷并打标记 —— 宁可能力受限地交一次，也不因噪声超时把答案丢掉。
+SETTLE_MAX = 40.0
+
+#: B16：`copies <= baseline` 持续这么久、且不在生成中，就改用树内位置判候选。
+#: 45s 远大于正常出答案的时间（实测 20~50s），不会影响快路径；只救「长会话
+#: 里 baseline 重锚错、明明有回复却永远不交卷」这一类。
+POSITIONAL_AFTER = 45.0
+
+
+def positional_ready(*, busy: bool, accepted: bool, since: float | None,
+                     now: float, after: float = POSITIONAL_AFTER) -> bool:
+    """纯函数：是不是该放弃 `copies > baseline`、改用树内位置判候选。
+
+    **不能在生成中放行**（半句话会被交卷）；提问还没被收下也不放行。
+    单独拎出来是为了能离线钉住这三条门槛，不靠 300s 真机超时去验。
+    """
+    return bool(not busy and accepted and since is not None and now - since >= after)
+
+
+# B17：dsh 首页的回复复制键要 hover 才出现，`view.copies` 一直为空，
+# 连「位置候选」也无从下手。用户授权的只读兜底：只认「末个提问之后、
+# 编辑器之前」的叶子文本，且必须在 settle 稳定后才交卷。
+# B19：deepseek 也加进来。长回答把回答动作条顶出视口后，`ds_actions`/`ds_copy`
+# 模板在画面上找不到 → `copies` 恒为 0 → 等待循环每轮 continue，25 分钟空转到
+# `no_reply`，而页面上回答早就完整了（真机 job_review4）。这条兜底只在
+# `positional`（已接受、不忙、>45s）就绪且 copies 为空时生效。
+UIA_TEXT_SITES = frozenset({"dsh", "deepseek"})
+UIA_TEXT_EXACT = frozenset({
+    "探索未至之境", "新会话", "新建会话", "复制", "重新生成", "点赞", "点踩",
+    "朗读", "分享", "Off", "Low", "High", "Max",
+    "DeepSeek-V4.1-Flash", "GPT-6Luna",
+})
+UIA_TEXT_PREFIX = ("描述你想要构建的内容", "搜索模型", "输入消息", "问DeepSeek")
+
+
+def uia_text_candidates(view, prompts, editor, prompt_text=""):
+    """收集「末个提问节点之后、编辑器节点之前」的叶子文本节点。
+
+    纯读 `Node` 属性，不 deref UIA、不碰剪贴板、不写盘。侧栏与 composer
+    天然落在这个区间之外；再用黑名单和「与提问相等」两道过滤挡 UI 文案。
+    """
+    ordered = list(view.root.walk())
+    prompt_at = [i for i, node in enumerate(ordered) if node in prompts]
+    if not prompt_at:
+        return []
+    start = max(prompt_at) + 1
+    end = len(ordered)
+    if editor is not None:
+        try:
+            end = ordered.index(editor)
+        except ValueError:
+            pass
+    out = []
+    for node in ordered[start:max(start, end)]:
+        if node.kind not in ("TextControl", "HyperlinkControl") or node.children:
+            continue
+        try:
+            text = ui.canonical(ui.text_of(node))
+        except Exception:                             # noqa: BLE001
+            continue
+        if not text or text in UIA_TEXT_EXACT:
+            continue
+        if any(text.startswith(word) for word in UIA_TEXT_PREFIX):
+            continue
+        if prompt_text and textcmp.equal(prompt_text, text):
+            continue
+        out.append(node)
+    return out
+
+
+def uia_text_len(nodes) -> int:
+    """文本长度签名，供 settle 判「还在流式输出」用。"""
+    total = 0
+    for node in nodes:
+        try:
+            total += len(ui.canonical(ui.text_of(node)))
+        except Exception:                             # noqa: BLE001
+            continue
+    return total
+
+
+def reply_text_len(view, candidates) -> int:
+    """最新那条回复所在容器里的叶子文本长度。
+
+    **只用来判断"这一轮文本变了没有"**，不参与任何内容判定、不与提问比较。
+
+    为什么不用整页：整页含侧栏/列表/计数，噪声大。为什么从复制键往上爬：
+    复制键所在的容器就是这条回复；`ui.text_of` 会跳过按钮名，所以"复制/赞/踩"
+    这些不会污染长度。
+    """
+    node = candidates[-1] if candidates else None
+    for _ in range(MAX_TEXT_CLIMB):
+        if node is None:
+            break
+        node = getattr(node, "parent", None)
+        if node is None:
+            break
+        try:
+            text = ui.canonical(ui.text_of(node))
+        except Exception:                              # noqa: BLE001 - 读不到就当没有
+            text = ""
+        if text:
+            return len(text)
+    return 0
+
+
+def _collection_identity(view):
+    """收集阶段用来判断"还是不是同一个页面"的身份：地址路径 + document runtime id。
+
+    读不到的项留 None（不猜）。`_identity_broken` 只在**两边都读得到**时下结论，
+    和 `sendgate.diff_stamp` 同一条口径：读不到不冒充"没变"。
+    """
+    try:
+        rid = list(view.root.control.GetRuntimeId()) or None
+    except Exception:                       # noqa: BLE001 - 读不到就没有这一项
+        rid = None
+    url = getattr(view, "url", None)
+    return {"path": (path_of(url) or None) if url else None, "rid": rid}
+
+
+def _identity_broken(before, now):
+    """身份有没有变（只比两边都读得到的字段）。"""
+    if not before or not now:
+        return False
+    if before.get("path") and now.get("path") and before["path"] != now["path"]:
+        return True
+    if before.get("rid") and now.get("rid") and list(before["rid"]) != list(now["rid"]):
+        return True
+    return False
+
+
+def _local_chat_persisted(before, now) -> bool:
+    """是不是「临时会话落库」：`/c/local-…` → `/c/<uuid>`（B17）。
+
+    新版 chatgpt 用 `/c/local-chatgpt:<uuid>` 表示还没落库的新对话，首条消息
+    一提交就换成真实 id（2026-11-09 实测：发送成功、回复也读得到，却因为路径
+    变了被判 `conversation_changed`）。只认这一条窄路径，别的变化照旧拒绝。
+    """
+    old = (before or {}).get("path") or ""
+    new = (now or {}).get("path") or ""
+    if not old or not new:
+        return False
+    return old.startswith("/c/local-") and new.startswith("/c/") \
+        and not new.startswith("/c/local-")
+
+
+def _rect_of(node):
+    """控件的屏幕矩形；读不到返回 None（不当成 0，也不猜）。"""
+    try:
+        rect = node.control.BoundingRectangle
+    except (COMError, AttributeError):
+        return None
+    try:
+        return (int(rect.left), int(rect.top), int(rect.right), int(rect.bottom))
+    except (TypeError, ValueError, AttributeError):
+        return None
+
+
+def _window_title(name):
+    """文档标题 -> 会话名。Electron 把窗口标题拼成 `<会话名> · <应用名>`。"""
+    raw = (name or "").strip()
+    if not raw:
+        return None
+    head, sep, tail = raw.rpartition(" · ")
+    if sep and head.strip() and 0 < len(tail.strip()) <= 32:
+        return head.strip()
+    return raw
+
+
+def _band_texts(root, top, low, high):
+    """文档顶端 `low..high` 像素带里的叶子文本：[(x, 文本)]，按 x 排序。
+
+    只收"像标签"的短文本（`_looks_like_tab`）。这条带子会被正文污染：
+    opencode 滚到底时，消息正文会落进 0~48px，混进 tabs 里。
+    """
+    out = []
+    for node in root.walk():
+        if node.kind != "TextControl" or node.children:
+            continue
+        name = (node.name or "").strip()
+        if not name or not _looks_like_tab(name):
+            continue
+        box = _rect_of(node)
+        if box is None or not (low <= box[1] - top < high):
+            continue
+        out.append((box[0], name))
+    out.sort()
+    return out
+
+
+def session_stamp(view):
+    """当前会话在**应用 UI 上的名字**：会话名 + 标签条证据。
+
+    **2026-11-07（R7）起它只是"变化探测器"，不是身份证明。**
+    名字可变（自动命名、手动改名）、可重复（两个同名会话），所以它只能用来
+    **发现变化并拒绝**；任何"可以交卷"的判断都不得依赖它，必须依赖
+    `session_id_of(url)`（与标题无关的会话 id）。这个函数保留是为了：
+      · 换会话时能更早、更有信息量地拒（session_changed 带 before/now）；
+      · 应用自动命名（占位名 -> 真名）时不要误判成换会话。
+    """
+    root = view.root
+    title = _window_title(getattr(root, "name", ""))
+    box = _rect_of(root)
+    if title is None or box is None:
+        return {"title": title, "tabs": [], "proven": False, "why": "no_title"}
+    tabs = [text for _x, text in _band_texts(root, box[1], 0, TAB_BAND_H)]
+    if len(tabs) < 2:
+        return {"title": title, "tabs": tabs, "proven": False, "why": "no_tab_strip"}
+    if tabs.count(title) != 1:
+        return {"title": title, "tabs": tabs, "proven": False, "why": "ambiguous_title"}
+    in_band = set(tabs)
+    heads = {text for _x, text in _band_texts(root, box[1], TAB_BAND_H, HEADER_BAND_H)
+             if text in in_band}
+    # B10：原来要求 `heads == {title}`（页头带**只有**标题）。
+    # 实测这个判据太脆：长任务滚到底时正文残片也会落进 48~96px，
+    # 于是 heads 里多出无关文本 → header_mismatch → proven 从 true 掉 false
+    # → 被当成"换了会话"。改成"标题**必须出现**在页头带里"：
+    # 仍然证明"页头显示的就是这个会话"，但不再被无关文本一票否决。
+    if title not in heads:
+        return {"title": title, "tabs": tabs, "proven": False, "why": "header_mismatch"}
+    return {"title": title, "tabs": tabs, "proven": True, "why": "ok"}
+
+
+def _session_same(before, now):
+    """两份**名字**戳是否自洽（只用于"没变"的探测，绝不用于放行）。"""
+    return bool(before and now and before.get("proven") and now.get("proven")
+                and before.get("title") == now.get("title"))
+
+
+def _session_provisional(stamp):
+    """这份会话戳是不是应用的"新会话占位名"（还没自动命名）。"""
+    return bool(stamp) and str(stamp.get("title") or "").strip().lower() in PROVISIONAL_TITLES
+
+
+def _has_reply_after(nodes, prompts, copies):
+    """提问节点后面有没有已经存在的回复键（用来辨认"历史问答对"）。"""
+    if not prompts or not copies:
+        return False
+    wanted = {id(c) for c in copies}
+    last_prompt = max(i for i, n in enumerate(nodes) if any(n is p for p in prompts))
+    return any(i > last_prompt and id(n) in wanted for i, n in enumerate(nodes))
+
+
+def _single_new_reply(conversation, view, prompt, baseline):
+    """提问已经从树里消失时的兜底：只认"比发送前多出来的**唯一**一条回复"。
+
+    调用方必须先确认文档身份没变、页面不在生成中。多一条、复制回来等于提问本身、
+    或者控件不可用 —— 一律返回 None（宁可不交卷，也不交错的）。
+    """
+    try:
+        fresh = list(view.copies[baseline:])
+    except Exception:                       # noqa: BLE001
+        return None
+    if len(fresh) != 1:
+        return None
+    node = fresh[0]
+    try:
+        if not node.control.IsEnabled:
+            return None
+        answer = conversation.copy(node)
+    except (RuntimeError, COMError):
+        return None
+    if not answer or textcmp.equal(prompt, answer):
+        return None
+    return answer
+
+
+def _ask_impl(conversation, prompt, timeout=180.0, pre_send=None, plain=False,
+              watch=None, ledger=None):
     """Timeout is a single budget. A submitted/unknown turn is never retried.
+
+    `ledger`：T2-1 的提交账本句柄（`_Ledger`）。None = 不记账，行为与改造前一致。
+    本函数有 19 个 return 点，账本收尾不在这里做——由外层 `ask()` 统一包，避免漏点。
 
     `pre_send()`：**写入文本之后、点发送之前**跑的门（CARD-06b 第 3 条）。
     它负责档位只读复核 + 人机验证，并返回 {"stamp": 页面指纹}；
@@ -500,92 +1166,248 @@ def ask(conversation, prompt, timeout=180.0, pre_send=None, plain=False, watch=N
     state = {"ok": False, "submission": "not_sent", "sent": False}
     deadline = time.monotonic() + timeout
     try:
-        before = conversation.read()
-        if before.busy:
-            return {**state, "stage": "conversation_busy"}
-        # 第 6 条：发送前先看对话里是否已有「本提问」且它之后有回复（防重发）。
-        # 中断后重跑、页面其实已答完时，绝不重发，只读已有回复返回 already_answered。
-        existing = _existing_reply(conversation, before, prompt)
-        if existing:
-            # 第 6 条：已提交后提问被回填进输入框时，要清掉并读回为空（失败也如实记，
-            # 不冒充"已清"）。already_answered 命中即命中，清草稿只是顺手收尾。
-            cleared = None
+        # ---- S 段（B13b）：首读 → 已有回复 → 草稿 → 写入 → 读回 → 指纹 → 门禁 → 落账 → 发送
+        # **必须是一整段**，中途放锁就必然失败（不是偶发）：
+        #   ① write 用的是这一帧的控件坐标，被抢前台 → _assert_foreground 抛 ForegroundLost
+        #   ② pre_send 的 page_stamp 含 foreground，True→False 会被自己的门禁判成 concurrent_ui
+        #   ③ _submit 的 4 轮重试里会 read()，必须读到自己那张页面
+        before = written = None
+        sent_prompts = 0
+        baseline = 0
+        anchor_path = None
+        screen = site = None
+        stamp_before_write = None
+
+        def _prepare_and_send():
+            nonlocal before, written, sent_prompts, baseline, anchor_path
+            nonlocal screen, site, stamp_before_write
+            # 并发时"前台"是共享资源：`section` 只保证**同一时刻只有我在动桌面**，
+            # 不保证**我的窗口在前台**（2026-11-08 真机：codex 一抢前台，workbuddy
+            # 点输入框就抛 ForegroundLost，还会被误记成 user_took_over）。
+            # 所以进段先把自己的窗口抢回来；抢不到就干净失败，不伪装成"用户接管"。
+            _screen = getattr(conversation, "screen", None)
+            _focus = getattr(_screen, "focus", None)
+            if _focus is not None and getattr(_screen, "target_hwnd", None):
+                if not _focus():
+                    time.sleep(0.3)
+                    if not _focus():
+                        return {**state, "stage": "focus_lost", "reason": "not_foreground",
+                                "submission": "not_sent", "sent": False,
+                                "hint": "目标窗口拿不到前台，本轮没发送（可能被别的席位占着）"}
+            before = conversation.read()
+            if before.busy:
+                return {**state, "stage": "conversation_busy"}
+            # 第 6 条：发送前先看对话里是否已有「本提问」且它之后有回复（防重发）。
+            # 中断后重跑、页面其实已答完时，绝不重发，只读已有回复返回 already_answered。
+            # R8：必须先证明是同一会话；证明不了就 fail-closed（不认领、不发送、不清草稿）。
+            existing, unproven, prior_state = _existing_reply(conversation, before, prompt)
+            if existing:
+                # 第 6 条：已提交后提问被回填进输入框时，要清掉并读回为空（失败也如实记，
+                # 不冒充"已清"）。already_answered 命中即命中，清草稿只是顺手收尾。
+                cleared = None
+                if not is_empty(before):
+                    cleared = _clear_draft_verified(conversation, before, is_empty)
+                return {**state, "ok": True, "stage": "already_answered", "reply": existing,
+                        "submission": None, "sent": False, "basis": "already_answered",
+                        "cleared_draft": cleared}
+            if unproven:
+                submission = ("accepted" if prior_state in ("accepted", "answered")
+                              else "unknown" if prior_state else "not_sent")
+                return {**state, "stage": "session_unproven", "reason": unproven,
+                        "session": "unproven", "sent": False,
+                        "submission": submission, "prior_submission": prior_state,
+                        "hint": "页面里已有同一条提问和回复，但证明不了是同一会话"
+                                f"（{unproven}）；按 fail-closed 不采信、不发送、不清草稿"}
             if not is_empty(before):
-                cleared = _clear_draft_verified(conversation, before, is_empty)
-            return {**state, "ok": True, "stage": "already_answered", "reply": existing,
-                    "submission": None, "sent": False, "basis": "already_answered",
-                    "cleared_draft": cleared}
-        if not is_empty(before):
-            return {**state, "stage": "draft_present", "hint": "当前输入框已有草稿"}
-        sent_prompts = len(prompt_nodes(before, prompt))
-        baseline = len(before.copies)
-        anchor_path = path_of(before.url)
+                # B19：deepseek 粘贴没落地时会留下"提问的前 3 个字"。下一轮看见它
+                # 就报 draft_present，整轮永远走不动（真机连挂 3 次）。打开
+                # `adopt_self_draft` 的端：值是本提问的前缀 → 认成自己的残草清掉；
+                # 其它任何内容仍然按用户草稿拒发。
+                adopt = bool(getattr(conversation, "adopt_self_draft", False))
+                if adopt and _looks_like_partial_write(prompt, getattr(before, "value", "")):
+                    cleared = _clear_draft_verified(conversation, before, is_empty)
+                    state["adopted_self_draft"] = True
+                    if not cleared:
+                        return {**state, "stage": "draft_present",
+                                "hint": "输入框里是本提问的前缀（自己上一轮的残草），但没清掉",
+                                "cleared_draft": cleared}
+                    before = conversation.read()
+                else:
+                    return {**state, "stage": "draft_present", "hint": "当前输入框已有草稿"}
+            sent_prompts = len(prompt_nodes(before, prompt))
+            baseline = len(before.copies)
+            anchor_path = path_of(before.url)
 
-        # 第 3 条：写入之前记页面指纹，写入之后、发送之前再比一次；
-        # 前台标签/文档被换走就立即停手、清草稿、以 concurrent_ui 退出。
-        # 只在真机（screen 是真 Screen 实例）时做——离线假件的 screen 是 mock/假件，
-        # 不参与并发检测。
-        screen = getattr(conversation, "screen", None)
-        site = getattr(conversation, "site", None)
-        stamp_before_write = (sendgate.page_stamp(screen, site)
-                              if isinstance(screen, Screen) and isinstance(site, str)
-                              else None)
+            # 第 3 条：写入之前记页面指纹，写入之后、发送之前再比一次；
+            # 前台标签/文档被换走就立即停手、清草稿、以 concurrent_ui 退出。
+            # 只在真机（screen 是真 Screen 实例）时做——离线假件的 screen 是 mock/假件，
+            # 不参与并发检测。
+            screen = getattr(conversation, "screen", None)
+            site = getattr(conversation, "site", None)
+            stamp_before_write = (sendgate.page_stamp(screen, site)
+                                  if isinstance(screen, Screen) and isinstance(site, str)
+                                  else None)
 
-        conversation.write(before, prompt)
-        written = conversation.read()
-        if plain and not textcmp.equal(prompt, written.value):
-            # 第 5 条：行首 `#`/`* `/`1. ` 被编辑器当 Markdown 吃掉，打字这条路走不通，
-            # 清空改用粘贴纯文本（只再试一次，不无限重来）
-            retried = _rewrite_plain(conversation, prompt)
-            if retried is not None:
-                written, state["write_via"] = retried, "paste"
-        if not textcmp.equal(prompt, written.value):
-            # 第 5 条：归一只用于比对；hint 要给出第一处差异的行号与前后 20 字
-            return {**state, "stage": "input_mismatch",
-                    "hint": textcmp.describe(prompt, written.value) or
-                            f"写进去的文本和提问对不上（{textcmp.lengths(prompt, written.value)}）"}
-        state.update(submission="unknown", sent=None)
-
-        # 第 3 条：发送阶段复核页面指纹，被换走 → 清掉已写入的半截文本 + concurrent_ui
-        if stamp_before_write is not None:
-            concurrent = sendgate.page_confirm(screen, site, stamp_before_write)
-            if not concurrent["ok"]:
-                cleared = _clear_draft_verified(conversation, written, is_empty)
-                return {**state, "stage": "concurrent_ui", "reason": "page_changed",
-                        "changed": concurrent["changed"], "cleared_draft": cleared,
-                        "submission": "not_sent", "sent": False}
-
-        # 最后一刻门禁：复核（消费回执）+ 记指纹，然后立刻再比一次
-        stamp = None
-        if pre_send is not None:
             try:
-                door = pre_send() or {}
-            except (tier_guard.TierUnconfirmed, human.HumanCheck) as exc:
-                return {**exc.as_result(), "submission": "not_sent", "sent": False}
-            stamp = door.get("stamp")
-            if stamp is not None:
-                verdict = sendgate.page_confirm(conversation.screen, conversation.site, stamp)
-                if not verdict["ok"]:
-                    return {**state, "stage": "tier_unconfirmed",
-                            "reason": "page_changed", "code": tier_guard.TierUnconfirmed.code,
-                            "changed": verdict["changed"], "page": verdict["now"],
-                            "hint": "档位复核之后页面发生了导航/新对话/窗口切换，"
-                                    "按卡面拒发；请重新 choose 再发"}
+                conversation.write(before, prompt)
+            except WriteNotLanded as exc:
+                # B19：把"没写进去"和"写进去了但对不上"分开。旧代码这里没有分支，
+                # 粘贴失败会一路走到 input_mismatch，看日志分不清是粘贴没落地
+                # 还是页面把文字改了。
+                cleared = _clear_draft_verified(conversation, conversation.read(), is_empty)
+                return {**state, "stage": "input_not_landed",
+                        "attempts": getattr(exc, "attempts", None),
+                        "submission": "not_sent", "sent": False,
+                        "cleared_draft": cleared, "hint": str(exc)}
+            written = _read_written(conversation, prompt)
+            if plain and not textcmp.equal(prompt, written.value):
+                # 第 5 条：行首 `#`/`* `/`1. ` 被编辑器当 Markdown 吃掉，打字这条路走不通，
+                # 清空改用粘贴纯文本（只再试一次，不无限重来）
+                retried = _rewrite_plain(conversation, prompt)
+                if retried is not None:
+                    written, state["write_via"] = retried, "paste"
+            if not textcmp.equal(prompt, written.value):
+                # 第 5 条：归一只用于比对；hint 要给出第一处差异的行号与前后 20 字
+                return {**state, "stage": "input_mismatch",
+                        "hint": textcmp.describe(prompt, written.value) or
+                                f"写进去的文本和提问对不上（{textcmp.lengths(prompt, written.value)}）"}
+            state.update(submission="unknown", sent=None)
+
+            # 第 3 条：发送阶段复核页面指纹，被换走 → 清掉已写入的半截文本 + concurrent_ui
+            if stamp_before_write is not None:
+                concurrent = sendgate.page_confirm(screen, site, stamp_before_write)
+                if not concurrent["ok"]:
+                    cleared = _clear_draft_verified(conversation, written, is_empty)
+                    return {**state, "stage": "concurrent_ui", "reason": "page_changed",
+                            "changed": concurrent["changed"], "cleared_draft": cleared,
+                            "submission": "not_sent", "sent": False}
+
+            # 最后一刻门禁：复核（消费回执）+ 记指纹，然后立刻再比一次
+            stamp = None
+            if pre_send is not None:
+                try:
+                    door = pre_send() or {}
+                except (tier_guard.TierUnconfirmed, human.HumanCheck) as exc:
+                    return {**exc.as_result(), "submission": "not_sent", "sent": False}
+                stamp = door.get("stamp")
+                if stamp is not None:
+                    verdict = sendgate.page_confirm(conversation.screen, conversation.site, stamp)
+                    if not verdict["ok"]:
+                        return {**state, "stage": "tier_unconfirmed",
+                                "reason": "page_changed", "code": tier_guard.TierUnconfirmed.code,
+                                "changed": verdict["changed"], "page": verdict["now"],
+                                "hint": "档位复核之后页面发生了导航/新对话/窗口切换，"
+                                        "按卡面拒发；请重新 choose 再发"}
+            # T2-1：提交动作**之前**落账。命中旧记录（accepted/submitting/unknown/
+            # failed_terminal）就在这里拒发，绝不点击。没给 purpose 时 ledger=None，
+            # 这段完全跳过，老调用方行为不变。
+            if ledger is not None:
+                refused = ledger.reserve(written)
+                if refused is not None:
+                    return refused
+            try:
+                conversation.submit(written)
+            except UserTookOver as exc:
+                return {**state, "submission": "not_sent", "sent": False,
+                        "stage": "user_took_over", "hint": str(exc)}
+
         try:
-            conversation.submit(written)
-        except UserTookOver as exc:
-            return {**state, "submission": "not_sent", "sent": False,
-                    "stage": "user_took_over", "hint": str(exc)}
+            with uilock.section(f"send:{getattr(conversation, 'site', None)}",
+                                timeout=uilock.SECTION_TIMEOUT):
+                early = _prepare_and_send()
+        except uilock.Busy as exc:
+            # 并发模式下拿不到桌面锁：一个字都没发出去，按可重试处理
+            return {**state, "stage": "ui_busy", "reason": "send_section",
+                    "submission": "not_sent", "sent": False,
+                    "hint": f"拿不到桌面锁，本轮没发送：{exc}"}
+        if early:
+            return early
+
+        # T2-2：PRE_SUBMIT 探测期（≤5s）+ 提交前受控重试（至多 1 次，总 ≤10s）。
+        #
+        # 判据只有一条：**拿到"没提交成功"的正证据**才允许重试 —— 输入框里还留着
+        # 我们这段文字，且提问节点数量没变。读不到、框已空、或条数变了，一律不重试，
+        # 直接按 POST_SUBMIT 交给下面的主循环（POST_SUBMIT 严禁重发）。
+        # T2-2：PRE_SUBMIT 探测期（≤5s）+ 提交前受控重试（至多 1 次，总 ≤10s）。
+        #
+        # **不额外读一次树**：判定就挂在主循环已有的"输入框还非空"分支上（那里每轮
+        # 本来就有 `view`）。多插读会打乱所有假件测试的读序列，也会让真机上多一轮 UIA。
+        submit_started = time.monotonic()
+        retried = False
+
+        def _maybe_retry(current_view):
+            """PRE_SUBMIT 阶段允许的**受控重试**（至多 1 次，总 ≤10s）。
+
+            正证据只有一条：框里还留着我们这段文字（发送成功会被清空）。
+            窗口外、框已空、或已经重试过，一律不动 —— POST_SUBMIT 严禁重发。
+            """
+            nonlocal retried
+            if retried:
+                return None
+            waited = time.monotonic() - submit_started
+            if not (PRE_SUBMIT_PROBE <= waited <= SUBMIT_RETRY_TOTAL):
+                return None
+            if is_empty(current_view):
+                return None
+            retried = True
+            state["submit_retried"] = True
+            try:
+                with uilock.section(f"retry:{getattr(conversation, 'site', None)}",
+                                    timeout=uilock.SECTION_TIMEOUT):
+                    conversation.submit(current_view)
+            except UserTookOver as exc:
+                return {**state, "submission": "not_sent", "sent": False,
+                        "stage": "user_took_over", "hint": str(exc)}
+            return None
+
         # 第5项：同一个候选连续 settle 秒（两次读取）没变、且期间不忙才复制
         settle = getattr(conversation, "settle", 1.5)
         stable_sig = stable_since = None
+        unsettled_since = None      # R11：文本第一次开始变化/持续变化起点
         last_busy = False
 
         accepted = False
         read_failures = 0
+        # R11：跨轮的判据状态（提交时刻 / 连续回填计数 / 无声起点 / 基线条数）
+        reject_state = reject.new_state()
+        reject_state["submit_at"] = submit_started
+        reject_state["baseline_copies"] = baseline
+        # R5：接受那一刻的页面身份 + "连续读不到提问"的计数
+        accepted_ident = None
+        # R6：接受那一刻的**名字**戳（只用于发现变化，R7 起不作身份证明）
+        accepted_stamp = None
+        # R7：接受那一刻的**会话 id**（与标题无关；没有就是 None）
+        accepted_sid = None
+        misses = 0
+        since_accept = 0
+        identity_misses = 0     # B10：连续读不出会话戳的次数（≠ 换会话）
+        hb_reads = 0            # B11：本轮读了几次（只喂心跳）
+        # B15：有些端（codex）的"停止"键会常驻，busy 恒为真 → settle 永远触发不了。
+        # 服务端按端下发秒数（`stall_busy_ignore`），0 = 关闭（其它端与今天一致）。
+        try:
+            stall_limit = float(os.environ.get("BRIDGE_STALL_BUSY") or 0)
+        except ValueError:
+            stall_limit = 0.0
+        busy_since = None
+        busy_last_sig = None
+        busy_ignored_once = False
+        no_copies_since = None
+        # B17：只复制到提问时用（见下面的 PROMPT_COPY_GRACE）：(当时的复制键条数, 起算时刻)
+        prompt_only = None
+        loop_started = time.monotonic()
         while time.monotonic() < deadline:
             try:
-                view = conversation.read(attempts=2, delay=0.4)
+                # 读也要持锁：后台窗口的 URL 是空串（ui.py 头注释实测），
+                # 未聚焦时读到的 url 不可信；DeepSeek/Grok 更是要截图。
+                # 20s：4 席共用一把锁，单次"切标签+读树+URL 复核"约 0.5–1.5s，
+                # 第 4 席最坏要等 6s；5s 会常态 Busy（虽能自愈，但读率被压到很低）。
+                with uilock.section(f"poll:{getattr(conversation, 'site', None)}",
+                                    timeout=20.0):
+                    view = conversation.read(attempts=2, delay=0.4)
+            except uilock.Busy:
+                # 别人正占着桌面。不判死、不计失败，下一轮再来。
+                time.sleep(0.4)
+                continue
             except (RuntimeError, COMError) as exc:
                 # 已经发出去了，读不到只是页面在换路由/重绘（Gemini 答完才写会话 id）。
                 # 别把"暂时读不到"当成"这一轮失败了"。
@@ -596,37 +1418,225 @@ def ask(conversation, prompt, timeout=180.0, pre_send=None, plain=False, watch=N
                 continue
             read_failures = 0
             last_busy = view.busy
+            # B11：让面板在等回答期间看得见（1.5s 节流，没有 job 环境变量时 no-op）
+            hb_reads += 1
+            # B16：把「为什么一直不交卷」变成可采样的量。以前只有 reads 一个计数，
+            # 300s 超时后只剩 `stage=None`，分不清是没读到回复、还是读到了但签名不稳。
+            heartbeat.beat_view("waiting", view, reads=hb_reads,
+                                accepted=accepted, baseline=baseline,
+                                composer_len=len(view.value or ""))
             if watch is not None:
                 early = watch(view)
                 if early:
                     return {**state, **early}
             prompts = prompt_nodes(view, prompt)
+            ident = _collection_identity(view)
+            stamp = session_stamp(view)
+            sid = session_id_of(view.url)
+            prompt_here = len(prompts) > sent_prompts
+
+            # R11：端点拒绝这一轮的结构判据。**必须放在下面所有分支之前**——
+            # `len(prompts) <= sent_prompts` 那条分支会 `continue` 走掉，放后面就永远轮不到。
+            # 只有拿到了实测结构证据的端才会命中（`reject.PROFILES`），其余端一个字节不变。
+            reject_state["accepted"] = accepted
+            facts = reject.observe(view, prompt, prompt_here=prompt_here)
+            refused = reject.verdict(reject.profile(site), facts, reject_state,
+                                     time.monotonic())
+            if refused:
+                return {**state, **refused}
+
+            # 接受之后身份一变，就是换了文档/换了路由：绝不再从这个页面收集答案。
+            if accepted:
+                if accepted_ident is None:
+                    accepted_ident = ident
+                since_accept += 1
+                if _identity_broken(accepted_ident, ident):
+                    nodes_now = list(view.root.walk())
+                    # 唯一例外：刚接受、页面上有我们这条提问、且**还没有任何回复**
+                    # （新会话首轮换路由）。这时以新身份重新锚定一次。
+                    if (since_accept <= ACCEPT_NAV_GRACE_READS and misses == 0
+                            and prompts
+                            and not _has_reply_after(nodes_now, prompts, view.copies)):
+                        accepted_ident = ident
+                        anchor_path = path_of(view.url)
+                        baseline = len(view.copies)
+                        time.sleep(0.4)
+                        continue
+                    # B17：chatgpt 新界面把「还没落库的新对话」放在
+                    # `/c/local-chatgpt:<uuid>`，第一条消息一提交就换成 `/c/<uuid>`
+                    # （实测 2026-11-09：发送成功、回复也读得到，却在这里被判成
+                    # conversation_changed）。这**不是**换会话，是同一段对话在落库，
+                    # 所以允许重新锚定一次——但只认"我们的提问还在页面上"，且只认
+                    # 这条临时 id → 真实 id 的窄路径，别的路径变化照旧拒。
+                    if prompts and _local_chat_persisted(accepted_ident, ident):
+                        accepted_ident = ident
+                        anchor_path = path_of(view.url)
+                        baseline = len(view.copies)
+                        time.sleep(0.4)
+                        continue
+                    return {**state, "stage": "conversation_changed",
+                            "reason": "document_changed",
+                            "identity": {"before": accepted_ident, "now": ident}}
+
+                # R6：文档和 URL 都没变时，名字戳只能用来**发现**"换没换会话"并拒绝；
+                # R7：它仍然不是身份证明（标题可变可重复），所以这里只产生拒绝，
+                # 从不产生"可以交卷"。提问还在树上时允许一次占位名自动命名。
+                if prompt_here:
+                    if sid:
+                        accepted_sid = sid
+                    if stamp["proven"]:
+                        if accepted_stamp is None:
+                            accepted_stamp = stamp
+                        elif not _session_same(accepted_stamp, stamp):
+                            if _session_provisional(accepted_stamp) \
+                                    and not _session_provisional(stamp):
+                                accepted_stamp = stamp
+                            else:
+                                return {**state, "stage": "conversation_changed",
+                                        "reason": "session_changed",
+                                        "session": "changed",
+                                        "session_identity": {"before": accepted_stamp,
+                                                             "now": stamp}}
+                elif accepted_stamp is not None:
+                    if stamp["proven"]:
+                        identity_misses = 0
+                        if not _session_same(accepted_stamp, stamp):
+                            # 提问已经读不到，名字又**确实**变了：换过会话，停手。
+                            return {**state, "stage": "conversation_changed",
+                                    "reason": "session_changed", "session": "changed",
+                                    "session_identity": {"before": accepted_stamp,
+                                                         "now": stamp}}
+                    else:
+                        # 传感器读不出（标签带被正文污染等），**不是**事实变化。
+                        # 继续等；连续读不出足够多次才承认"身份不可信"，
+                        # 而且用另一个 reason 记账，别和"真的换会话"混在一起。
+                        identity_misses += 1
+                        if identity_misses >= IDENTITY_UNREADABLE_READS:
+                            return {**state, "stage": "conversation_changed",
+                                    "reason": "identity_unreadable",
+                                    "session": "unreadable",
+                                    "session_identity": {"before": accepted_stamp,
+                                                         "now": stamp},
+                                    "hint": ("连续 %d 次读不出会话标题/标签带（不是换了会话）："
+                                             "页面结构可能变了，先人工看一眼"
+                                             % identity_misses)}
+
             if len(prompts) <= sent_prompts:
                 if accepted:
-                    return {**state, "stage": "conversation_changed"}
+                    misses += 1
+                    # 还在生成（停止键可点）时，绝不因为"读不到提问"就交卷：
+                    # 实测 opencode 长任务中途会把提问气泡整个从树里丢掉。
+                    if not view.busy and misses >= MISSING_STABLE_READS:
+                        # 提问没了但身份没变、也不在生成：只认"比发送前多出来的
+                        # 唯一一条回复"（多一条或读回提问本身都不认）。
+                        fallback = None
+                        # 两份身份都要读得到（接受时一份、现在一份），才允许用"新回复"兜底；
+                        # 任何一份读不出来都可能是换到了看不见的文档上。
+                        stable_doc = bool((accepted_ident or {}).get("rid")
+                                          and (ident or {}).get("rid"))
+                        # R7：**会话身份只认与标题无关的 id**。标题一致不算证明
+                        # （同名/改名都能骗过它）；没有 id 就永远不交卷。
+                        stable_session = bool(accepted_sid) and accepted_sid == sid
+                        if stable_doc and stable_session:
+                            fallback = _single_new_reply(conversation, view, prompt, baseline)
+                        if fallback is not None:
+                            return {**state, "ok": True, "stage": "answered",
+                                    "reply": fallback,
+                                    "basis": "new_reply_after_baseline",
+                                    "attribution": "new_reply",
+                                    "identity": "stable",
+                                    "session": "proven",
+                                    "session_id": accepted_sid,
+                                    "session_title": (accepted_stamp or {}).get("title")}
+                        return {**state, "stage": "conversation_changed",
+                                "reason": "prompt_gone", "misses": misses,
+                                "session": ("proven" if stable_session else "unproven"),
+                                "session_id": sid,
+                                "session_title": (accepted_stamp or {}).get("title"),
+                                "identity": ("stable" if (ident or {}).get("rid")
+                                             else "unreadable"),
+                                "hint": (None if stable_session else
+                                         "没有与标题无关的会话 id（或它变了），"
+                                         "无法证明是同一会话；不使用'新回复'兜底")}
+                    time.sleep(0.4)
+                    continue
+                # 还没接受、提问条数也没变：这就是"点了但没落下去"的主现场。
+                early = _maybe_retry(view)
+                if early:
+                    return early
                 time.sleep(0.4)
                 continue
+            misses = 0
             if not accepted:
                 if not is_empty(view):
+                    early = _maybe_retry(view)
+                    if early:
+                        return early
                     time.sleep(0.4)
                     continue
                 accepted = True
                 state.update(submission="accepted", sent=True)
+                accepted_ident = ident
+                # 接受这一帧提问就在树上：这一页确实有我们这条消息。
+                # 名字戳只作变化探测；会话 id（与标题无关）才是身份。
+                accepted_stamp = stamp if stamp.get("proven") else None
+                accepted_sid = sid
+                since_accept = 0
             if path_of(view.url) != anchor_path:
                 # 地址变了（首轮新建会话）：以这一刻为基线，已有回复不算本轮
                 anchor_path = path_of(view.url)
                 baseline = len(view.copies)
                 time.sleep(0.4)
                 continue
+            # B15：busy 停滞判据。只有"签名长时间不变 + 已经有复制候选 +
+            # 从起跑算已过 max(60, 2*stall)"三条同时成立，才把 busy 当成误报。
+            # 文本长度参与签名？这里没有正文，所以用 (copies, 输入框长度)；
+            # 真正防"半句话"的是下面 settle 签名里的 reply_text_len，它一直在变。
+            busy_now = bool(view.busy)
+            busy_ignored = False
+            if busy_now and stall_limit > 0:
+                sig_now = (len(view.copies), len(view.value or ""))
+                now_b = time.monotonic()
+                if sig_now != busy_last_sig:
+                    busy_last_sig, busy_since = sig_now, now_b
+                if (busy_since is not None
+                        and now_b - busy_since >= stall_limit
+                        and now_b - loop_started >= max(60.0, 2 * stall_limit)
+                        and len(view.copies) > baseline):
+                    busy_ignored = True
+                    busy_ignored_once = True
+                    state.setdefault("warnings", [])
+                    if "busy_ignored" not in state["warnings"]:
+                        state["warnings"].append("busy_ignored")
             # 有图片兜底的端（Grok）动作条不进控件树，copies 永远是空，不能拿条数当门
-            if view.busy or (len(view.copies) <= baseline and not getattr(conversation, "images", None)):
+            positional = False
+            short_circuit = (busy_now and not busy_ignored) or (
+                    len(view.copies) <= baseline and not getattr(conversation, "images", None))
+            if short_circuit:
                 stable_sig = None
-                time.sleep(0.4)
-                continue
+                now_gate = time.monotonic()
+                if no_copies_since is None:
+                    no_copies_since = now_gate
+                # B16：长会话里 `baseline` 会被重锚到「已经含新回复」的 copies 数，
+                # 于是 `copies <= baseline` 永远成立 —— R4 实测 codex 卡了 300s，
+                # `copies=9 baseline=9` 一动不动，而窗口里回复明明已经在了。
+                # 卡够 45s 且不在生成中，就改用「树里位置在提问之后」判候选，
+                # 不再把 copies 的条数差当唯一门槛。快路径（几十秒就出答案）不变。
+                positional = positional_ready(busy=busy_now, accepted=accepted,
+                                              since=no_copies_since, now=now_gate)
+                heartbeat.beat("gate", reads=hb_reads, busy=busy_now,
+                               copies=len(view.copies), baseline=baseline,
+                               positional=positional,
+                               why=("busy" if busy_now and not busy_ignored else "no_copies"))
+                if not positional:
+                    time.sleep(0.4)
+                    continue
+            else:
+                no_copies_since = None
             ordered = list(view.root.walk())
             prompt_at = {i for i, n in enumerate(ordered) if n in prompts}
             candidates = []
-            for node in reversed(view.copies[baseline:]):
+            for node in reversed(view.copies if positional else view.copies[baseline:]):
                 try:
                     if not node.control.IsEnabled:
                         continue
@@ -636,6 +1646,34 @@ def ask(conversation, prompt, timeout=180.0, pre_send=None, plain=False, watch=N
                 if any(at > i for i in prompt_at):
                     candidates.append(node)
             if not candidates:
+                # B17：dsh 专属、用户授权的只读 UIA 文本兜底。只在「已放开
+                # copies 条数门槛」(positional) 之后生效，避免拿到半句话。
+                helper = globals().get("uia_text_candidates")
+                if (getattr(conversation, "site", None) in UIA_TEXT_SITES
+                        and positional and callable(helper)):
+                    nodes = helper(view, prompts, getattr(view, "editor", None), prompt)
+                    if nodes:
+                        sig, now = ("uia_text", len(view.copies), len(nodes),
+                                    uia_text_len(nodes)), time.monotonic()
+                        heartbeat.beat("uia_text", reads=hb_reads, nodes=len(nodes),
+                                       text_len=sig[3], busy=bool(view.busy))
+                        if sig != stable_sig:
+                            stable_sig, stable_since = sig, now
+                        if now - stable_since >= settle:
+                            text = ui.canonical(ui.text_of(nodes[-1]))
+                            screen = getattr(conversation, "screen", None)
+                            shot, warns = None, list(state.get("warnings") or [])
+                            if screen is not None:
+                                try:
+                                    shot = str(screen.snapshot("dsh_uia_text"))
+                                except Exception:      # noqa: BLE001
+                                    warns.append("uia_screenshot_failed")
+                            return {**state, "ok": True, "stage": "answered",
+                                    "reply": text, "basis": "uia_text_after_prompt",
+                                    "source": "uia_text", "screenshot": shot,
+                                    "warnings": warns}
+                        time.sleep(0.4)
+                        continue
                 screen = getattr(conversation, "screen", None)
                 images = getattr(conversation, "images", None)
                 match = image_reply(screen, images, prompts) if screen else None
@@ -652,28 +1690,247 @@ def ask(conversation, prompt, timeout=180.0, pre_send=None, plain=False, watch=N
                                 "basis": "new_user_message_and_screen_copy"}
                 time.sleep(0.4)
                 continue
-            sig, now = ("copies", len(view.copies), len(candidates)), time.monotonic()
+            # R11：签名里加**文本长度**。只数控件个数时，流式输出期间
+            # `copies == 1 && candidates == 1` 从头到尾不变，1.5 秒就被判"稳定"
+            # 并复制走半句话。加上长度之后，只有正文真的不再增长才会稳定。
+            sig, now = ("copies", len(view.copies), len(candidates),
+                        reply_text_len(view, candidates)), time.monotonic()
+            heartbeat.beat("settle", reads=hb_reads, text_len=sig[3], sig=str(sig),
+                           copies=len(view.copies), baseline=baseline,
+                           busy=bool(view.busy), candidates=len(candidates))
             if sig != stable_sig:
                 stable_sig, stable_since = sig, now
-            if now - stable_since < settle:
+                if unsettled_since is None:
+                    unsettled_since = now
+            if (now - stable_since < settle
+                    and now - unsettled_since < SETTLE_MAX):
                 time.sleep(0.4)
                 continue
+            if now - stable_since < settle:
+                # 有回复候选、但文本一直在变：判定为 UI 噪声，按当前内容交卷并标记。
+                state["settle_basis"] = "capped"
+                state["warnings"] = ["text_never_settled"]
+            else:
+                state["settle_basis"] = "text_stable"
+            unsettled_since = None
             # 从最新的那条往回试：复制到"我们自己的提问"就换下一个（提问气泡上也有复制键）
             copied_prompt = False
+            copy_error = None
+            # B17：这一批复制键刚刚已经试过、只复制到提问——说明回答的动作条还没
+            # 出来（dsh 实测：边生成边判，第一版能复制的只有提问，于是直接判死）。
+            # 条数没变就别再点一遍，等它变（或等过 grace）再来。
+            if (prompt_only is not None and prompt_only[0] == len(view.copies)
+                    and time.monotonic() - prompt_only[1] < PROMPT_COPY_GRACE
+                    and time.monotonic() < deadline):
+                time.sleep(PROMPT_COPY_POLL)
+                continue
             for node in candidates:
-                answer = conversation.copy(node)
+                try:
+                    answer = conversation.copy(node)
+                except RuntimeError as exc:
+                    # 点空了（动作条刚出现、坐标还在动画里）：不当成终局，
+                    # 和「只复制到提问」一起走下面的有界等待。
+                    copy_error = exc
+                    continue
                 if textcmp.equal(prompt, answer):
                     copied_prompt = True
                     continue
-                return {**state, "ok": True, "stage": "answered", "reply": answer,
-                        "basis": "new_user_message_and_reply_control"}
-            if copied_prompt:
+                out = {**state, "ok": True, "stage": "answered", "reply": answer,
+                       "basis": "new_user_message_and_reply_control"}
+                # 诊断（不改 ok / stage）：交卷时输入框里还是我们这段文字，
+                # 说明端可能是在中途收手的。opencode 正常每轮结束也会回填，
+                # 所以这里**只标记、不否决**。
+                if facts.echo:
+                    out["warnings"] = ["composer_echo_after_answer"]
+                return out
+            if copied_prompt or copy_error is not None:
+                # 还没到点就再给一次机会：只要还在生成、或者刚试过的这一批
+                # 复制键还没变，就继续等（有界）——宁可多等，也不把"动作条还没
+                # 渲染出来 / 刚渲染出来点空了"当成终局。
+                if prompt_only is None or prompt_only[0] != len(view.copies):
+                    prompt_only = (len(view.copies), time.monotonic())
+                    time.sleep(PROMPT_COPY_POLL)
+                    continue
+                if (view.busy or time.monotonic() - prompt_only[1] < PROMPT_COPY_GRACE) \
+                        and time.monotonic() < deadline:
+                    time.sleep(PROMPT_COPY_POLL)
+                    continue
+                if copy_error is not None:
+                    raise copy_error
                 return {**state, "stage": "copied_prompt",
                         "hint": "复制到的是提问本身，不是回答"}   # 宁可失败也不冒充回答
         # 第6项：stage 仍是 timeout（兼容旧调用方），另给 timeout_kind 区分
-        kind = "still_generating" if state["sent"] and (last_busy or stable_sig is not None) else "no_reply"
+        if busy_ignored_once:
+            kind = "stalled_busy"          # busy 误报已忽略，但到点仍未交出可读回复
+        else:
+            kind = ("still_generating"
+                    if state["sent"] and (last_busy or stable_sig is not None) else "no_reply")
         return {**state, "stage": "timeout", "timeout_kind": kind}
+    except SendUnavailable as exc:
+        # 一个字都没发出去。放在 `RuntimeError` 之前接：它是 RuntimeError 子类，
+        # 落到下面那行会被压成 `interrupted`，"端不接受输入"就丢了。
+        return {**state, "stage": "send_unavailable", "submission": "not_sent",
+                "sent": False, "present": getattr(exc, "present", 0),
+                "hint": str(exc)}
     except ForegroundLost as exc:
         return {**state, "stage": "user_took_over", "hint": str(exc)}
+    except TabUnbound as exc:
+        # 认不出"哪个标签是我的"：**不猜**，如实报（它是 RuntimeError 子类，必须抢在前面）
+        return {**state, "stage": getattr(exc, "stage", "tab_unbound"),
+                "submission": "not_sent", "sent": False,
+                "hint": str(exc), **(getattr(exc, "facts", None) or {})}
     except (RuntimeError, COMError) as exc:
         return {**state, "stage": "interrupted", "hint": str(exc)}
+
+
+# ---------------------------------------------------------------- 提交账本（T2-1）
+#: "没发出去、且有可信证据" —— 放行重试。
+_RETRYABLE_STAGES = frozenset({
+    "input_mismatch", "draft_present", "concurrent_ui", "user_took_over",
+    "tier_unconfirmed", "session_unproven", "conversation_busy",
+    # R11：发送键存在但全部不可用 —— 一个字都没发出去，允许重试。
+    "send_unavailable",
+})
+
+#: "重试没有意义" —— 一旦命中就永久拦住同一 (endpoint, prompt)。
+#:
+#: 2026-11-07（R11）：原来的 `{"login_required","quota","limit","unavailable"}` 是**死值**：
+#: 全仓没有任何发射点（`_backup_batch2/3/7` 三份快照逐字相同可证）。
+#: 按原因命名却拿不到原因，等于对读代码的人撒谎，也让"注册即生效"的假象
+#: 盖住了真正的缺口。现在只收**结构事实**能证明的那一条。
+#:
+#: 任何按原因命名的 stage 想回来，必须先同时满足三条：
+#:   ① 该端有实测结构证据  ② 有真实发射点
+#:   ③ 通过 tests/test_r11_reject_signals.py 的防死值测试
+#: 否则不许加 —— 这条规矩是被上面那四个值教出来的。
+_TERMINAL_STAGES = frozenset({
+    "submit_refused",
+})
+
+
+class _Ledger:
+    """把 `ask()` 的一次调用接到提交账本上。
+
+    **只在 `purpose` 给定时启用。** 现有调用方（尤其 1023 条既有测试）绝大多数
+    不带 purpose，行为必须一个字节不变。
+
+    挂在这里而不是挂五个 `*_use.py`，是因为 chatgpt / deepseek / codex / dsh /
+    opencode **五个端全部汇聚到 `conversation.ask`**（前两个经 `flow.ask`）。
+    改一处覆盖五端，以后新端复用 `ask` 也自动被覆盖。
+    """
+
+    def __init__(self, conversation, prompt, purpose):
+        import os
+        from . import submissions          # 局部导入：避免模块级循环依赖
+
+        self._sub = submissions
+        self.prompt = prompt
+        self.purpose = purpose
+        site = getattr(conversation, "site", None)
+        self.site = site.strip() if isinstance(site, str) and site.strip() else None
+        self.enabled = bool(purpose) and self.site is not None
+        self.root = None
+        self.scope = None
+        self.job_id = (os.environ.get("BRIDGE_JOB_ID") or "").strip() or None
+        self.request_id = (os.environ.get("BRIDGE_REQUEST_ID") or "").strip() or None
+
+    # ------------------------------------------------------------ 提交前
+    def reserve(self, written):
+        """落账。返回 None = 放行；返回 dict = 就地拒发（原样交回调用方）。"""
+        sub = self._sub
+        try:
+            prior = sub.pending(self.site, self.prompt, root=self.root)
+        except Exception:                   # noqa: BLE001 - 账本读不出来按"状态不明"
+            prior = {"state": "unknown"}
+        if prior:
+            out = sub.refusal(prior)
+            out["prior_submission"] = (sub.normalize(prior) or {}).get("v2_state")
+            return out
+        # 身份：拿刚写完的那份视图（与 gemini/grok 的写法一致）
+        try:
+            self.scope = sub.scope_from_view(written, site=self.site)
+        except Exception:                   # noqa: BLE001 - 读不到就留空，恢复时 fail-closed
+            self.scope = None
+        try:
+            sub.reserve(self.site, self.prompt, root=self.root, scope=self.scope,
+                        job_id=self.job_id, request_id=self.request_id)
+        except sub.TierUnconfirmed as exc:
+            return {"ok": False, "stage": "interrupted", "sent": None,
+                    "submission": "unknown", "reason": exc.reason,
+                    "hint": str(exc)}
+        except OSError:
+            return {"ok": False, "stage": "interrupted", "sent": None,
+                    "submission": "unknown",
+                    "reason": "submission_state_unwritable",
+                    "hint": "无法持久化提交状态，已拒发"}
+        return None
+
+    # ------------------------------------------------------------ 收尾
+    def finish(self, result):
+        sub = self._sub
+        stage = result.get("stage")
+        try:
+            if stage == "already_answered":
+                self._mark_existing_l3(result)
+                return
+            if stage in _TERMINAL_STAGES:
+                sub.fail(self.site, self.prompt, state=sub.STATE_FAILED_TERMINAL,
+                         subtype=stage, root=self.root,
+                         evidence={"stage": stage, "hint": result.get("hint")})
+                return
+            payload = dict(result)
+            if stage in _RETRYABLE_STAGES and payload.get("sent") is not True:
+                payload.setdefault("submission", "not_sent")
+                payload["sent"] = False
+            sub.finish(self.site, self.prompt, payload, root=self.root,
+                       scope=self.scope)
+        except Exception:                   # noqa: BLE001
+            # 账本写失败**绝不影响收发结果**：用户已经把消息发出去了，
+            # 不能因为记不上账就让整次调用失败。
+            pass
+
+    def _mark_existing_l3(self, result):
+        """already_answered：**没有记录就不建记录**（那等于补造一次外部提交）。"""
+        sub = self._sub
+        if not sub.read_state(self.site, self.prompt, root=self.root):
+            return
+        sub.mark_level(self.site, self.prompt, "L3",
+                       {"basis": "already_answered",
+                        "chars": len(result.get("reply") or "")},
+                       root=self.root)
+
+    def fail_on_exception(self):
+        """调用过程中抛了没被接住的异常：状态不明，按 unknown 记（不重发）。"""
+        try:
+            self._sub.finish(self.site, self.prompt,
+                             {"stage": "interrupted"}, root=self.root)
+        except Exception:                   # noqa: BLE001
+            pass
+
+
+def ask(conversation, prompt, timeout=180.0, pre_send=None, plain=False,
+        watch=None, purpose=None):
+    """`_ask_impl` 的账本包装层。
+
+    `purpose` 给了才记账（T2-1）；不给就等于原来的 `ask`，一个字节都不变。
+
+    为什么用包装而不是在 19 个 return 点上各插一句：漏一个就是"发出去了但没记账"，
+    而这种漏洞在测试里很难被抓到——统一收口才可靠。
+    """
+    ledger = _Ledger(conversation, prompt, purpose)
+    if not ledger.enabled:
+        try:
+            return _ask_impl(conversation, prompt, timeout, pre_send, plain, watch)
+        finally:
+            # B11：命令行直跑时也要给最后那一帧留个终态（服务端会读走再删）
+            heartbeat.beat("finished", force=True)
+    try:
+        result = _ask_impl(conversation, prompt, timeout, pre_send, plain, watch,
+                           ledger=ledger)
+    except BaseException:
+        ledger.fail_on_exception()
+        heartbeat.beat("finished", force=True, outcome="interrupted")
+        raise
+    ledger.finish(result)
+    heartbeat.beat("finished", force=True, outcome=result.get("stage"))
+    return result

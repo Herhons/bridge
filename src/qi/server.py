@@ -41,14 +41,16 @@ choose 没确认就**不跑 use**，该端记失败；锁拿不到也记失败�
 
 `GET /workflow?file=` / `POST /workflow` 只认 `progress.json`、`progress-test.json`
 两个 basename（防路径穿越）；迁移表从 `docs\\workflow\\workflow.json` 读，
-非法迁移 409；写盘用同目录临时文件 + `os.replace`，并在进程内串行 + 写后复核重试，
+非法迁移 409；写盘用同目录临时文件 + `os.replace`，并与notify_done/工作流CLI共用完整读改写文件锁，
 和 `notify_done.py` 抢着写时不会留下半个 JSON。
 """
 from __future__ import annotations
 
 import argparse
+import contextlib
 import copy
 import hmac
+import inspect
 import json
 import os
 import queue
@@ -58,12 +60,13 @@ import subprocess
 import sys
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlsplit
 
-from . import tier_guard, uilock
+from . import heartbeat, progress, tier_guard, uilock
 
 ROOT = Path(__file__).resolve().parents[2]
 HOST = "127.0.0.1"
@@ -87,12 +90,42 @@ DEFAULT_CONFIG = {
     "queue_limit": 20,
     "memory_jobs": 50,
     "choose_timeout": 120.0,
-    "use_timeout": 180.0,
+    # T2-2（施工单 2026-11-07）：POST_SUBMIT 上限 120s。
+    # 只对 test / accept_lite 生效；review / accept 由 tier_guard.floor_timeout()
+    # 抬到 REVIEW_TIMEOUT=900（高档会审本来就慢），属已批准的偏差，见 CALIBER §2。
+    "use_timeout": 120.0,
     "endpoint_timeout": 420.0,
     "ui_lock_timeout": 600.0,
+    # B12：并发会审。默认 1 / 1 = 与今天完全一致（既有 job 测试一条都不动）。
+    # 真正开 4 席是在 docs/bridge_server.json 里配，不在这里改默认值。
+    "endpoint_concurrency": 1,
+    "endpoint_stagger": 0.0,   # 秒；>0 时各席错峰起跑（见 _run_job 注释）
+    "min_success": 1,
+    # 这些端要读屏幕像素（deepseek 的模板、grok 的动作条），被抢前台就读错。
+    # 它们在"串行相"里一个接一个跑，不与其他端时间重叠。
+    "exclusive_endpoints": [],
+    # B15：一个 job 最多几席。默认 8 = 今天的行为上限；shipped 配 4，
+    # 因为"4 网页会审"与"4 桌面任务"是两种口径（回收线语义不同），应分两轮。
+    "max_endpoints_per_job": 8,
+    # B15：网页端开窗形态。代码默认 per_site（= 今天的行为），
+    # shipped 配 tabs（一个 Chrome 窗 + 每端一个标签，读之前切过去）。
+    "web_window_mode": "per_site",
+    # B15：这些端在派发前**在锁外**先拉起（现在只有 dsh 需要，它自己 Popen 会占着锁等 40s）。
+    "prelaunch_endpoints": [],
+    # B15：按端预算覆盖，**只许抬高**。{"codex": {"use": 300}, "grok:test": {"use": 180}}
+    "budget_overrides": {},
+    # B15：`busy` 停滞判据（秒）。{} = 关闭；{"codex": 45} = codex 的停止键常驻 45s 不动就按不忙处理。
+    "stall_busy_ignore": {},
+    # B15：按端追加给 `<端>_choose.py` 的参数。{"chatgpt": ["--new"]} 表示每次先开新会话
+    # —— chatgpt 的"聊天/工作"开关只有在新聊天页才读得到（真机 2026-11-08）。
+    "choose_args": {},
     "output_limit": 65536,
     "prompt_limit": 20000,
     "allowed_extension_id": "",     # 空 = 没配，Origin 退回前缀匹配（CARD-09b 兼容 09a）
+    # F5 场景③（"找不到输入框"）需要的可控故障注入。
+    # **默认 false**，且必须同时存在 runs/test-faults.json 才生效；
+    # 生产配置下这两条永远不同时满足，所以不可能误触发。
+    "allow_test_faults": False,
 }
 
 
@@ -191,6 +224,102 @@ def _decode(data) -> str:
 
 
 # ---------------------------------------------------------------- 配置
+BUDGET_KINDS = ("use", "choose", "endpoint")
+#: 覆盖只许抬高，且不允许把某一席抬成"永远不超时"。
+BUDGET_CEILING = 3600.0
+
+
+def normalize_name_list(value) -> list[str]:
+    """端名列表：只收字符串、去重、小写。字符串会被拆成字符，所以显式拒绝。"""
+    if not isinstance(value, list):
+        return []
+    out: list[str] = []
+    for item in value:
+        name = str(item or "").strip().lower()
+        if name and name not in out:
+            out.append(name)
+    return out
+
+
+def normalize_budgets(value, *, endpoints=None, purposes=None) -> dict:
+    """把 budget_overrides 归一成 {键: {use/choose/endpoint: 正数}}。
+
+    坏值一律**忽略**（打印一行提示），绝不抛错 —— 配置写错不该让后端起不来。
+    键允许三种：`*`、端名、`端名:用途`。
+    """
+    if not isinstance(value, dict):
+        return {}
+    known_endpoints = set(endpoints or ())
+    known_purposes = set(purposes or ())
+    out: dict[str, dict] = {}
+    for raw_key, block in value.items():
+        key = str(raw_key or "").strip().lower()
+        if not key:
+            continue
+        if key != "*":
+            name, _, purpose = key.partition(":")
+            if known_endpoints and name not in known_endpoints:
+                print(f"[config] budget_overrides 忽略未知端: {raw_key}", file=sys.stderr)
+                continue
+            if purpose and known_purposes and purpose not in known_purposes:
+                print(f"[config] budget_overrides 忽略未知用途: {raw_key}", file=sys.stderr)
+                continue
+        if not isinstance(block, dict):
+            print(f"[config] budget_overrides[{raw_key}] 不是对象，已忽略", file=sys.stderr)
+            continue
+        clean: dict[str, float] = {}
+        for kind, amount in block.items():
+            name = str(kind or "").strip().lower()
+            if name not in BUDGET_KINDS:
+                continue
+            try:
+                number = float(amount)
+            except (TypeError, ValueError):
+                continue
+            if not (number > 0) or number != number or number in (float("inf"),):
+                continue
+            clean[name] = min(number, BUDGET_CEILING)
+        if clean:
+            out[key] = clean
+    return out
+
+
+def normalize_number_map(value) -> dict[str, float]:
+    """`{端名: 正数}`（stall_busy_ignore 用）。坏值忽略。"""
+    if not isinstance(value, dict):
+        return {}
+    out: dict[str, float] = {}
+    for raw_key, amount in value.items():
+        name = str(raw_key or "").strip().lower()
+        if not name:
+            continue
+        try:
+            number = float(amount)
+        except (TypeError, ValueError):
+            continue
+        if number > 0:
+            out[name] = number
+    return out
+
+
+def apply_budgets(config: dict, endpoint: str, purpose: str, kind: str, base: float) -> float:
+    """按 `*` → 端 → 端:用途 三层叠加，**只许抬高**，最后夹到 ceiling。
+
+    这条"只许抬高"是刻意的：`use_timeout=120` 与 review 的 1500 下限都被测试钉着，
+    覆盖只能加时间，不能把它们压低。
+    """
+    effective = float(base)
+    overrides = config.get("budget_overrides") or {}
+    for key in ("*", str(endpoint).lower(), f"{str(endpoint).lower()}:{str(purpose).lower()}"):
+        block = overrides.get(key)
+        if isinstance(block, dict) and kind in block:
+            try:
+                effective = max(effective, float(block[kind]))
+            except (TypeError, ValueError):
+                continue
+    return min(effective, BUDGET_CEILING)
+
+
 def load_config(root: str | Path | None = None) -> dict:
     """读 docs\\bridge_server.json；坏文件按默认值走，不把服务拖死。"""
     base = Path(root) if root is not None else ROOT
@@ -208,6 +337,33 @@ def load_config(root: str | Path | None = None) -> dict:
         config["queue_limit"] = DEFAULT_CONFIG["queue_limit"]
     if int(config["memory_jobs"]) < 1:
         config["memory_jobs"] = DEFAULT_CONFIG["memory_jobs"]
+
+    # B15 的新键单独归一：`type(default)(value)` 对嵌套结构会把脏数据静默收进来。
+    config["exclusive_endpoints"] = normalize_name_list(config.get("exclusive_endpoints"))
+    config["prelaunch_endpoints"] = normalize_name_list(config.get("prelaunch_endpoints"))
+    config["stall_busy_ignore"] = normalize_number_map(data.get("stall_busy_ignore"))
+    try:
+        known = list((tier_guard.load_tiers(base / "docs" / "tiers.json")
+                      .get("endpoints") or {}).keys())
+    except Exception:                       # noqa: BLE001 - 表坏了不该拖死配置
+        known = []
+    config["budget_overrides"] = normalize_budgets(
+        data.get("budget_overrides"), endpoints=known, purposes=PURPOSES)
+    raw_args = data.get("choose_args")
+    args_map: dict[str, list[str]] = {}
+    if isinstance(raw_args, dict):
+        for name, extra in raw_args.items():
+            key = str(name or "").strip().lower()
+            if key and isinstance(extra, list):
+                args_map[key] = [str(item) for item in extra if str(item).strip()]
+    config["choose_args"] = args_map
+    if str(config.get("web_window_mode") or "") not in ("tabs", "per_site"):
+        config["web_window_mode"] = DEFAULT_CONFIG["web_window_mode"]
+    try:
+        cap = int(config.get("max_endpoints_per_job") or 8)
+    except (TypeError, ValueError):
+        cap = int(DEFAULT_CONFIG["max_endpoints_per_job"])
+    config["max_endpoints_per_job"] = max(1, cap)
     return config
 
 
@@ -283,14 +439,18 @@ def harden_state_acl(path: str | Path) -> bool:
     try:
         proc = subprocess.run(
             ["icacls", str(target), "/inheritance:r", "/grant:r", f"{user}:F"],
-            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             timeout=15, check=False)
     except (OSError, subprocess.SubprocessError) as exc:
         sys.stderr.write("[bridge] warn: icacls unavailable (%s); ACL unchanged\n"
                          % type(exc).__name__)
         return False
+    # 中文 Windows 上 icacls 输出是 GBK：不能按 UTF-8 硬解，否则读线程直接抛
+    # UnicodeDecodeError（实测会把启动线程卡住 15 秒并打印 traceback）。
+    output = (proc.stdout or b"").decode("mbcs", "replace") if isinstance(proc.stdout, bytes) \
+        else (proc.stdout or "")
     if proc.returncode != 0:
-        detail = (proc.stdout or "").strip().splitlines()
+        detail = output.strip().splitlines()
         tail = f" ({detail[-1].strip()})" if detail else ""
         sys.stderr.write("[bridge] warn: icacls exit=%s; ACL unchanged%s\n"
                          % (proc.returncode, tail))
@@ -400,37 +560,80 @@ def terminate_tree(target) -> None:
         pass
 
 
-def run_process(cmd: list[str], *, timeout: float, cwd=None, env=None) -> dict:
-    """跑一个固定脚本，参数数组、shell=False；超时就杀整棵树。"""
+def _accepts_tick(runner) -> bool:
+    """runner 认不认识 `tick` 这个 kwarg。
+
+    测试里的假 runner 只声明 `(cmd, *, timeout, cwd, env)`；硬塞 `tick` 会 TypeError。
+    不吞异常、不改签名，先问清楚再传。
+    """
+    try:
+        params = inspect.signature(runner).parameters
+    except (TypeError, ValueError):
+        return False
+    return "tick" in params or any(
+        item.kind is inspect.Parameter.VAR_KEYWORD for item in params.values())
+
+
+def run_process(cmd: list[str], *, timeout: float, cwd=None, env=None,
+                tick=None, tick_interval: float = 1.5) -> dict:
+    """跑一个固定脚本，参数数组、shell=False；超时就杀整棵树。
+
+    `tick` 给了就在等子进程期间每隔 `tick_interval` 调一次（心跳用）。
+    **不动 communicate**：另起一个看护线程，进程结束后置 Event 让它自己退。
+    """
     creationflags = 0
     if os.name == "nt":
         creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0) | \
             getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-    started = time.monotonic()
-    try:
-        proc = subprocess.Popen(list(cmd), cwd=str(cwd) if cwd else None,
-                                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                stdin=subprocess.DEVNULL, shell=False,
-                                env=env, creationflags=creationflags)
-    except OSError as exc:
-        return {"ok": False, "timeout": False, "exit_code": None, "stdout": "",
-                "stderr": f"{type(exc).__name__}: {exc}",
-                "elapsed": round(time.monotonic() - started, 3)}
-    try:
-        out, err = proc.communicate(timeout=max(0.1, float(timeout)))
-        timed_out = False
-    except subprocess.TimeoutExpired:
-        terminate_tree(proc)
+    # Registration is per Popen; child CLI still executes real uilock.run.
+    with uilock.child_launch(root=cwd, env=env) as launch:
+        started = time.monotonic()
         try:
-            out, err = proc.communicate(timeout=10)
+            proc = subprocess.Popen(list(cmd), cwd=str(cwd) if cwd else None,
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                    stdin=subprocess.DEVNULL, shell=False,
+                                    env=launch.env, creationflags=creationflags)
+        except OSError as exc:
+            return {"ok": False, "timeout": False, "exit_code": None, "stdout": "",
+                    "stderr": f"{type(exc).__name__}: {exc}",
+                    "elapsed": round(time.monotonic() - started, 3)}
+        try:
+            if launch.context is not None:
+                launch.bind(proc.pid)
+        except BaseException:
+            terminate_tree(proc)
+            proc.communicate(timeout=10)
+            raise
+        stop_tick = threading.Event()
+        watcher = None
+        if tick is not None:
+            def _watch():
+                # 只看文件、只 _patch，绝不碰 proc（communicate 正在同一个对象上等）
+                while not stop_tick.wait(tick_interval):
+                    try:
+                        tick()
+                    except Exception:          # noqa: BLE001 - 心跳永远不许带崩
+                        pass
+            watcher = threading.Thread(target=_watch, name="hb-watch", daemon=True)
+            watcher.start()
+        try:
+            out, err = proc.communicate(timeout=max(0.1, float(timeout)))
+            timed_out = False
         except subprocess.TimeoutExpired:
-            out, err = b"", b""
-        timed_out = True
-    elapsed = round(time.monotonic() - started, 3)
-    return {"ok": (not timed_out) and proc.returncode == 0, "timeout": timed_out,
-            "exit_code": None if timed_out else proc.returncode,
-            "stdout": _decode(out), "stderr": _decode(err), "elapsed": elapsed}
-
+            terminate_tree(proc)
+            try:
+                out, err = proc.communicate(timeout=10)
+            except subprocess.TimeoutExpired:
+                out, err = b"", b""
+            timed_out = True
+        finally:
+            stop_tick.set()
+            if watcher is not None:
+                watcher.join(0.2)
+        elapsed = round(time.monotonic() - started, 3)
+        return {"ok": (not timed_out) and proc.returncode == 0, "timeout": timed_out,
+                "exit_code": None if timed_out else proc.returncode,
+                "stdout": _decode(out), "stderr": _decode(err), "elapsed": elapsed}
 
 # ---------------------------------------------------------------- job 引擎
 class Engine:
@@ -532,6 +735,13 @@ class Engine:
             if name not in cleaned:
                 cleaned.append(name)
 
+        cap = int(self.config.get("max_endpoints_per_job") or 8)
+        if len(cleaned) > cap:
+            raise RequestError(
+                400, "too_many_endpoints",
+                f"一个 job 最多 {cap} 席（本次选了 {len(cleaned)}）；"
+                "请分两轮：先 4 个网页端会审，再 4 个桌面端安排任务")
+
         prompt = payload.get("prompt")
         if not isinstance(prompt, str) or not prompt.strip():
             raise RequestError(400, "bad_prompt", "prompt must be a non-empty string")
@@ -552,7 +762,7 @@ class Engine:
 
     def submit(self, endpoints: list[str], prompt: str, purpose: str, *,
                request_id: str | None = None) -> tuple[dict, bool]:
-        with self._lock:
+        with self._lock, tier_guard.file_lock(self.root / "runs/jobs/requests.lock"):
             if request_id:
                 found = self._find_request(request_id)
                 if found:
@@ -564,6 +774,7 @@ class Engine:
                 raise QueueFull(limit)
 
             job_id = self._new_job_id()
+            accepted_at = now_iso()
             job = {
                 "job_id": job_id,
                 "request_id": request_id,
@@ -578,14 +789,20 @@ class Engine:
                     name: {"status": "queued", "reply": None, "error": None,
                            "error_code": None, "exit_code": None,
                            "choose": None, "use": None,
-                           "started_at": None, "finished_at": None, "elapsed": None}
+                           "started_at": None, "finished_at": None, "elapsed": None,
+                           # T2-1 的 L1 证据：只代表**本地后端已接收任务并落盘**。
+                           # 不等于目标端已提交（L2），更不等于拿到回答（L3）。
+                           # 子进程会按 env 写一份同 job_id 的链接，两边必须一致。
+                           "evidence_l1": {"job_id": job_id, "request_id": request_id,
+                                           "at": accepted_at, "source": "server"}}
                     for name in endpoints
                 },
             }
+            # Durable acceptance precedes memory visibility and any dispatch.
+            self._persist(job, required=True)
             self.jobs[job_id] = job
             self._order.append(job_id)
             self._trim()
-            self._persist(job)
         self._ensure_worker()
         self._queue.put(job_id)
         return copy.deepcopy(job), False
@@ -610,11 +827,13 @@ class Engine:
             else:
                 index += 1
 
-    def _persist(self, job: dict) -> None:
+    def _persist(self, job: dict, *, required=False) -> None:
         try:
             atomic_write_json(self.root / "runs" / "jobs" / f"{job['job_id']}.json", job)
-        except OSError:
-            pass                              # 落盘失败不改内存里的结果
+        except OSError as exc:
+            if required:
+                raise RequestError(503, "job_persistence_failed", "cannot durably accept job") from exc
+            sys.stderr.write(f"[bridge] job persistence failed: {job.get('job_id')}\n")
 
     def _find_request(self, request_id: str) -> dict | None:
         for job in self.jobs.values():
@@ -622,13 +841,15 @@ class Engine:
                 return copy.deepcopy(job)
         folder = self.root / "runs" / "jobs"
         try:
-            paths = sorted(folder.glob("*.json"), key=lambda p: p.stat().st_mtime,
-                           reverse=True)[:200]
-        except OSError:
-            return None
+            # No expiry/window: every readable historical job retains its ID.
+            paths = sorted(folder.glob("*.json"))
+        except OSError as exc:
+            raise RequestError(503, "request_history_unreadable", "cannot verify request history") from exc
         for path in paths:
             data = read_json(path)
-            if data and data.get("request_id") == request_id:
+            if not data or data.get("job_id") != path.stem:
+                raise RequestError(503, "request_history_unreadable", "job history needs repair before new dispatch")
+            if data.get("request_id") == request_id:
                 return data
         return None
 
@@ -717,6 +938,36 @@ class Engine:
             self._persist(job)
             return copy.deepcopy(target)
 
+    def _quorum(self, job: dict) -> dict:
+        """回收线：`min_success` 席成功就算这一轮成立。
+
+        缺省 `min_success=1` 时，判定逐条等价于原来的 all/any/else 三档，
+        所以既有 job 测试一条都不用改。
+        """
+        order = list(job.get("order") or [])
+        need = int(self.config.get("min_success") or 1)
+        clamped = False
+        if need > len(order):
+            need, clamped = max(1, len(order)), True
+        need = max(1, need)
+        endpoints = job.get("endpoints") or {}
+        done = sum(1 for name in order
+                   if (endpoints.get(name) or {}).get("status") == "done")
+        return {"required": need, "recovered": done,
+                "met": done >= need, "clamped": clamped}
+
+    def _refresh_quorum(self, job_id: str) -> None:
+        job = self.get_job(job_id)
+        if job:
+            self._patch(job_id, quorum=self._quorum(job))
+
+    @staticmethod
+    def _start_delayed(func, name: str, delay: float) -> None:
+        """错峰：等 `delay` 秒再跑这一席（`delay<=0` 时直接跑，与改动前一致）。"""
+        if delay > 0:
+            time.sleep(delay)
+        func(name)
+
     def _run_job(self, job_id: str) -> None:
         with self._lock:
             job = self.jobs.get(job_id)
@@ -724,19 +975,48 @@ class Engine:
                 return
             order = list(job["order"])
         self._patch(job_id, status="running", started_at=now_iso())
-        for endpoint in order:
-            self._run_endpoint(job_id, endpoint)
+        self._refresh_quorum(job_id)
+
+        def one(name: str) -> None:
+            self._run_endpoint(job_id, name)
+            self._refresh_quorum(job_id)
+
+        concurrency = max(1, int(self.config.get("endpoint_concurrency") or 1))
+        # 错峰启动（秒）。**默认 0**，行为与改动前一致。
+        # 为什么需要：几个席同时开跑时，各自的"新建会话/抢前台"会撞在一起，
+        # 后到的 choose 抢不回来（真机 2026-11-08：codex 的 choose 连续被
+        # opencode 的窗口抢走前台，exit 4）。错开几秒，让"抢前台"这件事排队，
+        # 之后各席的等待期仍然重叠 —— 仍然是并发，只是起跑线错开。
+        stagger = max(0.0, float(self.config.get("endpoint_stagger") or 0))
+        exclusive = {str(item) for item in (self.config.get("exclusive_endpoints") or [])}
+        pool = [name for name in order if name not in exclusive]
+        serial = [name for name in order if name in exclusive]
+        if concurrency > 1 and len(pool) > 1:
+            with ThreadPoolExecutor(max_workers=min(concurrency, len(pool)),
+                                    thread_name_prefix="ep") as pool_exec:
+                futures = []
+                for index, name in enumerate(pool):
+                    futures.append(pool_exec.submit(self._start_delayed, one, name,
+                                                    index * stagger))
+                for future in futures:
+                    future.result()
+        else:
+            for name in pool:
+                one(name)
+        for name in serial:
+            one(name)
 
         job = self.get_job(job_id) or {}
         statuses = [((job.get("endpoints") or {}).get(name) or {}).get("status")
                     for name in job.get("order") or []]
+        quorum = self._quorum(job)
         if statuses and all(status == "done" for status in statuses):
             final = "done"
-        elif any(status == "done" for status in statuses):
+        elif quorum["met"]:
             final = "partial"
         else:
             final = "failed"
-        self._patch(job_id, status=final, finished_at=now_iso())
+        self._patch(job_id, status=final, finished_at=now_iso(), quorum=quorum)
 
     def _run_endpoint(self, job_id: str, endpoint: str) -> None:
         started = time.monotonic()
@@ -746,19 +1026,54 @@ class Engine:
         prompt = str(job.get("prompt") or "")
 
         try:
-            with uilock.hold(f"server:{job_id}:{endpoint}",
-                             timeout=float(self.config["ui_lock_timeout"]),
-                             root=self.root):
-                deadline = time.monotonic() + float(self.config["endpoint_timeout"])
-                dimension, target = self._pick_target(endpoint, purpose)
-                choose = self._run_choose(endpoint, dimension, target, deadline)
+            # B15：要自动拉起的端（现在只有 dsh）**在锁外**先起。
+            # 它自己的 Popen 会占着整轮锁等 40s，那 40s 会把别的席全部堵住。
+            if endpoint in {str(n) for n in (self.config.get("prelaunch_endpoints") or [])}:
+                from . import desk
+                if desk.find_app(endpoint) is None:
+                    if desk.ensure_app(endpoint, wait=45.0, verbose=False) is None:
+                        raise EndpointFailure("desk_launch_failed",
+                                              f"{endpoint} 未运行，且 45s 内没起来",
+                                              step="prelaunch")
+            # B13b：并发模式下**不再整段持锁**。锁下沉到子进程的桌面动作（section），
+            # 等回答期间不持锁 —— 这正是 CALIBER §3.1 要求的形态。
+            # 单端（concurrency=1）仍整段持锁，行为与今天逐字节一致。
+            serial_ui = int(self.config.get("endpoint_concurrency") or 1) <= 1
+            lock_cm = (uilock.hold(f"server:{job_id}:{endpoint}",
+                                   timeout=float(self.config["ui_lock_timeout"]),
+                                   root=self.root)
+                       if serial_ui else contextlib.nullcontext())
+            with lock_cm:
+                endpoint_budget = float(self.config["endpoint_timeout"])
+                if purpose in ("review", "accept"):
+                    endpoint_budget = max(endpoint_budget, float(self.config["choose_timeout"]) +
+                                          tier_guard.floor_timeout(purpose, self.config["use_timeout"]) + 60)
+                # B15：按端覆盖只许抬高（codex 的长思考就是靠这条拿到 300s+）
+                endpoint_budget = apply_budgets(self.config, endpoint, purpose,
+                                                "endpoint", endpoint_budget)
+                deadline = time.monotonic() + endpoint_budget
+                # F5 ③：故障注入在任何 UI 动作之前生效，命中就直接失败。
+                fault = self._test_fault(endpoint)
+                if fault:
+                    raise EndpointFailure(fault, f"test fault injected: {fault}",
+                                          step="pre_submit")
+                # 声明了 require_writer 的端（chatgpt）：先只读地问一次"现在哪个模式"，
+                # 再按那套表取目标值。读不到就用默认表（与改动前一致）。
+                writer = (self._detect_writer(endpoint, deadline)
+                          if self._requires_writer(endpoint) else None)
+                pairs = self._pick_targets(endpoint, purpose, writer=writer)
+                dimension, target = pairs[0]
+                choose = self._run_choose(endpoint, dimension, target, deadline,
+                                          targets=pairs, purpose=purpose)
+                if writer:
+                    choose["writer"] = writer
                 self._patch(job_id, endpoint, choose=choose)
                 if not choose.get("ok"):
                     raise EndpointFailure(str(choose.get("error_code") or "choose_failed"),
                                           str(choose.get("error_message") or "choose failed"),
                                           exit_code=choose.get("exit_code"), step="choose")
 
-                use = self._run_use(endpoint, prompt, purpose, deadline)
+                use = self._run_use(endpoint, prompt, purpose, deadline, job_id=job_id)
                 self._patch(job_id, endpoint, use=use, exit_code=use.get("exit_code"),
                             reply=use.get("reply"))
                 if not use.get("ok"):
@@ -787,7 +1102,81 @@ class Engine:
                     elapsed=None if started is None else round(time.monotonic() - started, 2))
 
     # ------------------------------------------------------------ 一个端
-    def _pick_target(self, endpoint: str, purpose: str) -> tuple[str, str]:
+    def _test_fault(self, endpoint: str) -> str | None:
+        """F5 场景③的故障注入。**双条件**才生效，缺一不可：
+
+        1. `docs/bridge_server.json` 里 `allow_test_faults: true`（默认 false）
+        2. `runs/test-faults.json` 存在且 `{"endpoint": ..., "fault": ...}` 命中本端
+
+        生效时在**任何 UI 动作之前**直接失败，所以既能复现"找不到输入框"这类故障，
+        又不会真的去点桌面。生产配置下第 1 条永远不成立。
+
+        做法是"在提交前抛 EndpointFailure"，不是去改 UI 检测逻辑——
+        后者等于为了测试给生产代码开后门。
+        """
+        if not self.config.get("allow_test_faults"):
+            return None
+        path = self.root / "runs" / "test-faults.json"
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        if not isinstance(data, dict):
+            return None
+        if str(data.get("endpoint") or "") != endpoint:
+            return None
+        fault = str(data.get("fault") or "").strip()
+        return fault or None
+
+    def _requires_writer(self, endpoint: str) -> bool:
+        try:
+            tiers = tier_guard.load_tiers(self.root / "docs" / "tiers.json")
+        except (OSError, ValueError):
+            return False
+        entry = (tiers.get("endpoints") or {}).get(endpoint) or {}
+        return bool(entry.get("require_writer"))
+
+    def _detect_writer(self, endpoint: str, deadline: float) -> str | None:
+        """读一次"这个端当前在哪个写作模式"（chat / work）。读不到返回 None。
+
+        为什么必须先读：chatgpt 的两套档位表**完全不同**（work 模式 review 是
+        `gpt61_sol + max`，chat 模式只有 `gpt6 + high`）。拿错表去设，
+        闸门会判 `purpose_mismatch`。`--list` 是只读的，只读芯片不点任何东西。
+        """
+        script = self.root / "src" / "scripts" / f"{endpoint}_choose.py"
+        if not script.exists():
+            return None
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return None
+        timeout = min(20.0, remaining)
+        env = {**os.environ,
+               "BRIDGE_UI_LOCK_TIMEOUT": str(max(1, int(timeout) - 2))}
+        if int(self.config.get("endpoint_concurrency") or 1) > 1:
+            env["BRIDGE_UI_CONCURRENT"] = "1"
+            env["BRIDGE_WEB_WINDOW_MODE"] = str(
+                self.config.get("web_window_mode") or "per_site")
+            # B15：按端的 busy 停滞判据（codex 的停止键常驻，busy 恒真）。
+            stall = (self.config.get("stall_busy_ignore") or {}).get(str(endpoint).lower())
+            if stall:
+                env["BRIDGE_STALL_BUSY"] = str(float(stall))
+        result = self.runner([self.python, str(script), "--list"],
+                             timeout=timeout, cwd=self.root, env=env)
+        parsed = parse_last_json(result.get("stdout") or "") or {}
+        writer = str(parsed.get("writer") or "").lower()
+        return writer if writer in ("chat", "work") else None
+
+    def _pick_targets(self, endpoint: str, purpose: str,
+                      *, writer: str | None = None) -> list[tuple[str, str]]:
+        """该端这次要设的**全部**维度：[(维度, 目标值)]，第一个是主维度。
+
+        为什么不是一个：`tiers.json` 里 chatgpt 声明了
+        `required_dimensions: ["model","effort"]` + `require_writer`，
+        闸门要求两张维度都在同一张联合回执里（`composite_version=1`）且都读回一致。
+        只设 model 时 `chatgpt_choose.py` 会拿"页面上当时那个 effort"去补，
+        于是能不能过完全取决于页面当时的档 —— 这不是稳定行为（2026-11-08 核实：
+        正式目录 `required_dimensions` 是 None，所以那时只设 model 也能过）。
+        """
         try:
             tiers = tier_guard.load_tiers(self.root / "docs" / "tiers.json")
         except (OSError, ValueError) as exc:
@@ -797,23 +1186,57 @@ class Engine:
         dims = entry.get("dimensions") or {}
         if not isinstance(dims, dict):
             raise EndpointFailure("tier_table_malformed", f"{endpoint}: dimensions is not an object")
-        for dimension in DIMENSION_ORDER:
+
+        required = [str(item) for item in (entry.get("required_dimensions") or [])]
+        wanted = required or list(DIMENSION_ORDER)
+        picked: list[tuple[str, str]] = []
+        for dimension in wanted:
+            if required and dimension not in DIMENSION_ORDER:
+                continue
             block = dims.get(dimension)
             if not isinstance(block, dict):
+                if required:
+                    raise EndpointFailure("tier_table_unconfigured",
+                                          f"{endpoint}/{dimension} 是 required 维度但表里没有")
                 continue
-            values = block.get(purpose)
-            if isinstance(values, list) and values:
-                return dimension, str(values[0])
-            if isinstance(values, list):
-                raise EndpointFailure("tier_table_empty",
-                                      f"{endpoint}/{dimension} has no {purpose} tier")
-        raise EndpointFailure("tier_table_unconfigured",
-                              f"{endpoint} has no usable dimension for purpose={purpose}")
+            # 有 writer 分表（chatgpt 的 chat / work 两套）且知道当前模式 → 用那一套。
+            # 不知道模式就用默认表（work），行为与改动前一致。
+            table = block
+            writers = block.get("writers")
+            if writer and isinstance(writers, dict) and isinstance(writers.get(writer), dict):
+                table = writers[writer]
+            values = table.get(purpose)
+            if not (isinstance(values, list) and values):
+                # 声明了 required 就 **fail-closed**：少一维等于联合回执永远凑不齐，
+                # 与其让 use 在闸门那里报 composite_missing，不如这里就说清楚。
+                if required:
+                    raise EndpointFailure(
+                        "tier_table_empty",
+                        f"{endpoint}/{dimension} has no {purpose} tier")
+                if isinstance(values, list):
+                    raise EndpointFailure(
+                        "tier_table_empty", f"{endpoint}/{dimension} has no {purpose} tier")
+                continue
+            picked.append((dimension, str(values[0])))
+            if not required:
+                return picked          # 未声明 required：维持旧行为，只设第一个
+        if not picked:
+            raise EndpointFailure("tier_table_unconfigured",
+                                  f"{endpoint} has no usable dimension for purpose={purpose}")
+        return picked
+
+    def _pick_target(self, endpoint: str, purpose: str) -> tuple[str, str]:
+        """主维度（向后兼容的老接口）。"""
+        return self._pick_targets(endpoint, purpose)[0]
 
     def _run_choose(self, endpoint: str, dimension: str, target: str,
-                    deadline: float) -> dict:
+                    deadline: float, *, targets: list[tuple[str, str]] | None = None,
+                    purpose: str = "") -> dict:
         script = self.root / "src" / "scripts" / f"{endpoint}_choose.py"
+        pairs = list(targets or [(dimension, target)])
         out = {"ok": False, "dimension": dimension, "target": target, "readback": None,
+               # 联合维度（chatgpt 这种 required_dimensions 有两维的，这里是全部）
+               "targets": {dim: value for dim, value in pairs},
                "confirmed": False, "exit_code": None, "timeout": False,
                "elapsed": 0.0, "error_code": None, "error_message": None, "stderr": ""}
         if not script.exists():
@@ -825,10 +1248,32 @@ class Engine:
         if remaining <= 0:
             out.update(error_code="endpoint_timeout", error_message="endpoint timeout before choose")
             return out
-        timeout = min(float(self.config["choose_timeout"]), remaining)
-        cmd = [self.python, str(script), DIMENSION_FLAGS[dimension], target]
+        choose_budget = apply_budgets(self.config, endpoint, purpose,
+                                      "choose", float(self.config["choose_timeout"]))
+        timeout = min(choose_budget, remaining)
+        # 一维端拼一个 flag；`required_dimensions` 有两维的端拼两个
+        # （`chatgpt_choose.py` 支持 `--model X --effort Y` 一次设完，
+        #  也只有一次设完才会写 composite 回执 —— 这是闸门放行的前提）。
+        cmd = [self.python, str(script)]
+        for dim, value in pairs:
+            cmd.extend([DIMENSION_FLAGS[dim], value])
+        for extra in (self.config.get("choose_args") or {}).get(str(endpoint).lower(), []):
+            cmd.append(str(extra))
         started_utc = datetime.now(timezone.utc)
-        result = self.runner(cmd, timeout=timeout, cwd=self.root)
+        # B14：choose 子进程**必须整轮持锁**（它要点菜单，不能和别人的写入交错），
+        # 所以这里**不下发** SECTIONED/WAKE/CONCURRENT。但 `uilock.entry` 的默认
+        # 等锁上限只有 60s（`DEFAULT_TIMEOUT`）：4 席并发时后到的 choose 要等前几个
+        # 跑完，60s 不够就变成退出码 8（ui_busy）。所以只把"等锁上限"对齐到它自己的
+        # 预算（留 2s 余量，让它能先报 Busy 而不是被父进程直接砍掉）。
+        env = {**os.environ,
+               "BRIDGE_UI_LOCK_TIMEOUT": str(max(1, int(timeout) - 2))}
+        if int(self.config.get("endpoint_concurrency") or 1) > 1:
+            # choose **只**拿这个"前台是共享的"标记：它仍然整轮持锁（要点菜单），
+            # 但点之前要能把自己的窗口抢回来，否则网页端一开窗就把它打断。
+            env["BRIDGE_UI_CONCURRENT"] = "1"
+            env["BRIDGE_WEB_WINDOW_MODE"] = str(
+                self.config.get("web_window_mode") or "per_site")
+        result = self.runner(cmd, timeout=timeout, cwd=self.root, env=env)
         out.update({"exit_code": result.get("exit_code"),
                     "timeout": bool(result.get("timeout")),
                     "elapsed": result.get("elapsed"),
@@ -838,10 +1283,17 @@ class Engine:
                        error_message=f"choose timed out after {timeout:.0f}s")
             return out
         if result.get("exit_code") != 0:
+            # B16：hint 取不到时把 stdout 末几行带出来。dsh_choose 以前在
+            # `menu_not_open` 分支只 return 1、什么都不打印，面板就只剩
+            # `choose exit code 1`，连"窗口没在前台"都看不出来。
+            stdout = result.get("stdout") or ""
+            hint = (parse_last_json(stdout) or {}).get("hint")
+            tail = " | ".join(line.strip() for line in stdout.splitlines()
+                              if line.strip())[-400:]
+            bare = f"choose exit code {result.get('exit_code')}"
             out.update(error_code="choose_failed",
-                       error_message=(parse_last_json(result.get("stdout") or "") or {}).get("hint")
-                       or truncate(result.get("stderr"), 500)
-                       or f"choose exit code {result.get('exit_code')}")
+                       error_message=hint or truncate(result.get("stderr"), 500)
+                       or (f"{bare}; stdout: {tail}" if tail else bare))
             return out
 
         receipt = tier_guard.read_receipt(endpoint, root=self.root)
@@ -880,7 +1332,8 @@ class Engine:
         out.update(ok=True, confirmed=True)
         return out
 
-    def _run_use(self, endpoint: str, prompt: str, purpose: str, deadline: float) -> dict:
+    def _run_use(self, endpoint: str, prompt: str, purpose: str, deadline: float,
+                 job_id: str | None = None) -> dict:
         script = self.root / "src" / "scripts" / f"{endpoint}_use.py"
         out = {"ok": False, "stage": None, "reply": None, "exit_code": None,
                "timeout": False, "elapsed": 0.0, "error_code": None,
@@ -894,10 +1347,64 @@ class Engine:
         if remaining <= 0:
             out.update(error_code="endpoint_timeout", error_message="endpoint timeout before use")
             return out
-        timeout = min(float(self.config["use_timeout"]), remaining)
+        reply_budget = apply_budgets(
+            self.config, endpoint, purpose, "use",
+            tier_guard.floor_timeout(purpose, float(self.config["use_timeout"])))
+        overhead = 30.0 if purpose in ("review", "accept") else 0.0
+        if purpose in ("review", "accept") and remaining < reply_budget + overhead:
+            out.update(error_code="endpoint_timeout", error_message="insufficient outer reply budget")
+            return out
+        timeout = min(reply_budget + overhead, remaining)
         cmd = [self.python, str(script), prompt, "--purpose", purpose,
-               "--timeout", str(max(1, int(timeout)))]
-        result = self.runner(cmd, timeout=timeout, cwd=self.root)
+               "--timeout", str(max(1, int(min(reply_budget, timeout))))]
+        # T2-1：把 job 身份下发给子进程，子进程据此写 L1 证据（`source="env"`）。
+        # child_launch 的 env 是**整份替换**，所以必须带上 os.environ。
+        record = self.get_job(job_id) if job_id else None
+        env = {**os.environ,
+               "BRIDGE_JOB_ID": str(job_id or ""),
+               "BRIDGE_REQUEST_ID": str((record or {}).get("request_id") or ""),
+               "BRIDGE_PURPOSE": purpose,
+               "BRIDGE_ENDPOINT": endpoint}
+        if int(self.config.get("endpoint_concurrency") or 1) > 1:
+            # 三个开关一起下发：分段持锁 / 不抢前台 / 一端一窗
+            env["BRIDGE_UI_SECTIONED"] = "1"
+            env["BRIDGE_UI_WAKE"] = "0"
+            env["BRIDGE_UI_CONCURRENT"] = "1"
+            # B15：网页端开窗形态（tabs = 一窗多标签，per_site = 一端一窗）。
+            env["BRIDGE_WEB_WINDOW_MODE"] = str(
+                self.config.get("web_window_mode") or "per_site")
+            # B16：按端 busy 停滞判据。B15 只在 `_detect_writer`（choose --list）
+            # 下发过它，`_run_use` 漏了 —— 结果 `stall_busy_ignore` 配了等于没配，
+            # codex 的 use 从来没拿到 BRIDGE_STALL_BUSY。
+            try:
+                stall = float((self.config.get("stall_busy_ignore") or {})
+                              .get(str(endpoint).lower()) or 0)
+            except (TypeError, ValueError):
+                stall = 0.0
+            if stall > 0:
+                env["BRIDGE_STALL_BUSY"] = str(stall)
+
+        def _tick():
+            # B11：子进程写心跳，这里把它搬进 job 记录（面板只读 /jobs/<id>）
+            data = heartbeat.read(job_id, endpoint, root=self.root) if job_id else None
+            if data:
+                self._patch(job_id, endpoint, progress=data)
+
+        kwargs = {"timeout": timeout, "cwd": self.root, "env": env}
+        if job_id and _accepts_tick(self.runner):
+            self._patch(job_id, endpoint, progress={"stage": "dispatching"})
+            kwargs["tick"] = _tick
+        result = self.runner(cmd, **kwargs)
+        if job_id:
+            # 留最后一帧当排障证据，然后删文件（下次同 job 不会读到旧帧）
+            last = heartbeat.read(job_id, endpoint, root=self.root)
+            if last:
+                self._patch(job_id, endpoint,
+                            progress={**last, "stage": "finished"})
+            try:
+                heartbeat.path_for(job_id, endpoint, self.root).unlink()
+            except OSError:
+                pass
         parsed = parse_last_json(result.get("stdout") or "")
         out.update({"exit_code": result.get("exit_code"),
                     "timeout": bool(result.get("timeout")),
@@ -915,6 +1422,16 @@ class Engine:
             return out
         reply = parsed.get("reply")
         out["reply"] = truncate(reply, int(self.config["output_limit"])) if reply else None
+        # B11：把子进程的细因带上来。原来只取 stage，`timeout_kind=stalled` 与
+        # `error_code=REPLY_NEVER_APPEARED` 全被丢掉，面板只能显示"等回复超时"。
+        detail = {key: parsed.get(key) for key in
+                  ("timeout_kind", "error_code", "stall_reason", "stall_reads",
+                   "reason", "warnings", "salvaged", "settle_basis", "prepare",
+                   # B17：dsh 的 UIA 文本兜底必须把来源与截图带进 job 证据
+                   "source", "basis", "screenshot")
+                  if parsed.get(key) is not None}
+        if detail:
+            out["detail"] = detail
         if result.get("exit_code") != 0 or not parsed.get("ok"):
             out.update(error_code=str(parsed.get("stage") or "use_failed"),
                        error_message=truncate(parsed.get("hint") or parsed.get("error")
@@ -978,7 +1495,7 @@ class Engine:
         if target not in known:
             raise RequestError(400, "bad_state", f"unknown state: {target}")
 
-        with self._workflow_lock:
+        with self._workflow_lock, progress.locked(file_path=path):
             last_error: RequestError | None = None
             for _ in range(3):               # 写后复核；被外部写入盖掉就重试
                 try:
@@ -1177,11 +1694,9 @@ class BridgeHandler(BaseHTTPRequestHandler):
         route = parts.path
 
         if route == "/health":
-            # 唯一免 token 的接口，只回最小信息：ok + version（外加 port）。
-            # 保留 port 是 CARD-09a 的用例按它确认「监听在哪个端口」；pid / uptime /
-            # active_jobs / name 这些内部状态不再对外说。
+            # Public health contract: exactly ok + version.
             self._send_json(200, {
-                "ok": True, "version": "0.0.9", "port": self.engine.port,
+                "ok": True, "version": "0.0.9",
             })
             return
 

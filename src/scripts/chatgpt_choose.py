@@ -55,6 +55,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 import time
 
@@ -116,7 +117,8 @@ CHIP_BUTTON = "选择 ChatGPT 模型"
 # 档位词 -> key。长词在前，避免「极高」先命中「高」。
 # 中英都认（CARD-06c 第 1 条）；聊天模式的「即时」= instant，工作模式的「轻度」= low。
 _CHIP_EFFORT_WORDS = (
-    ("极高", "xhigh"), ("Extra High", "xhigh"), ("extra high", "xhigh"),
+    ("最高", "max"), ("极高", "xhigh"),
+    ("Extra High", "xhigh"), ("extra high", "xhigh"),
     ("即时", "instant"), ("Instant", "instant"), ("instant", "instant"),
     ("轻度", "low"), ("Light", "low"), ("light", "low"),
     ("中", "mid"), ("Medium", "mid"), ("medium", "mid"),
@@ -175,18 +177,29 @@ def read_chip_effort(s: Screen) -> dict:
             "source": "uia_chip" if text else "none"}
 
 
-def _announce_effort(s: Screen, root=None) -> dict:
-    """弹层开着时读滑杆的可访问值：`高，第 3 项，共 3 项。` -> high。
+def _announce_effort(s: Screen, root=None, writer: str | None = None) -> dict:
+    """弹层开着时读滑杆的可访问值：`高，第 3 项，共 5 项。` -> high。
 
     这不是"从键盘位置推断"：它是 UIA 把滑杆当前值念出来的文本，属于本次读数。
+
+    2026-11-09：新版界面把档位词从芯片里拿掉了（芯片 Button 只剩
+    「选择 ChatGPT 模型」一个名字、没有子文本），这条可访问值成了唯一可靠的
+    UIA 读数。它带「第 N 项，共 M 项」，优先按序号映射档位——旧实现按词串匹配，
+    「最高」含「高」会被误判成 high，导致 Max 被当成高。
     """
     root = root if root is not None else _doc_root(s)
+    order = effort_order(writer) if writer else []
     for node in root.walk():
         if node.kind != "TextControl":
             continue
         name = (node.name or "").strip()
         if "项，共" not in name and "项,共" not in name:
             continue
+        match = re.search(r"第\s*(\d+)\s*项", name)
+        if match and order:
+            index = int(match.group(1)) - 1
+            if 0 <= index < len(order):
+                return {"effort": order[index], "raw": name, "source": "uia_slider"}
         head = name.split("，", 1)[0].split(",", 1)[0].strip()
         key = _effort_of_text(head)
         if key:
@@ -194,10 +207,22 @@ def _announce_effort(s: Screen, root=None) -> dict:
     return {"effort": None, "raw": "", "source": "none"}
 
 
+def _offscreen(node) -> bool:
+    """控件是否在视口外。读不到就当 False（老版本 UIA 没这个属性）。"""
+    try:
+        return bool(node.control.IsOffscreen)
+    except Exception:                                  # noqa: BLE001
+        return False
+
+
 def _ui_model_rows(s: Screen) -> list:
-    """当前列表里的模型项（RadioButton），返回 [(key, name, rect)]。
+    """当前列表里的模型项（RadioButton），返回 [(key, name, rect, node, offscreen)]。
 
     不限 writer：聊天/工作的模型名合起来认，认不出名字的跳过。
+
+    B17：带上 node 和 offscreen。work 模式 9 项、一屏只放得下 8 项，
+    最后一项（GPT-5.6 Luna）常态在折叠线以下；以前只给 rect，调用方没法知道
+    "这个矩形在视口外"，点过去等于点在列表外。
     """
     keys = {}
     for table in MODELS.values():
@@ -218,15 +243,20 @@ def _ui_model_rows(s: Screen) -> list:
             box = (rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top)
         except Exception:                              # noqa: BLE001
             box = None
-        out.append((key, node.name, box))
+        out.append((key, node.name, box, node, _offscreen(node)))
     return out
 
 
 def read_model_uia(s: Screen, writer: str) -> dict:
-    """读模型列表里的选中项（RadioButton + IsSelected）。列表必须已经开着。"""
+    """读模型列表里的选中项（RadioButton + IsSelected）。列表必须已经开着。
+
+    B17：只采信**在视口内**的选中项。列表收起后 UIA 树里可能还挂着上一层的
+    RadioButton，它们的 IsSelected 是旧值；只按名字读会把「已经关掉的旧列表」
+    当成当前状态，复核就会报出上一次的模型。
+    """
     keys = {_name_key(display): key
             for key, (display, _tpl) in MODELS.get(writer, {}).items()}
-    selected = []
+    selected, hidden = [], []
     try:
         root = _doc_root(s)
     except Exception as exc:                           # noqa: BLE001 - 读不到就说读不到
@@ -241,13 +271,22 @@ def read_model_uia(s: Screen, writer: str) -> dict:
             is_on = bool(node.control.GetSelectionItemPattern().IsSelected)
         except Exception:                              # noqa: BLE001 - 没这个模式就跳过
             continue
-        if is_on:
+        if not is_on:
+            continue
+        if _offscreen(node):
+            hidden.append((key, node.name))
+        else:
             selected.append((key, node.name))
     if len(selected) == 1:
         return {"model": selected[0][0], "name": selected[0][1], "source": "uia"}
     if len(selected) > 1:
         return {"model": "unknown", "reason": "multiple_selected",
                 "names": [n for _k, n in selected], "source": "uia"}
+    if hidden:
+        # 有选中项，但全在视口外：可能是列表收起后的残影，也可能是当前项被滚出
+        # 视口。两种都不许当读数，交给模板复核（模板只看可见区域）。
+        return {"model": "unknown", "reason": "selected_offscreen",
+                "names": [n for _k, n in hidden], "source": "uia"}
     return {"model": "unknown", "reason": "no_selected_radio", "source": "uia"}
 
 
@@ -545,9 +584,12 @@ def _items_visible(s: Screen, writer: str) -> bool:
 
     不能只凭"某一项命中"：页面上别处也会出现「默认」这类词（实测误判成已开，
     后面全盘读空）。判据：找到勾，或至少两项模型标题同时命中。
+
+    B17：UIA 行也必须是**看得见**的。列表收起后残影还在树里挂了半秒，
+    以前会据此返回 True，`enter_models` 就跳过重新打开，复核读到的是旧列表。
     """
-    if _ui_model_rows(s):
-        return True          # UIA 已经能列出模型项：不再依赖模板/缩放
+    if any(box and not off for _k, _n, box, _node, off in _ui_model_rows(s)):
+        return True          # 有看得见的 UIA 行：不再依赖模板/缩放
     win = _win(s)
     if win is None:
         return False
@@ -683,6 +725,38 @@ def _slider(s: Screen):
                 "track": (tx0, tx1)}
     return {"knob": tx0 + 33, "cy": cy, "win": win, "track": (tx0, tx1),
             "at_min": True}
+
+
+def _effort_item(s: Screen):
+    """强度层里「强度」这一行的矩形（屏幕坐标）。滑块就在这一行里。
+
+    2026-11-09 新版界面：弹层整体左移，`_slider` 原来按「橙钮附近找长灰条」
+    会撞上输入框底边（实测 cy 差 17px），点下去落在滑杆外面，方向键自然不动。
+    UIA 的 MenuItemControl「强度」是稳定锚点：点它的中心能让滑杆拿到焦点，
+    之后左右方向键才生效。
+    """
+    try:
+        root = _doc_root(s)
+    except Exception:                                  # noqa: BLE001
+        return None
+    for node in root.walk():
+        if node.kind != "MenuItemControl":
+            continue
+        if (node.name or "").strip() != "强度":
+            continue
+        if _offscreen(node):
+            continue
+        try:
+            rect = node.control.BoundingRectangle
+        except Exception:                              # noqa: BLE001
+            return None
+        width, height = rect.right - rect.left, rect.bottom - rect.top
+        if width < 100 or height < 20:
+            return None
+        return {"box": (rect.left, rect.top, width, height),
+                "center": ((rect.left + rect.right) // 2,
+                           (rect.top + rect.bottom) // 2)}
+    return None
 
 
 def _gap_limit(writer: str) -> int:
@@ -1010,11 +1084,14 @@ def close_all(s: Screen, writer: str) -> None:
 
 
 def read_effort(s: Screen, writer: str | None = None) -> dict:
-    """读当前强度。**先读芯片（UIA，只读）**，读不到才开关一次弹层看滑杆。
+    """读当前强度。**先读芯片（UIA，只读）**，读不到才开关一次弹层读滑杆值。
 
     2026-11-02（CARD-06b 第 10 条）：芯片的 UIA 文本就是当前档位词，开弹层
-    反而是多余的点击。弹层路径保留作兜底，但返回值标明 `source`，
-    看日志时能分清"UI 读数"和"滑杆位置推算"。
+    反而是多余的点击。返回值标明 `source`，看日志时能分清读数来源。
+
+    2026-11-09：新版界面芯片不再暴露档位文本（Button 没有子 TextControl），
+    弹层里的滑杆可访问值（`最高，第 5 项，共 5 项。`）成为唯一可靠的 UIA 读数。
+    它带序号，按序号映射档位；**不再用滑杆像素位置推算**（那会和旧坐标一起漂）。
     """
     w = writer or read_writer(s).get("writer")
     if w not in EFFORTS:
@@ -1032,18 +1109,14 @@ def read_effort(s: Screen, writer: str | None = None) -> dict:
         return {"effort": "unknown", "stage": OPEN_STATE.get("stage") or "menu_not_open",
                 "reason": OPEN_STATE.get("reason") or "menu_not_open",
                 "hint": OPEN_STATE.get("hint") or "打不开强度弹层（只在新聊天页有）"}
-    sl = _slider(s)
+    announce = _announce_effort(s, writer=w)
     close_all(s, w)
-    if sl is None:
-        return {"effort": "unknown", "hint": "弹层里没找到滑杆"}
-    key, d = _effort_of(sl["knob"], w)
-    gap = _gap_limit(w)
-    out = {"effort": key, "label": EFFORTS[w][key][0], "knob": sl["knob"], "off": d,
-           "tol": gap, "at_min": sl.get("at_min", False), "source": "slider_geometry"}
-    if d > gap:
-        out["hint"] = (f"滑块停在 {sl['knob']}，离最近档位（{EFFORTS[w][key][0]}）"
-                       f"差 {d}px，不在档上")
-    return out
+    if announce.get("effort"):
+        return {"effort": announce["effort"], "label": EFFORTS[w][announce["effort"]][0],
+                "source": announce.get("source") or "uia_slider",
+                "raw": announce.get("raw")}
+    return {"effort": "unknown", "reason": "effort_unreadable",
+            "hint": "弹层打开了，但 UIA 读不到滑杆的档位值（既没有第 N 项，也没有档位词）"}
 
 
 def set_effort(s: Screen, key: str, writer: str | None = None) -> dict:
@@ -1077,14 +1150,25 @@ def set_effort(s: Screen, key: str, writer: str | None = None) -> dict:
                 "writer": w, "hint": OPEN_STATE.get("hint", ""),
                 **({"detail": extra} if extra else {})}
 
+    item = _effort_item(s)
     sl = _slider(s)
-    if sl is None:
+    if item is None and sl is None:
         return {"ok": False, "stage": "no_slider", "writer": w}
-    before, _bd = _effort_of(sl["knob"], w)
+    before_info = _announce_effort(s, writer=w)
+    before = before_info.get("effort")
+    if before is None and sl is not None:
+        before, _bd = _effort_of(sl["knob"], w)     # 旧界面兜底，只作记录
 
-    # 点滑块拿焦点（点击会让它跳到点击处，无所谓——紧接着就归零）
-    win = sl["win"]
-    ok, why = safe_click(s, (win[0] + sl["knob"], win[1] + sl["cy"]))
+    # 点「强度」行中心让滑杆拿到焦点。点击会把值跳到点击处（中心≈mid），
+    # 紧接着就归零，所以跳到哪里都无所谓；关键是**必须点在这一行里**。
+    # 2026-11-09：新版弹层左移，`_slider` 的 cy 会落到输入框底边上（差 17px），
+    # 点下去滑杆拿不到焦点，方向键一个都不生效——这就是 R4b 后冒烟失败的根因。
+    if item is not None:
+        point = item["center"]
+    else:
+        win = sl["win"]
+        point = (win[0] + sl["knob"], win[1] + sl["cy"])
+    ok, why = safe_click(s, point)
     if not ok:
         return {"ok": False, "stage": "click_blocked", "detail": why, "before": before}
     time.sleep(0.6)
@@ -1093,42 +1177,43 @@ def set_effort(s: Screen, key: str, writer: str | None = None) -> dict:
     # 归零：按左键到底，多按两下
     for _ in range(len(order) + 1):
         s.press("left")
-        time.sleep(0.35)
+        time.sleep(0.45)
     # 往上走到目标档
     idx = order.index(key)
     for _ in range(idx):
         s.press("right")
-        time.sleep(0.35)
-    time.sleep(0.4)
+        time.sleep(0.45)
+    time.sleep(0.5)
 
+    # 弹层还开着时读 UIA 的滑杆值（`轻度，第 1 项，共 5 项。`）。位置只留作诊断。
+    announce = _announce_effort(s, writer=w)
+    after_uia = announce.get("effort")
     after_sl = _slider(s)
     after, ad = _effort_of(after_sl["knob"], w) if after_sl else (None, None)
     knob = after_sl["knob"] if after_sl else None
-    # 弹层还开着时先读一次 UIA 的滑杆读数（`高，第 3 项，共 3 项。`），
-    # 它和位置无关，是本次读数；位置只留作诊断。
-    announce = _announce_effort(s)
     close_all(s, w)                        # Esc 才会让强度生效
     time.sleep(0.5)
-    # **判定只看芯片**：芯片是"用户看到的档位"。卡面第 10 条明确禁止
-    # 用滑杆键盘位置推断当读回——06b r1 那次 before=high/after=high、截图却是
-    # Medium，就是这么来的。芯片读不到 → ok=False（未读回）。
+    # 判定：**芯片优先**（用户看到的档位）。新版芯片不再暴露档位文本时，
+    # 退到滑杆的可访问值——它是滑杆自己念出来的当前值，不是按键次数/像素位置推断。
     chip_after = read_chip_effort(s)
-    chip_ok = chip_after["effort"] == key
-    out = {"ok": chip_ok, "stage": "done" if chip_ok else "unverified",
-           "before": before, "after": chip_after["effort"], "want": key, "writer": w,
-           "read": "uia_chip" if chip_after["effort"] else "none",
-           "chip": chip_after["raw"], "announce": announce.get("effort"),
+    after_value = chip_after["effort"] or after_uia
+    read = ("uia_chip" if chip_after["effort"] else
+            ("uia_slider" if after_uia else "none"))
+    ok2 = after_value == key
+    out = {"ok": ok2, "stage": "done" if ok2 else "unverified",
+           "before": before, "after": after_value, "want": key, "writer": w,
+           "read": read, "chip": chip_after["raw"], "announce": after_uia,
            "slider_geometry": after, "knob": knob, "off": ad, "by": "keyboard"}
-    if not chip_ok:
-        if chip_after["effort"] is None:
+    if not ok2:
+        if after_value is None:
             out["reason"] = "effort_unreadable"
-            out["hint"] = ("芯片读不回强度（UIA 没读到档位词）；按第 10 条整体判失败，"
-                           "不用滑杆位置代替读数")
+            out["hint"] = ("芯片和滑杆可访问值都读不回强度；按第 10 条整体判失败，"
+                           "不用按键次数或像素位置代替读数")
         else:
             out["reason"] = "readback_mismatch"
-            out["hint"] = (f"芯片显示 {chip_after['effort']!r}，要的是 {key!r}"
-                           f"（弹层里滑杆读数 {announce.get('effort')!r}，"
-                           f"位置推算 {after!r}）")
+            out["hint"] = (f"读数显示 {after_value!r}，要的是 {key!r}"
+                           f"（芯片 {chip_after['effort']!r}，"
+                           f"滑杆 {after_uia!r}，位置推算 {after!r}）")
     return out
 
 
@@ -1202,11 +1287,33 @@ class _Row:
         return self.x + self.w // 2, self.y + self.h // 2
 
 
+def _scroll_node(node) -> bool:
+    """把控件滚进视口。qi.ui 里已有实现，这里包一层是为了离线能打桩。"""
+    from qi import ui
+    return bool(ui.scroll_into_view(node))
+
+
 def _find_item_uia(s: Screen, key: str):
-    """按 UIA 名字找目标模型行（不受页面缩放/模板失配影响）。"""
-    for row_key, name, box in _ui_model_rows(s):
-        if row_key == key and box:
+    """按 UIA 名字找目标模型行（不受页面缩放/模板失配影响）。
+
+    B17：work 模式 9 项、一屏只放得下 8 项。以前只要 UIA 给得出矩形就直接
+    返回——第 9 项（GPT-5.6 Luna）的矩形在折叠线以下，点它的中心等于点在
+    列表外，选中态不会变，复核就报 readback_mismatch（S2 的 chatgpt 现场）。
+    现在先看 IsOffscreen：在视口外就先 ScrollIntoView，再重新枚举取新矩形；
+    滚不动返回 None，交给 `_find_item` 里模板 + `_scroll_list` 的兜底。
+    """
+    rows = _ui_model_rows(s)
+    for row_key, name, box, node, off in rows:
+        if row_key != key or not box:
+            continue
+        if not off:
             return _Row(name, box)
+        if _scroll_node(node):
+            time.sleep(0.4)
+            for k2, n2, b2, _node2, _off2 in _ui_model_rows(s):
+                if k2 == key and b2:
+                    return _Row(n2, b2)
+        return None
     return None
 
 
@@ -1354,6 +1461,32 @@ def read_model(s: Screen, writer: str) -> dict:
     return out
 
 
+def _dump_unverified(s: Screen, key: str, after_info: dict) -> None:
+    """复核失配时留现场：截图 + 列表行清单（名字/选中/是否在视口/矩形）。
+
+    只取证、不改判定：取证自己挂了也不能把 fail 变成异常，更不能变成 pass。
+    """
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    try:
+        rows = []
+        for row_key, name, box, node, off in _ui_model_rows(s):
+            try:
+                selected = bool(node.control.GetSelectionItemPattern().IsSelected)
+            except Exception:                          # noqa: BLE001
+                selected = None
+            rows.append({"key": row_key, "name": name, "selected": selected,
+                         "offscreen": off,
+                         "rect": None if box is None else list(box)})
+        shot = s.snapshot(f"chatgpt_unverified_{stamp}")
+        print(json.dumps({"stage": "unverified_dump", "want": key,
+                          "after": after_info.get("model"),
+                          "read": after_info.get("source"),
+                          "shot": str(shot), "rows": rows}, ensure_ascii=False))
+    except Exception as exc:                           # noqa: BLE001
+        print(json.dumps({"stage": "unverified_dump_failed",
+                          "error_type": type(exc).__name__}, ensure_ascii=False))
+
+
 def set_model(s: Screen, key: str) -> dict:
     """切模型。
 
@@ -1364,9 +1497,32 @@ def set_model(s: Screen, key: str) -> dict:
     点击次数：芯片 1 + 入口 1 + 目标项 1 + 复核再进列表 1 = 4 下，预算 8 够用。
     CARD-06c 第 3 条：找不到模型入口就 `stage=no_model_selector`，不沿用上次档位。
     """
-    w = read_writer(s)["writer"]
+    state = read_writer(s)
+    w = state.get("writer")
+    if w in MODELS and key not in MODELS[w]:
+        # B16：`--new` 把页面重置成了默认的「聊天」模式，而服务端按
+        # `_detect_writer`（或默认 work 表）挑了 `gpt56_luna` 这类工作模式档位，
+        # 于是 R2 四席那轮直接 `bad_arg / options=["gpt6","gpt56"]`。
+        # 新聊天页上模式是可切的：切到目标档位所属的那套表再继续，
+        # 同时让后面的 effort 也落到正确那套（chat 只有 instant/mid/high）。
+        other = next((name for name, table in MODELS.items()
+                      if name != w and key in table), None)
+        if other:
+            switch = globals().get("choose_writer")
+            switched = switch(s, other) if callable(switch) else {"ok": False}
+            if not switched.get("ok"):
+                return {"ok": False, "stage": "writer_switch_failed",
+                        "writer": w, "want_writer": other, "want": key,
+                        "hint": "目标模型属于另一个模式，但在新聊天页切模式失败"}
+            state = read_writer(s)
+            w = state.get("writer")
     if w not in MODELS:
-        return {"ok": False, "stage": "no_writer",
+        # B16：把「为什么读不出」带出来。4 席并发时最常见的是新页还没渲染完
+        # （uia 里 toggle 为空）或被别人切到了会话页，光一句 hint 分不清。
+        detail = {key: state.get(key) for key in
+                  ("writer", "source", "uia", "toggle", "hint")
+                  if state.get(key) is not None}
+        return {"ok": False, "stage": "no_writer", "writer_detail": detail,
                 "hint": "读不出当前是聊天还是工作，先用 --writer 定一下（只能在新聊天页做）"}
     models = MODELS[w]
     if key not in models:
@@ -1432,8 +1588,13 @@ def set_model(s: Screen, key: str) -> dict:
         close_all(s, w)
         return {"ok": False, "stage": "reverify_failed", "before": cur,
                 "writer": w, "reason": again.get("stage")}
+    # B17：复核前先把目标项滚进视口。目标可能就是列表最后一项（GPT-5.6 Luna），
+    # 勾落在折叠线下时 UIA/模板都读不到，会被误判成 unknown。
+    _find_item(s, w, models[key][1], key=key)
     after_info = _pick_model(s, w)
     after = after_info["model"]
+    if after != key:
+        _dump_unverified(s, key, after_info)           # 列表还开着，先取证再收
     close_all(s, w)
     ok2 = after == key
     out = {"ok": ok2, "stage": "done" if ok2 else "unverified",
@@ -1495,6 +1656,84 @@ def _record_receipt(hwnd, dimension, target, readback, raw, writer=None):
         pass
 
 
+def _record_composite(screen, hwnd, targets, readbacks=None):
+    """写两维回执。先试芯片快照；新版芯片读不到时，用各维度**设完之后**的读数。
+
+    2026-11-09：新版界面的芯片 Button 不再挂档位文本（名字只有
+    「选择 ChatGPT 模型」、没有子 TextControl），`chip.chatgpt_snapshot`
+    的 model/effort 都是空的。此时退回 `readbacks`：
+      · model = `set_model` 重新打开列表读到的选中项（UIA RadioButton）
+      · effort = `set_effort` 在弹层里读到的滑杆可访问值（第 N 项）
+    这两个都是动作之后的独立 UIA 读数，不是点击结果的回显；来源写在
+    raw.source 里（`post_action_readback`），面板和日志能分清。
+    """
+    from qi import chip, tier_guard
+    try:
+        snapshot = chip.chatgpt_snapshot(screen)
+        values = dict(snapshot.get("dimensions") or {})
+        writer = snapshot.get("writer")
+        source = "uia_snapshot"
+        if not all(values.get(dim) for dim in ("model", "effort")):
+            values = {dim: ((readbacks or {}).get(dim) or values.get(dim))
+                      for dim in ("model", "effort")}
+            source = "post_action_readback"
+        complete = bool(writer and all(values.get(dim) for dim in ("model", "effort")))
+        matched = complete and all(values.get(key) == value for key, value in targets.items())
+        blocks = {dim: {"target": targets.get(dim, values.get(dim)),
+                        "readback": values.get(dim) if matched else None}
+                  for dim in ("model", "effort")}
+        primary = "model" if "model" in targets else "effort"
+        raw = {"chip": snapshot, "post": readbacks, "source": source}
+        saved = tier_guard.record_choice(
+            "chatgpt", target=blocks[primary]["target"], readback=blocks[primary]["readback"],
+            dimension=primary, writer=writer, hwnd=hwnd, raw=raw, dimensions=blocks)
+        return {"ok": bool(matched and saved.get("written")), "stage": "composite_readback",
+                "source": source, "writer": writer, "dimensions": blocks, "receipt": saved}
+    except Exception as exc:
+        # Invalidate the previous receipt even when the final snapshot fails.
+        _record_receipt(hwnd, "model", targets.get("model"), None,
+                        {"error": f"{type(exc).__name__}: {exc}"})
+        return {"ok": False, "stage": "composite_readback", "hint": str(exc)}
+
+
+def _wait_new_page(s, site, timeout: float) -> dict:
+    """`--new` 之后等新聊天页真正可读，再放行后面的模型/强度选择。
+
+    B16：4 席并发下 SPA 重排 + 别的席位切标签，固定 `sleep(1.0)` 常常不够；
+    `set_model` 第一句 `read_writer` 读到 unknown 就直接 `no_writer` 退出。
+    这里同时等两个条件：页头条带显示「聊天/工作」（`page_kind == "new"`）、
+    且 `read_writer` 真的读得出模式。一轮等满仍不行就再点一次新聊天，
+    第二轮还不行才 fail-closed —— 绝不猜一个模式继续选。
+
+    `timeout=0` 时调用方根本不会进来（保持旧的固定 sleep 行为）。
+    """
+    deadline = time.monotonic() + max(0.0, float(timeout))
+    polls = 0
+    last: dict = {"page_kind": None, "writer": None}
+    for round_no in range(2):
+        while time.monotonic() < deadline:
+            polls += 1
+            kind = page_kind(s)
+            state = read_writer(s) if kind == "new" else {"writer": "unknown"}
+            last = {"page_kind": kind, "writer": state.get("writer"),
+                    "writer_source": state.get("source"),
+                    "writer_hint": state.get("hint")}
+            if kind == "new" and state.get("writer") in ("chat", "work"):
+                return {"ok": True, "stage": "new_page_ready",
+                        "polls": polls, "round": round_no, **last}
+            time.sleep(0.5)
+        if round_no == 0:
+            again = _open_new_chat(s, site)
+            last["reopen"] = {"ok": bool(again.get("ok")),
+                              "stage": again.get("stage")}
+            if not again.get("ok"):
+                break
+    return {"ok": False, "stage": "new_page_not_ready",
+            "polls": polls, "timeout": float(timeout),
+            "hint": "新聊天页在预算内没渲染出模式按钮（或读不出聊天/工作）",
+            **last}
+
+
 def main() -> int:
     idle_need, idle_wait, force, args = guard.parse_guard_args(list(sys.argv[1:]))
     parser = argparse.ArgumentParser(description="选择 ChatGPT 模式、模型和强度，不发送消息")
@@ -1506,7 +1745,11 @@ def main() -> int:
     parser.add_argument("--effort", choices=sorted({key for items in EFFORTS.values() for key in items}),
                         type=str.lower)
     parser.add_argument("--tab", type=int, choices=range(1, 10))
+    parser.add_argument("--ready-wait", type=float, default=0.0, metavar="SEC",
+                        help="--new 之后等新聊天页可读的最长秒数（0=沿用旧的固定 1 秒）")
     options = parser.parse_args(args)
+    if not 0.0 <= options.ready_wait <= 60.0:
+        parser.error("--ready-wait 要在 0~60 秒之间")
     do_list = options.list
     want_model, want_writer, want_effort = options.model, options.writer, options.effort
     if do_list and any(value is not None for value in (want_model, want_writer, want_effort)):
@@ -1538,6 +1781,7 @@ def main() -> int:
     if not s.focus():
         print("窗口提不到前台")
         return 1
+    s.tab_site = "chatgpt"
     time.sleep(1.2)
     done_dims = {}
     try:
@@ -1552,7 +1796,13 @@ def main() -> int:
             print(json.dumps(result, ensure_ascii=False))
             if not result["ok"]:
                 return 1
-            time.sleep(1.0)
+            if options.ready_wait > 0:
+                ready = _wait_new_page(s, _NEWCHAT, options.ready_wait)
+                print(json.dumps(ready, ensure_ascii=False))
+                if not ready["ok"]:
+                    return 1
+            else:
+                time.sleep(1.0)
 
         if do_list:
             # 读状态不许改页面：这里不点「新聊天」，否则会把用户正在聊的会话重置掉
@@ -1592,9 +1842,6 @@ def main() -> int:
                     rec(hwnd, "model", want_model, None, r, r.get("writer"))
                 _evidence("chatgpt", s, hwnd, r, "model")
                 return 1
-            if callable(rec):
-                readback = None if r.get("verified_by") else r.get("after")
-                rec(hwnd, "model", want_model, readback, r, r.get("writer"))
 
         if want_effort is not None:
             # 顺序很重要：必须先选模型再调强度。
@@ -1609,8 +1856,17 @@ def main() -> int:
                     rec(hwnd, "effort", want_effort, None, r, r.get("writer"))
                 _evidence("chatgpt", s, hwnd, r, "effort")
                 return 1
-            if callable(rec):
-                rec(hwnd, "effort", want_effort, r.get("after"), r, r.get("writer"))
+        recorder = globals().get("_record_composite")
+        if callable(recorder) and (done_dims or want_writer is not None):
+            targets = {key: value for key, value in
+                       (("model", want_model), ("effort", want_effort)) if value is not None}
+            readbacks = {dim: (done_dims.get(dim) or {}).get("after")
+                         for dim in ("model", "effort")}
+            overall = recorder(s, hwnd, targets, readbacks)
+            print(json.dumps(overall, ensure_ascii=False))
+            if not overall.get("ok"):
+                _evidence("chatgpt", s, hwnd, overall)
+                return 1
     except ForegroundLost as e:
         # 目标窗口被切走/被盖住：立刻停，后面的点击一个都不发
         print(json.dumps({"ok": False, "stage": "user_took_over",
@@ -1634,4 +1890,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     console.setup()          # 入口编码：GBK 控制台不再被 \u200b 打崩（CARD-08 第 1 条）
-    raise SystemExit(uilock.run("chatgpt_choose", main))
+    raise SystemExit(uilock.entry("chatgpt_choose", main))

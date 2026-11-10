@@ -16,6 +16,10 @@
 """
 from __future__ import annotations
 
+from offline_guard import ensure_offline
+ensure_offline()
+
+
 import sys
 import types
 import unittest
@@ -115,11 +119,18 @@ class SpawnCleanupTests(unittest.TestCase):
         self.assertEqual(closed, [999], "绑定失败要把自己开的窗口关掉")
         saved.assert_not_called()
 
-    def test_spawn_that_never_shows_a_window_closes_late_arrivals(self):
-        """Launch 慢半拍时，事后冒出来的新窗口也不能留在桌面上。"""
+    def test_late_arrivals_are_never_adopted_nor_closed(self):
+        """T1-1：超时之后才出现的窗口**连看都不许再看一眼**。
+
+        F1（独立复核 2026-11-07）：本用例原来传 `timeout=0.0`，等待循环一次都不执行，
+        `seen` 里预备的迟到窗口根本没被读到，`closed == []` 是**平凡成立**的。
+        现在改成 `timeout=1.0`：循环真跑满，再断言**迟到那份快照一次都没被消费**——
+        只要代码回头多枚举一次窗口列表，`seen` 就会被 pop 掉，断言立刻变红。
+        """
         clock = FakeClock()
         closed = []
-        seen = [{7}, {7, 8}]               # 开之前只有 7；超时后 8 才冒出来
+        # before 一次 + 循环 3 次（0.0→0.4→0.8→1.2，超时 1.0）+ 迟到那份留底
+        seen = [{7}, {7}, {7}, {7}, {7, 8}]
 
         with mock.patch.object(browser, "shell32") as shell, \
              mock.patch.object(browser, "_chrome_hwnds",
@@ -128,10 +139,61 @@ class SpawnCleanupTests(unittest.TestCase):
              mock.patch.object(browser, "time", clock):
             shell.ShellExecuteW.return_value = 42
             result = browser._spawn("https://gemini.google.com/app",
-                                    (0, 0), (100, 100), timeout=0.0, verbose=False)
+                                    (0, 0), (100, 100), timeout=1.0, verbose=False)
 
         self.assertIsNone(result)
-        self.assertEqual(closed, [8])
+        self.assertEqual(closed, [], "迟到窗口没有归属证据，一个都不许关")
+        self.assertEqual(len(seen), 1,
+                         "超时后不许再枚举窗口列表——迟到那份快照必须原封不动")
+
+    def test_weak_evidence_window_is_not_closed_when_binding_fails(self):
+        """F2：没给 nonce 时「启动前后恰好多 1 个」只是**弱证据**，绑定失败不许关。
+
+        独立复核实测（repro_a A4）：deepseek 不在 nonce 白名单，等待期恰有一个新窗口
+        被认领，随后 `_focus` 失败 → 旧代码把它关掉了。施工单只允许关"持有本次启动
+        归属证据"的窗口，弱证据不算。
+        """
+        clock = FakeClock()
+        closed = []
+        seen = [{7}, {7, 8}]
+
+        with mock.patch.object(browser, "shell32") as shell, \
+             mock.patch.object(browser, "_chrome_hwnds",
+                               side_effect=lambda: seen.pop(0)), \
+             mock.patch.object(browser, "close", side_effect=closed.append), \
+             mock.patch.object(browser, "place"), \
+             mock.patch.object(browser, "_focus", return_value=False), \
+             mock.patch.object(browser, "_wait_ready", return_value=True), \
+             mock.patch.object(browser, "time", clock):
+            shell.ShellExecuteW.return_value = 42
+            result = browser._spawn("https://chat.deepseek.com/",
+                                    (0, 0), (100, 100), timeout=1.0, verbose=False)
+
+        self.assertIsNone(result)
+        self.assertEqual(closed, [], "弱证据不足以关上任何窗口")
+
+    def test_proven_window_is_still_closed_on_binding_failure(self):
+        """对照组：nonce 已证的窗口**可以**关——否则会把我们自己的孤儿窗口留在桌面上。"""
+        clock = FakeClock()
+        closed = []
+        seen = [{7}, {7, 8}]
+
+        with mock.patch.object(browser, "shell32") as shell, \
+             mock.patch.object(browser, "_chrome_hwnds",
+                               side_effect=lambda: seen.pop(0)), \
+             mock.patch.object(browser, "close", side_effect=closed.append), \
+             mock.patch.object(browser, "_spawn_proves_nonce", return_value=True), \
+             mock.patch.object(browser, "place"), \
+             mock.patch.object(browser, "_focus", return_value=False), \
+             mock.patch.object(browser, "_wait_ready", return_value=True), \
+             mock.patch.object(browser, "time", clock):
+            shell.ShellExecuteW.return_value = 42
+            result = browser._spawn("https://gemini.google.com/app",
+                                    (0, 0), (100, 100), timeout=1.0, verbose=False,
+                                    nonce="abcd1234")
+
+        self.assertIsNone(result)
+        self.assertEqual(closed, [8], "归属已证，失败时要清掉自己的窗口")
 
     def test_reusing_a_user_window_never_closes_it(self):
         """复用用户的窗口失败时只报现场，不许关人家的窗口。"""

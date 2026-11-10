@@ -21,6 +21,7 @@ import json
 import os
 import sys
 import time
+from urllib.parse import urlsplit
 
 import cv2
 
@@ -67,28 +68,171 @@ def _items_visible(s) -> bool:
     return any(s.find(f"gem_item_{k}", threshold=0.85, region=_win(s)) is not None for k in CFG.options)
 
 
+DEBUG_DIR = os.path.join(_SRC, "..", "evidence", "fail")
+
+# 芯片按钮的 UIA 名字（实测形态：`打开模式选择器，当前模式为“Argon”`）。
+# Gemini 把"模型"叫"模式"，两个词都收，换文案时至少中一个。
+CHIP_MARKS = ("当前模式为", "当前模型为")
+
+
+def _chip_probe(s):
+    """只读地找芯片按钮，并带回"为什么没找到"：(node, 名字, why, url)。
+
+    why:
+      · ok                —— 找到了
+      · document_unbound  —— 连 Gemini 文档都没绑上（窗口里不是 Gemini 页 / 读不到）
+      · no_chip           —— 文档绑上了，但页面上没有模型芯片
+
+    2026-11-07 现场（05:17:27，hwnd=67552）：只回了 `menu_not_open/no_chip`，
+    分不清"不是 Gemini 页"和"这一页本来就没有芯片"。两种原因要分开报，
+    否则下一个人只能靠猜（本次只读复核：同一个 hwnd 在 `/app` 新对话页上
+    芯片是 `打开模式选择器，当前模式为“Flash”`，read_model=flash/source=uia）。
+    """
+    try:
+        from qi import ui
+        control, url = ui.document(s.target_hwnd, "gemini")
+        root = ui.tree(control)
+    except Exception as exc:                # noqa: BLE001 - UIA 不可用就退回模板路径
+        return None, "", "document_unbound", f"{type(exc).__name__}: {exc}"
+    for node in root.walk():
+        if node.kind != "ButtonControl":
+            continue
+        name = (node.name or "").strip()
+        if name and any(mark in name for mark in CHIP_MARKS):
+            return node, name, "ok", url
+    return None, "", "no_chip", url
+
+
+def _chip_node(s):
+    """当前模型芯片的 UIA 按钮：(node, 名字) 或 None。
+
+    为什么要有它：旧实现靠"麦克风往左 68px"这个**像素偏移**点芯片，
+    芯片宽度/位置一变就点到空白，表现就是 menu_not_open。
+    按钮名是**控制身份**，不受布局影响；点它自己也不会点错。
+    """
+    node, name, _why, _url = _chip_probe(s)
+    return None if node is None else (node, name)
+
+
+def _is_new_chat_url(url) -> bool:
+    """模型芯片只在新对话页（`/app`）出现；会话页是 `/app/<id>`。"""
+    try:
+        return urlsplit(str(url or "")).path.rstrip("/") == "/app"
+    except (TypeError, ValueError):
+        return False
+
+
+def _is_conversation_url(url) -> bool:
+    """看起来就是一个 Gemini 会话页（`gemini.google.com/app/<id>`）。"""
+    try:
+        parts = urlsplit(str(url or ""))
+    except (TypeError, ValueError):
+        return False
+    host = (parts.hostname or "").lower()
+    path = parts.path.rstrip("/")
+    return host.endswith("gemini.google.com") and path.startswith("/app/") and len(path) > 5
+
+
+def _chip_missing_hint(why: str, url) -> str:
+    """芯片找不到时的**准确**原因（不是"再试试"）。"""
+    if why == "document_unbound":
+        return f"当前窗口的活动文档不是 Gemini 页面（或读不到）：{url}"
+    if _is_conversation_url(url):
+        return (f"模型选择器只在新对话页（/app）出现，当前是 {url}："
+                "先 --new 开新对话再选模型")
+    return "找不到模型芯片（UIA 和麦克风锚点都没认出来）"
+
+
+def _chip_tail(name: str) -> str:
+    """从按钮名里取档位词：`…当前模式为“Argon”` -> `Argon`。"""
+    for mark in CHIP_MARKS:
+        if mark in name:
+            tail = name.split(mark, 1)[1]
+            return tail.strip().strip("“”\"'’‘›>").strip()
+    return ""
+
+
+def _model_from_uia(s, probe=None):
+    """UIA 读模型：读不到芯片返回 None（交给菜单路径）；读到但认不出返回 unknown。"""
+    node, name, _why, _url = probe or _chip_probe(s)
+    if node is None:
+        return None
+    tail = _chip_tail(name) or name
+    key = None
+    try:
+        from qi.chip import GEMINI_MODEL_NAMES
+        key = GEMINI_MODEL_NAMES.get(tail.lower())
+    except Exception:                       # noqa: BLE001
+        key = None
+    if key is None:
+        low = tail.lower()
+        key = next((k for k, label in CFG.options.items()
+                    if k.replace("_", " ") in low or label.split("（")[0].strip().lower() in low),
+                   None)
+    if key in CFG.options:
+        return {"model": key, "text": name, "chip": tail, "source": "uia"}
+    return {"model": "unknown", "text": name, "chip": tail, "source": "uia",
+            "hint": f"UIA 芯片读到 {tail!r}，不在已知模型清单里，不能确认"}
+
+
 # 芯片右端的下拉箭头相对**麦克风**的偏移。
 # 不能对输入框锚点用固定偏移：芯片左边界随模型名长短变（Flash-Lite 宽、Pro 短），
 # 固定偏移在名字短的时候会点到空白，表现为"菜单打不开"。
 # 麦克风是右对齐的，位置不变，用它当基准稳。
+# **2026-11-07 起这只是兜底**：优先点 UIA 认出来的芯片按钮本身（见 _chip_node）。
 MIC_TO_CARET = (-68, 0)
 
 
-def _open_model_menu(s) -> bool:
-    """用麦克风（右对齐，位置固定）作基准，点芯片右端的下拉箭头。
+def _open_model_menu(s):
+    """打开模型菜单。返回 "open" / "clicked_unverified" / "no_chip"。
 
-    输入框空时右侧是麦克风；有文字时是发送键，两者同槽位，所以依次兜底。
+    顺序：已经是开的 -> 点 UIA 芯片按钮 -> 老办法（麦克风往左 68px）。
+    点完一律用"菜单项能不能匹到"确认，**不确认就不往下点**。
     """
     if _items_visible(s):
-        return True
+        return "open"
     s.press("esc")
     time.sleep(0.3)
-    base = s.find("gem_mic", threshold=0.85, region=_win(s)) or s.find("gem_send_on", threshold=0.85, region=_win(s))
+    got = _chip_node(s)
+    if got is not None:
+        node, _name = got
+        clicked = False
+        try:
+            from qi import ui
+            ui.click(s, node)
+            time.sleep(1.1)
+            clicked = True
+        except Exception:                   # noqa: BLE001 - 控件失效就退回偏移
+            clicked = False
+        if _items_visible(s):
+            return "open"
+        if clicked:
+            # 芯片点到了但菜单项模板一个都没匹上：模板过期的典型症状，别再乱点
+            return "clicked_unverified"
+    base = s.find("gem_mic", threshold=0.85, region=_win(s)) or s.find(
+        "gem_send_on", threshold=0.85, region=_win(s))
     if base is None:
-        return False
+        return "no_chip"
     s.click(base, offset=MIC_TO_CARET)
     time.sleep(1.1)
-    return _items_visible(s)
+    return "open" if _items_visible(s) else "clicked_unverified"
+
+
+def _evidence(s, tag: str) -> str | None:
+    """菜单/选项读不出来时留一张现场图，方便重截模板。失败不影响主流程。"""
+    try:
+        win = _win(s)
+        if not win:
+            return None
+        img = s.grab(win)
+        if img is None or not getattr(img, "size", 0):
+            return None
+        os.makedirs(DEBUG_DIR, exist_ok=True)
+        path = os.path.join(DEBUG_DIR, f"gemini_{tag}_{time.strftime('%Y%m%d-%H%M%S')}.png")
+        cv2.imwrite(path, img)
+        return path
+    except Exception:                       # noqa: BLE001
+        return None
 
 
 CHECK_INK_BOX = (-26, 3, 22, 22)      # 勾的取样窗：相对标题模板左上角 (dx, dy, w, h)
@@ -113,15 +257,34 @@ def _check_ink(band) -> int:
 
 
 def read_model(s) -> dict:
-    """读当前模型：看菜单项**左侧**有没有勾。
+    """读当前模型：优先 UIA 芯片按钮（精确文本 + 控制身份），再退回"开菜单看勾"。
 
-    CARD-07 第 4 条：2026-11-02 的菜单换了排版，旧采样窗 (m.x-45, m.y+10, 26, 24)
-    从 m.y+10 起、到 m.x-19 止，把勾（垂直居中、离标题左边缘 12~18px）整个错过去，
-    四个档位全读成 0、model=unknown。现在采「标题左侧紧邻的一小块」，
-    并且用 `_check_ink` 按形状认勾（顺手排掉第一项的焦点框）。
+    2026-11-07：旧实现只会开菜单看勾，而开菜单靠"麦克风往左 68px"这个像素偏移；
+    偏移一失效就同时得到 menu_not_open 和 model=unknown（执行方看到的就是这两个）。
+    UIA 按钮名（`…当前模式为“Argon”`）不依赖布局，读到就是读到，读不到才走老路。
     """
-    if not _open_model_menu(s):
-        return {"model": "unknown", "hint": "打不开模型菜单"}
+    probe = _chip_probe(s)
+    uia = _model_from_uia(s, probe)
+    if uia is not None:
+        return uia
+    node, _name, why, url = probe
+    # 文档都没绑上 / 是会话页：**先把原因报清楚，不去点**（老实现会去点麦克风
+    # 左边 68px 那块空白，既证明不了什么，也可能点到别的东西）。
+    if node is None and why in ("document_unbound", "no_chip") \
+            and (why == "document_unbound" or _is_conversation_url(url)):
+        return {"model": "unknown", "source": "none", "detail": why,
+                "stage": "menu_not_open", "url": url, "clicks": 0,
+                "hint": _chip_missing_hint(why, url)}
+    st = _open_model_menu(s)
+    if st != "open":
+        no_chip = st == "no_chip"
+        return {"model": "unknown", "source": "none",
+                "detail": (why or "no_chip") if no_chip else st,
+                "stage": "menu_not_open" if no_chip else "menu_items_unreadable",
+                "url": url,
+                "hint": (_chip_missing_hint(why, url) if no_chip
+                         else "芯片点到了，但菜单项模板一个都没匹到：模板可能过期，"
+                              "按卡面不下调阈值、不猜着点")}
     ink = {}
     dx, dy, w, h = CHECK_INK_BOX
     for k in CFG.options:
@@ -131,19 +294,40 @@ def read_model(s) -> dict:
     s.press("esc")
     time.sleep(0.3)
     if not ink:
-        return {"model": "unknown", "hint": "模型项一个都没定位到"}
+        return {"model": "unknown", "source": "menu",
+                "hint": "模型项一个都没定位到"}
     best = max(ink, key=ink.get)
-    return {"model": best if ink[best] > 5 else "unknown", "ink": ink}
+    return {"model": best if ink[best] > 5 else "unknown", "ink": ink, "source": "menu"}
 
 
 def set_model(s, key: str) -> dict:
     if key not in CFG.options:
         return {"ok": False, "stage": "bad_arg", "want": key, "options": list(CFG.options)}
+    # 先做**只读**判断：页面不对就一个东西都不点（连 Esc 都不按）。
+    # 会话页（/app/<id>）没有模型选择器；老实现会去点"麦克风左边 68px"那块空白。
+    node, _name, why, url = _chip_probe(s)
+    if node is None and why == "document_unbound":
+        return {"ok": False, "stage": "document_unbound", "before": None, "want": key,
+                "detail": url, "clicks": 0,
+                "hint": "当前窗口的活动文档不是 Gemini 页面（或读不到）：先切到 Gemini 标签页；"
+                        "本次没有点任何东西"}
+    if node is None and why == "no_chip" and _is_conversation_url(url):
+        return {"ok": False, "stage": "page_not_new_chat", "before": None, "want": key,
+                "url": url, "clicks": 0,
+                "hint": "模型选择器只在新对话页（/app）出现：先 --new 开新对话再选；"
+                        "本次没有点任何东西"}
     cur = read_model(s)["model"]
     if cur == key:
         return {"ok": True, "stage": "already", "before": cur, "after": cur}
-    if not _open_model_menu(s):
-        return {"ok": False, "stage": "menu_not_open", "before": cur}
+    st = _open_model_menu(s)
+    if st != "open":
+        shot = _evidence(s, "menu" if st == "no_chip" else "items")
+        return {"ok": False,
+                "stage": "menu_not_open" if st == "no_chip" else "menu_items_unreadable",
+                "before": cur, "want": key, "detail": st, "evidence_shot": shot,
+                "hint": (_chip_missing_hint(why, url) if st == "no_chip" else
+                         "芯片点到了但菜单项模板全部失配（模板可能过期）："
+                         "已留现场图，未点任何选项、未下调阈值")}
     m = s.find(f"gem_item_{key}", threshold=0.88, region=_win(s))
     if m is None:
         s.press("esc")
@@ -213,6 +397,7 @@ def main() -> int:
     if not sc.focus():
         print("窗口提不到前台")
         return 1
+    sc.tab_site = "gemini"
     time.sleep(1.2)
 
     try:
@@ -264,4 +449,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     console.setup()          # 入口编码：GBK 控制台不再被 \u200b 打崩（CARD-08 第 1 条）
-    raise SystemExit(uilock.run("gemini_choose", main))
+    raise SystemExit(uilock.entry("gemini_choose", main))

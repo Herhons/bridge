@@ -1,0 +1,59 @@
+# CHANGES_09a-workflow-concurrency — isolated WIP self-test
+
+状态：实施与离线自测完成；未合并、未通知、未取得其他厂商独立验收。
+
+原目录：`F:\Bridge\v0.0.9`（只读）；WIP：`F:\Bridge\v0.0.9_codex_wip`。复制基线：COPY_BASELINE.json。
+
+progress.locked新增显式file_path参数，默认notify_done/progress.write的锁名保持不变；server workflow_move在同一目标文件的完整读改写锁内重新读取、验证、合并和原子保存。工作流CLI的move/advance/resolve_hold也接相同事务锁，避免另一个入口留下并发覆盖。新增真实无UI子进程progress.write在server写前竞争、相反锁顺序、CLI与通知写者竞争，以及非法迁移/落盘失败释放负例，验证card_id/note/verdicts/queue和workflow迁移同时保留。只操作临时进度文件；未执行任何外部通知。
+
+## 验证
+
+命令：`py -3.10 -X utf8 -B -m unittest discover -s tests -v`
+
+开始时间（Asia/Shanghai）：2026-11-06T04:49:00.691855+08:00
+
+```text
+Ran 784 tests in 42.945s
+OK
+EXIT=0
+GUARD_EVENTS=0
+```
+
+完整输出：`unittest_workflow_full1.txt`；结构化结果：`unittest_workflow_full1_result.json`。
+
+## 相对复制基线的累计差异
+
+修改：
+
+- `docs/exit-codes.md`
+- `docs/tiers.json`
+- `src/qi/chip.py`
+- `src/qi/gemini.py`
+- `src/qi/progress.py`
+- `src/qi/server.py`
+- `src/qi/tier_guard.py`
+- `src/qi/uilock.py`
+- `src/qi/workbuddy.py`
+- `src/qi/workflow.py`
+- `src/scripts/chatgpt_choose.py`
+- `src/scripts/grok_use.py`
+- `tests/test_card06a.py`
+- `tests/test_card06c.py`
+- `tests/test_card07.py`
+
+新增代码/测试支持文件：
+
+- `src/qi/submissions.py`
+- `tests/offline_guard/sitecustomize.py`
+- `tests/test_rework06a_purpose.py`
+- `tests/test_rework06b_presend.py`
+- `tests/test_rework06c_composite.py`
+- `tests/test_rework07_attribution.py`
+- `tests/test_rework09a_idempotency.py`
+- `tests/test_rework09a_lock.py`
+- `tests/test_rework09a_workflow.py`
+- `tests/test_rework09f_recovery.py`
+
+累计统一diff：`patches/09a-workflow-concurrency.patch`；该阶段源码快照：`checkpoints/09a-workflow-concurrency.json`。
+
+运行产物（日志、临时文件、CHANGES、patch、checkpoints）不算产品修改。后续阶段可能继续改同一文件，以此快照与diff追溯本阶段。最终原目录完整性另见ORIGINAL_INTEGRITY.json。

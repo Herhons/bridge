@@ -42,6 +42,26 @@ class Site:
     clear_draft_on_new: bool = False   # --new 之后有残留草稿就清空（第 4 条）
     paste_plain: bool = False          # 打字核对不上时改用粘贴纯文本（第 5 条）
     uia_fallback: bool = False         # 超时/被打断后按页面标记读最后一条回复（第 3 条）
+    # ---- B17：本端已经有了「空的新对话页」时，`--new` 不要再点一次新聊天 ----
+    # chatgpt 新版界面把模型选择做成**按会话**的：再点一次「新聊天」模型就回到
+    # 默认（强度是账号级的，反而留着）。于是 choose 刚设好的模型会被 use 抹掉，
+    # 档位闸报 tier_drift（2026-11-09 真机）。给一个 `screen -> bool` 判据，
+    # 判得出来就不点；判不出来（None/异常）走老路，行为不变。
+    blank_new: object = None
+    # ---- B19：写入/判空的两处加固（默认全关，别端行为一个字节不变）----
+    # 粘贴必须确认落地：没落地就抛 WriteNotLanded、清空重写，而不是静默返回后
+    # 让 input_mismatch 顶锅（deepseek 2450 字只写进前 3 个字的根因）。
+    write_verify: bool = False
+    # 输入框里是"本提问的前缀"时，认成自己上一轮的残草清掉，不报 draft_present。
+    adopt_self_draft: bool = False
+    # 判空以输入框文本为准（文本明确为空就是空），不看发送键可用态。
+    # deepseek 有草稿时按钮本来就深蓝，旧判据会把它自己的残草当成用户草稿。
+    empty_by_text: bool = False
+    # 本端的占位文字（gemini 的「问问 Gemini」不在公共 KNOWN_PLACEHOLDERS 里）。
+    placeholders: tuple = ()
+    # 单次粘贴的字数上限（0 = 不分块）。deepseek 实测：单次粘贴 >2000 字会被
+    # 整段吞掉，分块之后总量可以远超 2000。
+    paste_chunk: int = 0
 
 
 def _win(s: Screen, site: Site):
@@ -106,6 +126,12 @@ def _open_new_chat(s: Screen, site: Site) -> dict:
     """
     if not site.newchat:
         return {"ok": True, "stage": "skipped"}
+    if callable(getattr(site, "blank_new", None)):
+        try:
+            if site.blank_new(s):
+                return {"ok": True, "stage": "already_new", "basis": "blank_new"}
+        except Exception:                    # noqa: BLE001 - 判不出来就走老路
+            pass
     if site.name == "deepseek":
         target = s.find("ds_newchat", region=s.window_rect())
         if target is None:
@@ -166,6 +192,19 @@ def _empty_probe(s: Screen, site: Site):
     limit = max(site.send_threshold, 0.95)
 
     def probe(view):
+        # B19：文本优先。文本判据说"空"就是空——不看发送键。
+        #
+        # 为什么需要这一条：deepseek 有草稿时发送键本来就是深蓝，粘失败留下的
+        # "提问前 3 个字"于是被旧判据当成用户草稿，之后每次 draft_present
+        # （真机连挂 3 次）。反过来不会更严：文本判非空或读不出来时，仍旧落回
+        # 下面的按钮判据，其它端行为不变。
+        if site.empty_by_text:
+            try:
+                from .conversation import composer_empty
+                if composer_empty(view, placeholders=site.placeholders):
+                    return True
+            except Exception:                          # noqa: BLE001 - 读不出来就走老路
+                pass
         if any(n.kind == "ButtonControl" and n.name in SEND and n.control.IsEnabled
                for n in view.root.walk()):
             return False
@@ -196,8 +235,13 @@ def composer_node(root, site: Site):
     return visible_editor(root, site.name)
 
 
-def looks_empty(text, editor) -> bool:
-    """输入框文本是不是"空的"（含占位文字这一态）。"""
+def looks_empty(text, editor, placeholders=()) -> bool:
+    """输入框文本是不是"空的"（含占位文字这一态）。
+
+    B19：多接一个 `placeholders`，让各端把自己那串占位文字传进来。
+    gemini 的「问问 Gemini」不在公共 `KNOWN_PLACEHOLDERS` 里，于是"本来就空"会
+    被判成"还有 10 字"，`clear_composer` 每次都误报 `draft_clear_failed`。
+    """
     from .conversation import KNOWN_PLACEHOLDERS
 
     key = ui.canonical(text or "")
@@ -205,7 +249,8 @@ def looks_empty(text, editor) -> bool:
         return True
     if editor is not None and key == ui.canonical(editor.name or ""):
         return True
-    return str(text or "").strip() in KNOWN_PLACEHOLDERS
+    known = set(KNOWN_PLACEHOLDERS) | {p for p in (placeholders or ()) if p}
+    return str(text or "").strip() in known
 
 
 def clear_composer(s: Screen, site: Site) -> dict:
@@ -224,7 +269,7 @@ def clear_composer(s: Screen, site: Site) -> dict:
         before = ui.edit_value(editor.control)
     except (RuntimeError, COMError, UiDocsLost) as exc:
         return {"ok": False, "stage": "composer_not_found", "hint": str(exc)}
-    if looks_empty(before, editor):
+    if looks_empty(before, editor, site.placeholders):
         return {"ok": True, "stage": "already_empty"}
     try:
         ui.click(s, editor)
@@ -237,7 +282,7 @@ def clear_composer(s: Screen, site: Site) -> dict:
     except (RuntimeError, COMError, UiDocsLost) as exc:
         return {"ok": False, "stage": "draft_clear_failed", "hint": str(exc),
                 "before": str(before)[:80]}
-    if not looks_empty(after, editor):
+    if not looks_empty(after, editor, site.placeholders):
         return {"ok": False, "stage": "draft_clear_failed",
                 "hint": f"清空后读回仍有 {len(after)} 字",
                 "before": str(before)[:80], "after": str(after)[:80]}
@@ -307,6 +352,7 @@ def ask(site: Site, prompt: str, *, mode: str = "new", timeout: float = 180.0,
     screen.bind(hwnd)
     if not screen.focus():
         return {**result, "stage": "page_not_front"}
+    screen.tab_site = site.name
     try:
         zoom_mod.ensure(screen, verbose=verbose)
         if mode == "new":
@@ -330,7 +376,7 @@ def ask(site: Site, prompt: str, *, mode: str = "new", timeout: float = 180.0,
         door = None
         if purpose is not None:
             def door():
-                return sendgate.pre_send(screen, site.name, purpose)
+                return sendgate.pre_send(screen, site.name, purpose, reread=reread)
         images = (site.actions, site.copy) if site.screen_reply else None
         # 第 3 条的归属基线：发送前树里有几条回复动作条
         baseline = 0
@@ -344,8 +390,15 @@ def ask(site: Site, prompt: str, *, mode: str = "new", timeout: float = 180.0,
             watch = _watch_for(lastreply, prompt, baseline)
         result = send_and_receive(
             Conversation(screen, site.name, empty=_empty_probe(screen, site),
-                         images=images), prompt, timeout, pre_send=door,
-            plain=site.paste_plain, watch=watch)
+                         images=images,
+                         # B19：两个开关默认关，只有 deepseek 打开
+                         write_verify=site.write_verify,
+                         adopt_self_draft=site.adopt_self_draft,
+                         paste_chunk=site.paste_chunk), prompt, timeout, pre_send=door,
+            plain=site.paste_plain, watch=watch,
+            # T2-1：把用途透传下去，`conversation.ask` 据此决定是否接提交账本。
+            # 不给 purpose 就等于不记账（老行为）；chatgpt/deepseek 走这条路。
+            purpose=purpose)
         if not result.get("ok"):
             fallback = uia_answer(screen, site, prompt, result, baseline)
             if fallback is not None:
@@ -420,6 +473,7 @@ def read_last(site: Site, *, tab: int | None = None, verbose: bool = True) -> di
     screen.bind(hwnd)
     if not screen.focus():
         return {"ok": False, "stage": "page_not_front", "submission": None, "sent": None}
+    screen.tab_site = site.name
     try:
         control, url = ui.document(hwnd, site.name)
         root = ui.tree(control)

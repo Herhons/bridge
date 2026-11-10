@@ -1,0 +1,78 @@
+{
+  "job_id": "20261109T232646-c16e9081",
+  "request_id": "569f39a7-15bd-4a55-9ed8-28f2e4e222e5",
+  "status": "failed",
+  "purpose": "test",
+  "prompt": "你是资深软件架构评审。下面是一个真实系统的结构与量化统计（不贴源码）。请只基于这些信息给优化建议，不要泛泛而谈。\n\n【这是什么系统】\nBridge v0.0.9：用 Windows UI Automation 控件树、像素模板匹配和剪贴板，把 4 个网页端（ChatGPT、Gemini、Grok、DeepSeek）和 4 个桌面端（Codex、OpenCode、DeepSeek Harness、WorkBuddy）变成可编程调用的\"模型席位\"。本地 HTTP 后端收 /ask 后，按 endpoint 逐个驱动窗口：先选档（模型、推理强度、深度思考），读回确认后写一张\"档位回执\"，再发提问、收回答、落证据。目的是让多个异构模型对同一问题作答并可审计。\n\n【硬约束，请不要建议突破】\n· 前台只有一个焦点：choose 和 use 全程持一把跨进程文件锁 uilock，四个席位是串行的，endpoint_concurrency=1 是必然而不是偷懒。\n· 一个 job 最多 4 席（max_endpoints_per_job=4）。\n· 只能靠 UIA、像素模板、剪贴板，不能修改这些第三方客户端。\n· 不引入新依赖（现有 comtypes、opencv、numpy；测试只用标准库 unittest）。\n· 界面会动画、懒加载、抢焦点、出人机验证，所以\"读回确认\"比\"点击成功\"重要。\n\n【规模】\n代码行按 token 行统计，已剔除空行与注释。\nsrc/qi（内核）：37 个文件，16325 总行，11397 代码行。\nsrc/scripts（CLI）：20 个文件，13609 总行，9629 代码行。\ntools：32 个文件，2911 总行，2198 代码行。\ntests：98 个文件，23156 总行，18025 代码行。\nsrc/chrome-extension：4 个文件，1600 总行，207 代码行。\n测试共 98 个 test 文件、1452 个用例，全部离线运行（真机 UI 被守卫禁止）。\n内核 36 个模块，CLI 20 个模块。\n依赖边：内核内部 126 条，CLI 到内核 96 条，CLI 之间只有 1 条。\n\n【分层】\nChrome 扩展 → qi.server（调度、预算、quorum、证据落盘）→ src/scripts 的 choose 与 use 成对 CLI → qi 内核（锁、定位、闸门、会话）→ docs 下的档位表与服务配置、runs 下的运行日志。\n\n【依赖枢纽，括号内是全仓入度，即被多少模块 import】\nuilock（26）、tier_guard（19）、ui（17）、window（15）、console（14）、guard（12）、failure（11）、desk（11）、runlog（10）。\n另外发现 3 处互相 import：browser 与 screen、browser 与 ui、conversation 与 submissions。\n\n【重复代码，相似度为上界近似】\ndsh_choose 与 dsh_use：0.94，35 个同名函数。\ncodex_choose 与 codex_use：0.93，35 个同名函数。\nopencode_choose 与 opencode_use：0.91，42 个同名函数。\n其余三对（grok、gemini、deepseek）只有 0.23 到 0.33，因为它们的 use 复用共享流程 qi/flow.py，choose 只管选档。\n\n【测试覆盖的静态缺口】\n内核里有 3 个模块从未在测试源码中出现：desk_sites、lastreply、reject。\n\n【今天刚修的真实故障，用来判断是否存在系统性风险】\n第一，dsh 模型面板。面板里\"当前选中\"那一行是浅灰 244，而白块检测阈值是大于 250，于是同一块面板被切成上下两段；代码只取面积最大的单块，拿到的是下段，点击就落在模型行而不是搜索框；紧接着无条件按 Ctrl+A 选中整页，芯片变成白字蓝底，模板相似度从 0.956 掉到 0.348，系统于是误判\"档位没设上\"并拒发。修法是把同 x、同宽、竖直相邻的碎块合并成一个矩形，强制先折叠选中，Ctrl+A 只在搜索框确有残留时才发。\n第二，grok 输入框换成 ComboBoxControl 后，Ctrl+V 之后约 1.3 秒文本才进 UIA 的 Value；旧代码 0.35 秒就还原用户剪贴板，导致粘贴被打断，只写进前 3 个字。\n第三，chatgpt 新版把模型做成按会话隔离的，再点一次\"新聊天\"会把已设模型抹掉（强度是账号级的反而保留）；改为判断\"已经是空的新对话\"就跳过点击。\n第四，dsh 复制回答时，回答动作条还没渲染就点在旧坐标上，复制到的是提问本身；改为有界等待，条数一变就重试。\n\n【请回答】\n在不改运行模型（单前台、串行）、不加依赖的前提下，给出最多 5 条最有价值的优化，按收益与风险之比从高到低排序。每条必须写清四件事：针对哪个模块或文件；具体怎么改，要能落到函数级；风险是什么；如何验证，不能只写\"跑一遍看看\"，要能构造离线用例。\n另外单独回答一个问题：上面三对相似度 0.9 以上的 choose 与 use 副本，你认为应该合并还是保留，请给判据而不是口号。\n\n【输出格式】\n用中文，1200 字以内，每条以\"一、\"到\"五、\"开头。不要客套，不要复述我给你的统计数字。",
+  "created_at": "2026-11-09T15:26:46+00:00",
+  "started_at": "2026-11-09T15:26:46+00:00",
+  "finished_at": "2026-11-09T15:26:52+00:00",
+  "order": [
+    "deepseek"
+  ],
+  "endpoints": {
+    "deepseek": {
+      "status": "failed",
+      "reply": null,
+      "error": {
+        "code": "draft_present",
+        "message": "当前输入框已有草稿",
+        "step": "use",
+        "exit_code": 1
+      },
+      "error_code": "draft_present",
+      "exit_code": 1,
+      "choose": {
+        "ok": true,
+        "dimension": "think",
+        "target": "off",
+        "readback": "off",
+        "targets": {
+          "think": "off"
+        },
+        "confirmed": true,
+        "exit_code": 0,
+        "timeout": false,
+        "elapsed": 3.797,
+        "error_code": null,
+        "error_message": null,
+        "stderr": ""
+      },
+      "use": {
+        "ok": false,
+        "stage": "draft_present",
+        "reply": null,
+        "exit_code": 1,
+        "timeout": false,
+        "elapsed": 1.656,
+        "error_code": "draft_present",
+        "error_message": "当前输入框已有草稿",
+        "stderr": ""
+      },
+      "started_at": "2026-11-09T15:26:46+00:00",
+      "finished_at": "2026-11-09T15:26:52+00:00",
+      "elapsed": 5.7,
+      "evidence_l1": {
+        "job_id": "20261109T232646-c16e9081",
+        "request_id": "569f39a7-15bd-4a55-9ed8-28f2e4e222e5",
+        "at": "2026-11-09T15:26:46+00:00",
+        "source": "server"
+      },
+      "progress": {
+        "schema_version": 1,
+        "job_id": "20261109T232646-c16e9081",
+        "endpoint": "deepseek",
+        "pid": 31864,
+        "at": "2026-11-09T23:26:52+0800",
+        "stage": "finished",
+        "outcome": "draft_present"
+      }
+    }
+  },
+  "quorum": {
+    "required": 1,
+    "recovered": 0,
+    "met": false,
+    "clamped": true
+  }
+}

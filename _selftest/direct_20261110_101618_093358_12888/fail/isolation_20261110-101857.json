@@ -1,0 +1,24 @@
+{
+ "schema_version": 1,
+ "endpoint": "isolation",
+ "stage": "tier_unconfirmed",
+ "reason": "isolation-778f73001ae44faf886513dc96d03c3e",
+ "code": null,
+ "at": "2026-11-10T10:18:57+0800",
+ "hwnd": null,
+ "window": {
+  "rect": null,
+  "zoom_percent": null
+ },
+ "templates": [],
+ "hint": "intentional synthetic offline failure",
+ "result": {
+  "ok": false,
+  "stage": "tier_unconfirmed",
+  "reason": "isolation-778f73001ae44faf886513dc96d03c3e",
+  "hint": "intentional synthetic offline failure"
+ },
+ "extra": {},
+ "screenshot": "F:\\Bridge\\v0.0.9\\_selftest\\direct_20261110_101618_093358_12888\\fail\\isolation_20261110-101857.png",
+ "deduped": null
+}

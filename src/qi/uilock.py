@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import json
 import os
+import secrets
 import threading
 import time
 from contextlib import contextmanager
@@ -53,7 +54,24 @@ META_SIZE = 4096          # 前 4KB 放元数据
 LOCK_OFFSET = 4096        # 被锁的字节；写在元数据之后，互不干扰
 DEFAULT_TIMEOUT = 60.0
 POLL = 0.05
+#: 一段桌面操作（聚焦/粘贴/点击/复制）最多等多久拿到锁。**不是**整轮预算。
+#: 2026-11-08（B14）：20 → 60。并发时会审的 choose 子进程是**整轮持锁**的，
+#: 它一跑十几秒，别的席的发送段如果只等 20s 就会白白丢掉一次发送（stage=ui_busy）。
+#: 这里只放大"等锁上限"，互斥语义一个字没变。
+SECTION_TIMEOUT = 60.0
+#: 同端回合锁的整轮上限（要盖住 review 的 1500s + 收尾）。
+TURN_TIMEOUT = 1800.0
+#: `=1` 时入口走"分段持锁"（B13b）：只在桌面动作处短锁，等回答期间放锁。
+SECTIONED_ENV = "BRIDGE_UI_SECTIONED"
+#: `=1` 时说明"有别的席位在同时抢桌面"（前台是共享资源）。
+CONCURRENT_ENV = "BRIDGE_UI_CONCURRENT"
 
+# Parent delegation is an accidental-misuse boundary, not a sandbox against a
+# malicious local user who can edit this code/metadata. Environment alone never
+# bypasses a lock: exact parent/child identities, a per-launch capability, and a
+# live kernel lock must all agree. The child retains a shared kernel lease even
+# if the parent exits; unrelated CLIs cannot enter until that child exits too.
+DELEGATION_ENV = "BRIDGE_UI_LOCK_DELEGATION"
 _LOCAL = threading.local()
 
 
@@ -65,8 +83,17 @@ class Busy(RuntimeError):
 
 
 # ---------------------------------------------------------------- 路径 / 时间
-def lock_path(root: str | Path | None = None) -> Path:
+def lock_path(root: str | Path | None = None, name: str | None = None) -> Path:
+    """UI 锁的路径。
+
+    `name=None` → 桌面操作那把全局锁（`runs/ui.lock`）。
+    `name="gemini"` → 该端的**回合锁**（`runs/turn/gemini.lock`），
+    只在"同一个端被两个自动化同时动"时起作用，与桌面锁互不干扰（不同 path，可嵌套）。
+    """
     base = Path(root) if root is not None else ROOT
+    if name:
+        safe = "".join(ch if (ch.isalnum() or ch in "-_") else "_" for ch in str(name))[:40]
+        return base / "runs" / "turn" / f"{safe}.lock"
     return base / "runs" / LOCK_NAME
 
 
@@ -149,7 +176,10 @@ def process_start_time(pid) -> int | None:
                 kernel32.CloseHandle(handle)
         except Exception:                    # noqa: BLE001 - 诊断信息，不许带崩主流程
             return None
-    return None
+    try:                                      # POSIX identity, no guessed PID
+        return int(Path(f"/proc/{value}/stat").read_text().rsplit(")", 1)[1].split()[19])
+    except (OSError, ValueError, IndexError):
+        return None
 
 
 # ---------------------------------------------------------------- 文件与字节锁
@@ -164,7 +194,16 @@ def _open(path: Path):
     try:
         handle = open(path, "r+b", buffering=0)
     except FileNotFoundError:
-        handle = open(path, "w+b", buffering=0)
+        try:
+            handle = open(path, "w+b", buffering=0)
+        except PermissionError as exc:
+            raise Busy(f"ui lock not creatable: {path} ({exc})") from exc
+    except PermissionError as exc:
+        # 2026-11-07 实测：另一个自动化进程正持锁时，锁文件可能连打开都被拒绝
+        # （独占共享模式 / ACL）。这不是"程序出错"，是"UI 被占着"——
+        # 必须按 ui_busy（退出码 8）干净退出，绝不把 traceback 甩给调用方，
+        # 也绝不绕过锁去点桌面。
+        raise Busy(f"ui lock not openable: {path} ({exc})") from exc
     handle.seek(0, os.SEEK_END)
     if handle.tell() < LOCK_OFFSET + 1:
         handle.write(b"\0" * (LOCK_OFFSET + 1 - handle.tell()))
@@ -242,79 +281,279 @@ def _holder_dead(meta: dict) -> bool:
     return False
 
 
+# ---------------------------------------------------------------- 父子代持
+def _aux_lock(handle, *, shared=False):
+    """Shared lifetime lease or exclusive child-entry lock (separate files)."""
+    if os.name != "nt":                        # pragma: no cover - Windows host
+        import fcntl
+        fcntl.flock(handle.fileno(), (fcntl.LOCK_SH if shared else fcntl.LOCK_EX)
+                    | fcntl.LOCK_NB)
+        return
+    import ctypes
+    import msvcrt
+    from ctypes import wintypes
+
+    class OVERLAPPED(ctypes.Structure):
+        _fields_ = [("Internal", ctypes.c_size_t), ("InternalHigh", ctypes.c_size_t),
+                    ("Offset", wintypes.DWORD), ("OffsetHigh", wintypes.DWORD),
+                    ("hEvent", wintypes.HANDLE)]
+
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    fn = kernel.LockFileEx
+    fn.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.DWORD,
+                   wintypes.DWORD, wintypes.DWORD, ctypes.POINTER(OVERLAPPED)]
+    fn.restype = wintypes.BOOL
+    overlap = OVERLAPPED(Offset=LOCK_OFFSET)
+    if not fn(msvcrt.get_osfhandle(handle.fileno()), 1 | (0 if shared else 2),
+              0, 1, 0, ctypes.byref(overlap)):
+        raise ctypes.WinError(ctypes.get_last_error())
+
+
+def _aux_unlock(handle):
+    if os.name != "nt":                        # pragma: no cover
+        import fcntl
+        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        return
+    import ctypes
+    import msvcrt
+    from ctypes import wintypes
+
+    class OVERLAPPED(ctypes.Structure):
+        _fields_ = [("Internal", ctypes.c_size_t), ("InternalHigh", ctypes.c_size_t),
+                    ("Offset", wintypes.DWORD), ("OffsetHigh", wintypes.DWORD),
+                    ("hEvent", wintypes.HANDLE)]
+
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    fn = kernel.UnlockFileEx
+    fn.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.DWORD,
+                   wintypes.DWORD, ctypes.POINTER(OVERLAPPED)]
+    fn.restype = wintypes.BOOL
+    overlap = OVERLAPPED(Offset=LOCK_OFFSET)
+    if not fn(msvcrt.get_osfhandle(handle.fileno()), 0, 1, 0, ctypes.byref(overlap)):
+        raise ctypes.WinError(ctypes.get_last_error())
+
+
+def _active(path):
+    # Key reentry by canonical lock path AND process, never just thread depth.
+    return next((item for item in reversed(getattr(_LOCAL, "stack", []))
+                 if item["path"] == path and item["pid"] == os.getpid()), None)
+
+
+class _ChildLaunch:
+    def __init__(self, context, token, env):
+        self.context, self.token, self.env = context, token, env
+
+    def bind(self, pid):
+        start = process_start_time(pid)
+        if not start:
+            raise Busy("cannot verify delegated child process identity")
+        self.context["meta"]["delegate"].update(pid=int(pid), process_start_time=start)
+        _write_meta(self.context["handle"], self.context["meta"])
+
+
+@contextmanager
+def child_launch(*, root=None, env=None):
+    """Per-Popen authorization; no global os.environ mutation.
+
+    The child waits for bind(pid) before entering. Only an owning hold on this
+    exact root can delegate. A delegated child cannot mint grandchildren grants.
+    """
+    context = _active(lock_path(root).resolve())
+    child_env = dict(os.environ if env is None else env)
+    child_env.pop(DELEGATION_ENV, None)
+    if context is None:
+        yield _ChildLaunch(None, None, child_env)
+        return
+    if context.get("delegated"):
+        raise Busy("delegated UI child cannot delegate again")
+    if context["meta"].get("delegate"):
+        raise Busy("a UI child launch is already active")
+    if not context.get("shared"):
+        _aux_unlock(context["lease"])
+        # Main byte lock stays owned throughout this conversion. Ordinary hold
+        # always takes main before trying the lease and never waits with main.
+        _aux_lock(context["lease"], shared=True)
+        context["shared"] = True
+    token = secrets.token_urlsafe(32)
+    meta = context["meta"]
+    if not meta.get("process_start_time"):
+        raise Busy("cannot verify parent process identity")
+    meta["delegate"] = {"token": token, "pid": None, "process_start_time": None}
+    _write_meta(context["handle"], meta)
+    child_env[DELEGATION_ENV] = json.dumps({"path": str(context["path"]),
+        "pid": os.getpid(), "process_start_time": meta["process_start_time"],
+        "session": meta["session"], "token": token})
+    try:
+        yield _ChildLaunch(context, token, child_env)
+    finally:
+        meta.pop("delegate", None)
+        _write_meta(context["handle"], meta)
+
+
+def _verify_child(handle, grant):
+    meta = _read_meta(handle) or {}
+    parent = grant.get("pid")
+    if (parent != os.getppid() or not grant.get("process_start_time")
+            or process_start_time(parent) != grant["process_start_time"]
+            or meta.get("pid") != parent
+            or meta.get("process_start_time") != grant["process_start_time"]
+            or not grant.get("session") or meta.get("session") != grant["session"]
+            or meta.get("released_at")):
+        raise Busy("invalid or stale UI parent identity/session")
+    delegate = meta.get("delegate") or {}
+    if not grant.get("token") or delegate.get("token") != grant["token"]:
+        raise Busy("invalid or expired UI child capability")
+    if delegate.get("pid") is None:
+        return None                            # Popen registration handshake
+    if (delegate.get("pid") != os.getpid()
+            or not delegate.get("process_start_time")
+            or process_start_time(os.getpid()) != delegate["process_start_time"]):
+        raise Busy("UI capability belongs to a different child identity")
+    try:
+        _try_lock(handle)
+    except OSError:
+        return meta                            # kernel still owns parent lock
+    else:
+        _unlock(handle)
+        raise Busy("UI delegation has no active kernel parent lock")
+
+
+@contextmanager
+def _delegated_hold(path, grant, deadline, poll):
+    if not isinstance(grant, dict) or grant.get("path") != str(path):
+        raise Busy("UI delegation root/path mismatch")
+    if not path.is_file():
+        raise Busy("UI delegation lock is missing")
+    handle = _open(path)
+    lease = _open(path.with_name(path.name + ".lease"))
+    entry = _open(path.with_name(path.name + ".entry"))
+    leased = entered = False
+    try:
+        while True:
+            # Validate even when another child is busy. Stale grants cannot
+            # fall back to ordinary acquisition after the parent releases.
+            meta = _verify_child(handle, grant)
+            if meta is not None:
+                try:
+                    _aux_lock(lease, shared=True)
+                    leased = True
+                    _aux_lock(entry)
+                    entered = True
+                    meta = _verify_child(handle, grant)
+                    if meta is not None:
+                        break
+                except OSError:
+                    pass
+                if entered:
+                    _aux_unlock(entry)
+                    entered = False
+                if leased:
+                    _aux_unlock(lease)
+                    leased = False
+            if time.monotonic() >= deadline:
+                raise Busy("UI child authorization/entry timed out")
+            time.sleep(poll)
+        context = {"path": path, "pid": os.getpid(), "delegated": True,
+                   "meta": meta, "handle": handle, "lease": lease}
+        _LOCAL.stack.append(context)
+        try:
+            yield dict(meta, delegated_pid=os.getpid())
+        finally:
+            _LOCAL.stack.remove(context)
+    finally:
+        if entered:
+            _aux_unlock(entry)
+        if leased:
+            _aux_unlock(lease)
+        entry.close()
+        lease.close()
+        handle.close()
+
+
 # ---------------------------------------------------------------- 取锁 / 释放
 @contextmanager
 def hold(owner: str, *, timeout: float = DEFAULT_TIMEOUT, root: str | Path | None = None,
-         poll: float = POLL, announce: bool = False):
-    """持锁执行。拿不到锁抛 `Busy`，带上当前持有者的 pid / owner / 时间。
+         poll: float = POLL, announce: bool = False, name: str | None = None,
+         delegation: bool = True):
+    """Own one UI transaction, or join its verified per-child delegation.
 
-    同一线程可重入（内层不再抢文件锁）：避免服务里「已经持锁又调一层」时自锁。
+    Same-thread reentry is restricted to the same canonical lock path. Separate
+    shared leases preserve exclusion if the owning parent exits before a child.
 
-    `announce=True`（命令行入口用）时，等锁期间打印一次持有者信息；服务端
-    静默等待，不往流里写字。
+    `name` 给了就锁那一把"回合锁"（`runs/turn/<name>.lock`），用于同端互斥。
+
+    `delegation=False` 表示**不认委派凭证**：委派只对一个 path 有效（主
+    `runs/ui.lock`），拿它去比另一把锁必然"root/path mismatch"。
     """
-    depth = getattr(_LOCAL, "depth", 0)
-    if depth:
-        _LOCAL.depth = depth + 1
+    path = lock_path(root, name).resolve()
+    if not hasattr(_LOCAL, "stack"):
+        _LOCAL.stack = []
+    if _active(path):
+        yield None
+        return
+    deadline = time.monotonic() + max(0.0, timeout)
+    raw = os.environ.get(DELEGATION_ENV) if delegation else None
+    if raw is not None:
         try:
-            yield None
-        finally:
-            _LOCAL.depth -= 1
+            grant = json.loads(raw)
+        except (ValueError, TypeError) as exc:
+            raise Busy("malformed UI delegation") from exc
+        with _delegated_hold(path, grant, deadline, poll) as meta:
+            yield meta
         return
 
-    path = lock_path(root)
-    deadline = time.monotonic() + max(0.0, timeout)
     handle = _open(path)
+    lease = _open(path.with_name(path.name + ".lease"))
+    locked = leased = False
     announced = False
     try:
         while True:
             try:
                 _try_lock(handle)
+                locked = True
+                _aux_lock(lease)
+                leased = True
                 break
             except OSError:
+                if locked:
+                    _unlock(handle)
+                    locked = False
                 meta = _read_meta(handle) or {}
                 if announce and not announced:
                     announced = True
-                    if _holder_dead(meta):
-                        print(f"[锁] runs\\ui.lock 的持有者 {meta.get('owner') or '?'}"
-                              f"（pid={meta.get('pid')}）已退出，内核已释放字节锁，重试…",
-                              flush=True)
-                    else:
-                        print(f"[锁] runs\\ui.lock 被 {meta.get('owner') or '?'}"
-                              f"（pid={meta.get('pid')}，since={meta.get('acquired_at')}）"
-                              f"占用，最多等 {max(0.0, timeout):.0f}s…", flush=True)
+                    print(f"[lock] UI busy: owner={meta.get('owner')} pid={meta.get('pid')}",
+                          flush=True)
                 if time.monotonic() >= deadline:
-                    holder = meta.get("owner") or "?"
-                    raise Busy(
-                        f"ui lock busy: owner={holder} pid={meta.get('pid')} "
-                        f"since={meta.get('acquired_at')}")
+                    raise Busy(f"ui lock busy: owner={meta.get('owner')} pid={meta.get('pid')}")
                 time.sleep(poll)
-    except BaseException:
-        handle.close()
-        raise
 
-    meta = {"pid": os.getpid(), "owner": str(owner), "acquired_at": _now(),
-            "process_start_time": process_start_time(os.getpid()),
-            "updated_at": _now()}
-    _write_meta(handle, meta)
-    _LOCAL.depth = 1
-    try:
-        yield meta
-    finally:
-        _LOCAL.depth = 0
-        released = dict(meta)
-        released["released_at"] = _now()
-        released["updated_at"] = released["released_at"]
+        meta = {"pid": os.getpid(), "owner": str(owner), "acquired_at": _now(),
+                "process_start_time": process_start_time(os.getpid()),
+                "updated_at": _now(), "session": secrets.token_urlsafe(32)}
+        _write_meta(handle, meta)
+        context = {"path": path, "pid": os.getpid(), "handle": handle,
+                   "lease": lease, "meta": meta, "shared": False, "delegated": False}
+        _LOCAL.stack.append(context)
         try:
-            _write_meta(handle, released)
+            yield meta
         finally:
+            _LOCAL.stack.remove(context)
+            released = dict(meta)
+            released.pop("delegate", None)
+            released["released_at"] = released["updated_at"] = _now()
+            _write_meta(handle, released)
+    finally:
+        if locked:
             _unlock(handle)
-            handle.close()
+        if leased:
+            _aux_unlock(lease)
+        lease.close()
+        handle.close()
 
 
 def run(name: str, func, *, timeout: float | None = None,
         root: str | Path | None = None) -> int:
-    """命令行入口用：持锁调用 func；拿不到锁打印一行 JSON 并返回 4。"""
+    """命令行入口用：持锁调用 func；拿不到锁打印一行 JSON 并返回 8。"""
     if timeout is None:
         try:
             timeout = float(os.environ.get("BRIDGE_UI_LOCK_TIMEOUT") or DEFAULT_TIMEOUT)
@@ -327,6 +566,79 @@ def run(name: str, func, *, timeout: float | None = None,
         print(json.dumps({"ok": False, "stage": exc.stage, "error": str(exc)},
                          ensure_ascii=False))
         return exc.code
+
+
+def entry(name: str, func, *, root: str | Path | None = None) -> int:
+    """命令行入口（B13）：同一端互斥 + （默认）整轮持锁。
+
+    锁的两种模式由 `BRIDGE_UI_SECTIONED` 决定：
+
+    * 未设置（**默认，今天的行为**）：整轮持 `ui.lock`。等回答期间也持着，
+      所以多端仍然串行 —— 但绝不比改动前更不安全。
+    * `=1`（B13b 落地后由服务端下发）：不持整轮锁，只在调用点用 `section()`
+      包住"会动桌面的那几段"，等回答期间放锁。这样多端才能真并发
+      （CALIBER §3.1：不得持全局锁串行等待完整回答）。
+
+    两种模式都额外持一把**同端回合锁**（`runs/turn/<端>.lock`）：
+    它只挡"同一个端被两份自动化同时动"，不影响不同端之间的并发。
+    """
+    timeout = None
+    try:
+        timeout = float(os.environ.get("BRIDGE_UI_LOCK_TIMEOUT") or DEFAULT_TIMEOUT)
+    except ValueError:
+        timeout = DEFAULT_TIMEOUT
+    sectioned = os.environ.get(SECTIONED_ENV) == "1"
+    try:
+        with turn(name, root=root):
+            if sectioned:
+                return int(func())
+            with hold(name, timeout=timeout, root=root, announce=True):
+                return int(func())
+    except Busy as exc:
+        print(json.dumps({"ok": False, "stage": exc.stage, "error": str(exc)},
+                         ensure_ascii=False))
+        return exc.code
+
+
+def sectioned() -> bool:
+    """当前是不是"分段持锁"模式（并发）。"""
+    return os.environ.get(SECTIONED_ENV) == "1"
+
+
+def concurrent_mode() -> bool:
+    """当前是不是"多席并发"模式（不管持锁方式）。
+
+    与 `sectioned()` 的区别：`choose` 必须**整轮持锁**（它要连着开菜单、点条目、
+    读回），所以它不设 `SECTIONED`；但它同样处在多席并发里，前台会被别人抢走
+    （网页端新建窗口就会抢）。所以"前台是否共享"单看这个开关。
+    """
+    return os.environ.get(CONCURRENT_ENV) == "1"
+
+
+def section(owner: str = "ui", *, timeout: float = SECTION_TIMEOUT,
+            root: str | Path | None = None):
+    """一段桌面操作的短临界区。
+
+    **只有会动桌面的动作需要它**：聚焦、粘贴、点击发送、点复制、清空输入框。
+    纯 UIA 读（`ui.tree`）不抢前台、不碰剪贴板，不需要持锁。
+    同线程重入是安全的（`hold` 按 canonical path 判重，直接放行）。
+    """
+    return hold(owner, timeout=timeout, root=root)
+
+
+def turn(endpoint: str, *, timeout: float = TURN_TIMEOUT,
+         root: str | Path | None = None):
+    """同端回合锁：整轮持有，只挡"同一个端被两份自动化同时动"。
+
+    与桌面锁是**两个不同的 path**，可以嵌套，不会互锁。
+
+    **必须 `delegation=False`**：父进程给子进程的委派凭证绑的是
+    `runs/ui.lock`，拿它来比对 `runs/turn/<端>.lock` 会立刻
+    `Busy("UI delegation root/path mismatch")` —— 2026-11-08 真机实测，
+    服务端派发的每个 choose/use 子进程都在这一步 exit 8。
+    """
+    return hold(f"turn:{endpoint}", timeout=timeout, root=root, name=endpoint,
+                delegation=False)
 
 
 def describe(root: str | Path | None = None) -> dict | None:
@@ -344,6 +656,16 @@ def describe(root: str | Path | None = None) -> dict | None:
             else:
                 _unlock(handle)
                 meta["locked"] = False
+                lease_path = path.with_name(path.name + ".lease")
+                if lease_path.exists():
+                    with open(lease_path, "r+b", buffering=0) as lease:
+                        try:
+                            _aux_lock(lease)
+                        except OSError:
+                            meta["locked"] = True
+                            meta["child_lease"] = True
+                        else:
+                            _aux_unlock(lease)
             return meta
     except OSError:
         return None

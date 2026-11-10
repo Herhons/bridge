@@ -21,12 +21,16 @@ import time
 from ctypes import wintypes
 from pathlib import Path
 
+from . import uilock
+
 user32 = ctypes.windll.user32
 kernel32 = ctypes.windll.kernel32
 psapi = ctypes.windll.psapi
 
 PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 SWP_NOACTIVATE = 0x0010
+#: 恢复并激活窗口（不改位置/大小）。前台是桌面时，只有它能让 SetForegroundWindow 生效。
+SW_RESTORE = 9
 SWP_SHOWWINDOW = 0x0040
 WM_CLOSE = 0x0010
 
@@ -248,6 +252,19 @@ def ensure_app(name: str, *, wait: float = 25.0, verbose: bool = True) -> int | 
 def activate(hwnd: int, *, tries: int = 3) -> bool:
     """把窗口提到前台，返回是否成功。
 
+    并发模式（`BRIDGE_UI_CONCURRENT=1`）下这一步也要进锁：抢前台是**共享资源**，
+    两个席位同时 SetForegroundWindow 会互相把对方挤下去，谁的点按都抛
+    ForegroundLost（2026-11-08 真机：opencode 的 choose 被 codex 抢走前台）。
+    """
+    if uilock.concurrent_mode():
+        with uilock.section("desk:activate", timeout=uilock.SECTION_TIMEOUT):
+            return _activate_locked(hwnd, tries)
+    return _activate_locked(hwnd, tries)
+
+
+def _activate_locked(hwnd: int, tries: int = 3) -> bool:
+    """把窗口提到前台，返回是否成功。
+
     SetForegroundWindow 经常被系统拒绝（前台锁：只有「当前前台进程」或
     「刚收到用户输入的进程」才能改前台）。实测复用时 100% 失败——
     窗口明明活着，但前台一直是 WorkBuddy，之后每一次点击都会被
@@ -259,6 +276,9 @@ def activate(hwnd: int, *, tries: int = 3) -> bool:
          这是不依赖 AttachThreadInput 的常用做法；
       3. topmost 闪一下（HWND_TOPMOST 再 HWND_NOTOPMOST）。
     """
+    # 必须先 SW_RESTORE：2026-11-08 实测，前台是桌面（WorkerW）时，
+    # 即使 IsIconic 为假，只调 SetForegroundWindow 也一律失败。
+    user32.ShowWindow(int(hwnd), SW_RESTORE)
     for i in range(tries):
         if user32.GetForegroundWindow() == int(hwnd):
             return True
@@ -277,6 +297,21 @@ def activate(hwnd: int, *, tries: int = 3) -> bool:
             user32.SetWindowPos(int(hwnd), -2, 0, 0, 0, 0, 0x0001 | 0x0002)
             time.sleep(0.2)
     return user32.GetForegroundWindow() == int(hwnd)
+
+
+def ensure_foreground(hwnd: int, *, tries: int = 5, gap: float = 0.2) -> bool:
+    """并发下把某个端抢到前台，失败重试。
+
+    为什么需要：同一时刻只有一个前台，4 席会互相把对方挤下去。
+    `activate()` 单次成功不代表稳定（抢完可能立刻被另一个席抢走），
+    所以这里"进 section → 抢 → 复核 → 重试"。
+    """
+    with uilock.section(f"bring:{int(hwnd)}", timeout=uilock.SECTION_TIMEOUT):
+        for _ in range(max(1, tries)):
+            if _activate_locked(hwnd, tries=1):
+                return True
+            time.sleep(gap)
+        return user32.GetForegroundWindow() == int(hwnd)
 
 
 def place(hwnd: int, pos: tuple[int, int], size: tuple[int, int]) -> None:

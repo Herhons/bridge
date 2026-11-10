@@ -44,7 +44,7 @@ _SRC = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _SRC not in sys.path:
     sys.path.insert(0, _SRC)
 
-from qi import autopush, console, progress, tier_guard  # noqa: E402
+from qi import autopush, console, progress, server, tier_guard, uilock  # noqa: E402
 
 SCRIPTS = Path(__file__).resolve().parent
 EXIT_OK = 0
@@ -55,13 +55,10 @@ PUSH_TIMEOUT = 900          # workbuddy_use 自身 --timeout 之外的总闸（�
 
 
 def run_command(cmd: list[str], *, timeout: float = PUSH_TIMEOUT) -> tuple[int, str, str]:
-    """跑一条命令，返回 (退出码, stdout, stderr)。输出按 utf-8 收——被调的脚本也是 utf-8。"""
-    try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8",
-                              errors="replace", timeout=timeout)
-    except (OSError, subprocess.SubprocessError) as exc:
-        return 127, "", f"{type(exc).__name__}: {exc}"
-    return proc.returncode, (proc.stdout or "").strip(), (proc.stderr or "").strip()
+    # Shares the active parent UI transaction through the verified 09a protocol.
+    result = server.run_process(cmd, timeout=timeout, cwd=SCRIPTS.parent.parent)
+    return (result.get("exit_code") if result.get("exit_code") is not None else 127,
+            result.get("stdout") or "", result.get("stderr") or "")
 
 
 def _last_line(text: str) -> str:
@@ -107,7 +104,7 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(argv: list[str] | None = None, *, runner=run_command, now=None) -> int:
+def _main(argv: list[str] | None = None, *, runner=run_command, now=None) -> int:
     args = build_parser().parse_args(argv)
     config = autopush.Config(idle_minutes=args.idle_minutes,
                              cooldown_minutes=args.cooldown_minutes,
@@ -151,18 +148,62 @@ def main(argv: list[str] | None = None, *, runner=run_command, now=None) -> int:
         print(json.dumps(out, ensure_ascii=False))
         return EXIT_NEEDS_HUMAN
 
-    # -- 真推 ---------------------------------------------------------
-    cmd = push_command(config.prompt, purpose=args.purpose, timeout=args.timeout)
-    code, stdout, stderr = runner(cmd)
-    error = None if code == 0 else ((_last_line(stderr) or _last_line(stdout)) or f"EXIT={code}")
-    result = autopush.PUSH if code == 0 else autopush.PUSH_FAILED
-    autopush.append(autopush.event_for(decision, record, result=result, ok=code == 0,
-                                       error=error, prompt=config.prompt), root=args.runs)
-    out.update({"ok": code == 0, "pushed": code == 0,
+    # Decide/count is serialized by main; UI choose and use share one hold.
+    code, stdout, stderr = _push_with_receipt(args, config.prompt, record, runner)
+    payload = server.parse_last_json(stdout) or {}
+    already = payload.get("stage") == "already_answered" and payload.get("ok") is True
+    pushed = not already and (payload.get("submission") == "accepted" or payload.get("sent") is True)
+    ok = code == 0 and payload.get("ok") is True
+    error = None if ok else ((_last_line(stderr) or _last_line(stdout)) or f"EXIT={code}")
+    result = (autopush.PUSH if pushed else "autopush_already_answered" if already else autopush.PUSH_FAILED)
+    autopush.append(autopush.event_for(decision, record, result=result, ok=ok,
+                                     error=error, prompt=config.prompt), root=args.runs)
+    out.update({"ok": ok, "pushed": pushed, "already_answered": already,
                 "push_exit": code, "push_error": error,
-                "push_reply": _last_line(stdout) if code == 0 else None})
+                "push_reply": _last_line(stdout) if ok else None})
     print(json.dumps(out, ensure_ascii=False))
-    return EXIT_OK if code == 0 else EXIT_PUSH_FAILED
+    return EXIT_OK if ok else EXIT_PUSH_FAILED
+
+
+def _push_with_receipt(args, prompt, record, runner):
+    app_root = SCRIPTS.parent.parent
+    try:
+        with uilock.hold("autopush:workbuddy", root=app_root):
+            current = autopush.read_progress(args.progress)
+            if any(current.get(key) != record.get(key) for key in ("card_id", "status", "updated_at")):
+                return 5, "", "progress_changed"
+            tiers = tier_guard.load_tiers(app_root / "docs/tiers.json")
+            allowed = tier_guard.allowed_tiers("workbuddy", args.purpose, "model", tiers=tiers)
+            if not allowed:
+                return 5, "", "table_unconfigured: WorkBuddy purpose has no verified tier"
+            before = tier_guard.read_receipt("workbuddy", root=app_root)
+            choose = [sys.executable, str(SCRIPTS / "workbuddy_choose.py"), "--model", allowed[0]]
+            code, stdout, stderr = runner(choose, timeout=120)
+            if code:
+                return code, stdout, stderr
+            after = tier_guard.read_receipt("workbuddy", root=app_root)
+            if not after or (before and after.get("created_monotonic") == before.get("created_monotonic")):
+                return 5, "", "choose produced no fresh receipt"
+            verdict = tier_guard.check("workbuddy", args.purpose, root=app_root, tiers=tiers)
+            if not verdict["ok"]:
+                return 5, "", "choose receipt rejected: " + ",".join(verdict["reasons"])
+            current = autopush.read_progress(args.progress)
+            if any(current.get(key) != record.get(key) for key in ("card_id", "status", "updated_at")):
+                return 5, "", "progress_changed"
+            reply_timeout = tier_guard.floor_timeout(args.purpose, args.timeout)
+            return runner(push_command(prompt, purpose=args.purpose, timeout=reply_timeout),
+                          timeout=reply_timeout + 30)
+    except (uilock.Busy, tier_guard.TierUnconfirmed, OSError, ValueError) as exc:
+        return getattr(exc, "code", 5), "", f"{type(exc).__name__}: {exc}"
+
+
+def main(argv: list[str] | None = None, *, runner=run_command, now=None) -> int:
+    args = build_parser().parse_args(argv)
+    if args.dry_run:
+        return _main(argv, runner=runner, now=now)
+    # Re-read decision and append count inside one cross-process transaction.
+    with tier_guard.file_lock(Path(args.runs) / "autopush.lock", timeout=PUSH_TIMEOUT + 180):
+        return _main(argv, runner=runner, now=now)
 
 
 if __name__ == "__main__":

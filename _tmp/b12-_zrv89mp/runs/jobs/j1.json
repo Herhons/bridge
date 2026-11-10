@@ -1,0 +1,35 @@
+{
+  "job_id": "j1",
+  "status": "done",
+  "order": [
+    "chatgpt",
+    "gemini",
+    "deepseek",
+    "grok"
+  ],
+  "purpose": "review",
+  "prompt": "x",
+  "created_at": "now",
+  "endpoints": {
+    "chatgpt": {
+      "status": "done"
+    },
+    "gemini": {
+      "status": "done"
+    },
+    "deepseek": {
+      "status": "done"
+    },
+    "grok": {
+      "status": "done"
+    }
+  },
+  "started_at": "2026-11-10T02:16:23+00:00",
+  "quorum": {
+    "required": 3,
+    "recovered": 4,
+    "met": true,
+    "clamped": false
+  },
+  "finished_at": "2026-11-10T02:16:24+00:00"
+}

@@ -296,6 +296,18 @@ def _transition(data: dict, cards: dict, card: str, new: str,
 
 # --------------------------------------------------------------------------- 对外动作
 
+def _transaction(action):
+    from functools import wraps
+    @wraps(action)
+    def wrapped(*args, **kwargs):
+        from . import progress as progress_io
+        target = progress_path(kwargs.get("progress_path"))
+        with progress_io.locked(file_path=target):
+            return action(*args, **kwargs)
+    return wrapped
+
+
+@_transaction
 def move(card: object, new_state: object, *, missing: list[str] | None = None,
          progress_path: str | Path | None = None,
          workflow_path: str | Path | None = None) -> dict:
@@ -335,6 +347,7 @@ def move(card: object, new_state: object, *, missing: list[str] | None = None,
     return {"card": card, "from": old, "to": new, "record": record, "repair_card": repair}
 
 
+@_transaction
 def advance(card: object, *, progress_path: str | Path | None = None,
             workflow_path: str | Path | None = None) -> dict:
     """「监工推了一次」：no_progress +1，够了就叫监工。
@@ -360,6 +373,7 @@ def advance(card: object, *, progress_path: str | Path | None = None,
     return {"need_supervisor": need}
 
 
+@_transaction
 def resolve_hold(card: object, *, progress_path: str | Path | None = None,
                  workflow_path: str | Path | None = None) -> dict:
     """清空 missing 清单后自动回 verifying；卡不在 hold 就抛 MoveRejected。"""

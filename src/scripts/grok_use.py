@@ -56,7 +56,7 @@ _SRC = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _SRC not in sys.path:
     sys.path.insert(0, _SRC)
 
-from qi import Library, console, failure, guard, human, sendgate, textcmp, tier_guard, ui, uilock  # noqa: E402
+from qi import Library, console, failure, guard, heartbeat, human, sendgate, textcmp, tier_guard, ui, uilock  # noqa: E402
 from qi import zoom as zoom_mod  # noqa: E402
 from qi.browser import ensure_site  # noqa: E402
 from qi.conversation import SEND, Conversation, UserTookOver  # noqa: E402
@@ -395,7 +395,8 @@ def _clear_draft(conv, view) -> bool:
     try:
         conv.clear(view)
         recheck = conv.read()
-        return not draft_present(recheck.root)
+        return (isinstance(getattr(recheck, "value", None), str)
+                and textcmp.equal(recheck.value, "") and not draft_present(recheck.root))
     except (RuntimeError, COMError):
         return False
 
@@ -426,6 +427,7 @@ def _final_read(conv, prompt: str, baseline: int):
 
 def _send_and_wait(screen, site, prompt: str, timeout: float,
                    purpose: str | None = None) -> dict:
+    from qi import submissions
     state = {"ok": False, "submission": "not_sent", "sent": False}
     conv = Conversation(screen, site.name)
     before = conv.read()
@@ -443,50 +445,64 @@ def _send_and_wait(screen, site, prompt: str, timeout: float,
         return {**state, "ok": True, "stage": "already_answered", "reply": already,
                 "submission": None, "sent": False, "basis": "already_answered",
                 "cleared_draft": cleared}
+    if purpose is not None:
+        previous = submissions.pending("grok", prompt)
+        if previous:
+            return submissions.refusal(previous)
     if draft_present(before.root):
         return {**state, "stage": "draft_present", "hint": "当前输入框已有草稿"}
     baseline = len(scan(before.root).replies())
 
     # 第 3 条：写入之前记页面指纹，写入之后、发送之前再比一次。
     # 只在真机（screen 是真 Screen 实例）时做——离线假件的 screen 是 StubScreen，跳过。
-    stamp_before_write = (sendgate.page_stamp(screen, site.name)
-                          if isinstance(screen, Screen) else None)
+    # B13b：写入 → 读回 → 指纹 → 门禁 → 落账 → 发送，**一整段**（中途放锁必被抢前台）
+    with uilock.section('send:grok', timeout=uilock.SECTION_TIMEOUT):
+        stamp_before_write = (sendgate.page_stamp(screen, site.name)
+                              if isinstance(screen, Screen) else None)
 
-    written = write_prompt(screen, conv, before, prompt)
-    if not textcmp.equal(prompt, written.value):
-        # 第 5 条：正文原样发送，只有比对走归一；hint 带第一处差异的行号和前后 20 字
-        return {**state, "stage": "input_mismatch",
-                "hint": textcmp.describe(prompt, written.value) or
-                        f"写进去的文本和提问对不上（{textcmp.lengths(prompt, written.value)}）"}
-    state.update(submission="unknown", sent=None)
-    # 第 3 条：发送阶段复核页面指纹，被换走 → 清掉半截文本 + concurrent_ui
-    if stamp_before_write is not None:
-        concurrent = sendgate.page_confirm(screen, site.name, stamp_before_write)
-        if not concurrent["ok"]:
-            cleared = _clear_draft(conv, written)
-            return {**state, "stage": "concurrent_ui", "reason": "page_changed",
-                    "changed": concurrent["changed"], "cleared_draft": cleared,
-                    "submission": "not_sent", "sent": False}
-    # 第 3 条：复核放在写入之后、点击之前；复核完再比一次页面指纹
-    stamp = None
-    if purpose is not None:
+        written = write_prompt(screen, conv, before, prompt)
+        if not textcmp.equal(prompt, written.value):
+            # 第 5 条：正文原样发送，只有比对走归一；hint 带第一处差异的行号和前后 20 字
+            return {**state, "stage": "input_mismatch",
+                    "hint": textcmp.describe(prompt, written.value) or
+                            f"写进去的文本和提问对不上（{textcmp.lengths(prompt, written.value)}）"}
+        state.update(submission="unknown", sent=None)
+        # 第 3 条：发送阶段复核页面指纹，被换走 → 清掉半截文本 + concurrent_ui
+        if stamp_before_write is not None:
+            concurrent = sendgate.page_confirm(screen, site.name, stamp_before_write)
+            if not concurrent["ok"]:
+                cleared = _clear_draft(conv, written)
+                return {**state, "stage": "concurrent_ui", "reason": "page_changed",
+                        "changed": concurrent["changed"], "cleared_draft": cleared,
+                        "submission": "not_sent", "sent": False}
+        # 第 3 条：复核放在写入之后、点击之前；复核完再比一次页面指纹
+        stamp = None
+        if purpose is not None:
+            try:
+                door = sendgate.pre_send(screen, site.name, purpose, root=written.root)
+                stamp = door.get("stamp")
+            except (tier_guard.TierUnconfirmed, human.HumanCheck) as exc:
+                return {**exc.as_result(), "submission": "not_sent", "sent": False}
+            if stamp is not None:
+                verdict = sendgate.page_confirm(screen, site.name, stamp)
+                if not verdict["ok"]:
+                    return {**state, "stage": "tier_unconfirmed", "reason": "page_changed",
+                            "code": tier_guard.TierUnconfirmed.code,
+                            "changed": verdict["changed"], "page": verdict["now"],
+                            "hint": "档位复核之后页面发生了导航/新对话/窗口切换，按卡面拒发"}
         try:
-            door = sendgate.pre_send(screen, site.name, purpose, root=written.root)
-            stamp = door.get("stamp")
-        except (tier_guard.TierUnconfirmed, human.HumanCheck) as exc:
-            return {**exc.as_result(), "submission": "not_sent", "sent": False}
-        if stamp is not None:
-            verdict = sendgate.page_confirm(screen, site.name, stamp)
-            if not verdict["ok"]:
-                return {**state, "stage": "tier_unconfirmed", "reason": "page_changed",
-                        "code": tier_guard.TierUnconfirmed.code,
-                        "changed": verdict["changed"], "page": verdict["now"],
-                        "hint": "档位复核之后页面发生了导航/新对话/窗口切换，按卡面拒发"}
-    try:
-        basis_of_submit = _submit(screen, site, conv, written)
-    except UserTookOver as exc:
-        return {**state, "submission": "not_sent", "sent": False,
-                "stage": "user_took_over", "hint": str(exc)}
+            if purpose is not None:
+                from qi import submissions
+
+                # R5：把发送时所在的标签/文档身份一起写进记录（恢复要拿它比对）
+                submissions.reserve("grok", prompt,
+                                    scope=submissions.scope_from_view(
+                                        written, site=site.name,
+                                        hwnd=getattr(screen, "target_hwnd", None)))
+            basis_of_submit = _submit(screen, site, conv, written)
+        except UserTookOver as exc:
+            return {**state, "submission": "not_sent", "sent": False,
+                    "stage": "user_took_over", "hint": str(exc)}
 
     deadline = time.monotonic() + timeout
     accepted = False
@@ -498,6 +514,7 @@ def _send_and_wait(screen, site, prompt: str, timeout: float,
     while time.monotonic() < deadline:
         try:
             view = conv.read(attempts=2, delay=0.4)
+            heartbeat.beat_view("waiting", view)
         except (RuntimeError, COMError) as exc:
             read_failures += 1
             if read_failures >= 12:
@@ -520,6 +537,20 @@ def _send_and_wait(screen, site, prompt: str, timeout: float,
                 accepted, attribution = True, "new_reply"
                 state.update(submission="accepted", sent=True)
 
+        if accepted:
+            if purpose is not None:
+                from qi import submissions
+
+                # R5：第一次判定 accepted 的那一页才是"回答所在会话"的身份，只写一次。
+                submissions.finish("grok", prompt, state,
+                                   scope=submissions.scope_from_view(
+                                       view, site=site.name,
+                                       hwnd=getattr(screen, "target_hwnd", None)))
+            if draft_present(view.root):
+                state["cleared_draft"] = _clear_draft(conv, view)
+                if not state["cleared_draft"]:
+                    return {**state, "stage": "interrupted", "reason": "draft_clear_failed"}
+                continue
         reply = _pick_reply(page, at, baseline)
         if reply is None or len(page.replies()) <= baseline or view.busy:
             stable_text = stable_since = None
@@ -554,6 +585,53 @@ def _send_and_wait(screen, site, prompt: str, timeout: float,
     return {**state, "stage": "timeout", "timeout_kind": kind}
 
 
+def _prior_submission(prompt: str) -> dict | None:
+    """只读地看一眼持久化提交记录（CARD-09f 返工）。不 reserve/finish，不写文件。"""
+    from qi import submissions
+
+    try:
+        return submissions.pending("grok", prompt)
+    except Exception:                       # noqa: BLE001 - 读记录失败 = 状态不明
+        return {"state": "unknown", "error": "submission journal unreadable"}
+
+
+def _journal_submission(prior) -> str:
+    state = str((prior or {}).get("state") or "unknown").lower()
+    return state if state in ("accepted", "answered", "unknown") else "unknown"
+
+
+def _prior_turn_recovery(prompt: str, prior, *, tab, verbose, ctx: dict):
+    """准备动作**之前**的只读恢复：不点新对话、不写、不发。
+
+    续聊选中已有标签（`continue_session=True` 绝不打开首页），只读扫一遍控件树：
+    这条提问在本页已经有回复就按 already_answered 交回，否则 None（按已提交拒发）。
+    读不到文档时不在这里吞，由调用方保留 accepted/unknown 事实。
+
+    2026-11-07（R5 / CE2）：先比发送时记下的标签/文档身份。缺身份、读不到、
+    对不上都返回 None——"本页有一对同样的问答"不是归属证据。
+    """
+    from qi import submissions
+
+    screen = Screen(verbose=verbose)
+    hwnd = ensure_site("grok", tab=tab, continue_session=True)
+    ctx.update({"screen": screen, "hwnd": hwnd})
+    if hwnd is None or not screen.bind(hwnd):
+        return None
+    screen.tab_site = "grok"
+    view = Conversation(screen, "grok").read(attempts=2, delay=0.4)
+    current = submissions.scope_from_view(view, site="grok", hwnd=hwnd)
+    matched, why = submissions.reconcile(submissions.recovery_scope(prior), current)
+    ctx["identity"] = why
+    if not matched:
+        return None
+    text = _already_answered(view.root, prompt)
+    if not text:
+        return None
+    return {"ok": True, "stage": "already_answered", "reply": text,
+            "submission": None, "sent": False, "basis": "prior_submission_recovery",
+            "identity": "matched", "cleared_draft": None}
+
+
 def ask(site, prompt: str, *, mode: str = "new", timeout: float = 180.0,
         verbose: bool = True, tab: int | None = None, purpose: str | None = None) -> dict:
     """发一条提问并等回复。准备阶段的异常交给 cli 报 preparation_failed。
@@ -561,33 +639,79 @@ def ask(site, prompt: str, *, mode: str = "new", timeout: float = 180.0,
     `purpose` 给了就在 `_send_and_wait` 里、**写入文本之后、点发送之前**过档位闸
     （CARD-06b 第 3 条）：校验回执 → 只读复核（模板优先，读不到即拒发）→
     原子消费 → 再比一次页面指纹。
+
+    CARD-09f 返工：在**任何准备动作之前**先只读查持久化提交记录，避免 mode=new
+    先把会话换掉，再用 newchat/读文档的失败把"已经 accepted"说成 not_sent。
     """
     started = time.monotonic()
     result: dict = {"ok": False, "submission": "not_sent", "sent": False}
-    screen = Screen(verbose=verbose)
-    hwnd = ensure_site(site.name, tab=tab, continue_session=mode == "continue")
-    if hwnd is None:
-        result = {**result, "stage": "no_window"}
-    elif not (screen.bind(hwnd) and screen.focus()):
-        result = {**result, "stage": "page_not_front"}
-    else:
+    screen = None
+    hwnd = None
+    prior = _prior_submission(prompt)
+    if prior is not None:
+        state = _journal_submission(prior)
+        ctx: dict = {}
+        recovered = None
         try:
-            # 页面缩放预检（第 6 条）：非 100% 先 Ctrl+0，仍不是就退出（stage=zoom_not_100）
-            zoom_mod.ensure(screen, verbose=verbose)
-            opened = open_new_chat(screen, site) if mode == "new" else {"ok": True}
-            if not opened["ok"]:
-                result = {**opened, "submission": "not_sent", "sent": False}
-            else:
-                result = _send_and_wait(screen, site, prompt, timeout, purpose=purpose)
-        except zoom_mod.ZoomNot100 as exc:
-            result = {**exc.as_result(), "submission": "not_sent", "sent": False}
-        except ForegroundLost as exc:
-            result = {**result, "stage": "user_took_over", "hint": str(exc)}
-        except (RuntimeError, COMError) as exc:
+            recovered = _prior_turn_recovery(prompt, prior, tab=tab,
+                                             verbose=verbose, ctx=ctx)
+        except RuntimeError as exc:
             if hasattr(exc, "as_result"):          # UiDocsLost=6 / WindowMinimized=7
-                result = {**exc.as_result(), "submission": "not_sent", "sent": False}
+                result = {**exc.as_result(), "submission": state, "sent": False,
+                          "prior_submission": state,
+                          "hint": (f"{exc}；已有该提问的提交记录（{state}），"
+                                   "按 CARD-09f 保持该状态，不重发")}
             else:
-                result = {**result, "stage": "interrupted", "hint": str(exc)}
+                result = {**result, "stage": "interrupted", "submission": state,
+                          "prior_submission": state,
+                          "hint": (f"只读恢复失败：{exc}；已有该提问的提交记录（{state}），"
+                                   "保持该状态，不重发")}
+        except Exception as exc:             # noqa: BLE001 - 恢复失败也必须保留既有事实
+            result = {**result, "stage": "interrupted", "submission": state,
+                      "prior_submission": state,
+                      "hint": (f"只读恢复失败：{type(exc).__name__}: {exc}；"
+                               f"已有该提问的提交记录（{state}），保持该状态，不重发")}
+        if recovered is not None:
+            recovered.update({"elapsed": round(time.monotonic() - started, 1),
+                              "mode": mode, "prior_submission": state})
+            return recovered
+        screen, hwnd = ctx.get("screen"), ctx.get("hwnd")
+        if result.get("submission") == "not_sent":
+            from qi import submissions
+
+            result = {**submissions.refusal(prior), "prior_submission": state,
+                      "hint": (f"仓库里已有该提问的提交记录（{state}）："
+                               "按 CARD-09f 先只读查答，确认前不重发；"
+                               "要重发请人工核对后清掉 runs/submissions 里这条记录")}
+            if ctx.get("identity"):
+                result["identity"] = ctx["identity"]
+                result["hint"] += f"；本次未采信当前页面（identity={ctx['identity']}）"
+    else:
+        screen = Screen(verbose=verbose)
+        hwnd = ensure_site(site.name, tab=tab, continue_session=mode == "continue")
+        if hwnd is None:
+            result = {**result, "stage": "no_window"}
+        elif not (screen.bind(hwnd) and screen.focus()):
+            result = {**result, "stage": "page_not_front"}
+        else:
+            screen.tab_site = site.name
+            try:
+                # 页面缩放预检（第 6 条）：非 100% 先 Ctrl+0，仍不是就退出（stage=zoom_not_100）
+                zoom_mod.ensure(screen, verbose=verbose)
+                opened = open_new_chat(screen, site) if mode == "new" else {"ok": True}
+                if not opened["ok"]:
+                    result = {**opened, "submission": "not_sent", "sent": False}
+                else:
+                    result = _send_and_wait(screen, site, prompt, timeout, purpose=purpose)
+            except zoom_mod.ZoomNot100 as exc:
+                result = {**exc.as_result(), "submission": "not_sent", "sent": False}
+            except ForegroundLost as exc:
+                result = {**result, "stage": "user_took_over", "hint": str(exc)}
+            except (RuntimeError, COMError) as exc:
+                if hasattr(exc, "as_result"):          # UiDocsLost=6 / WindowMinimized=7
+                    result = {**exc.as_result(), "submission": "not_sent", "sent": False}
+                else:
+                    result = {**result, "stage": "interrupted", "hint": str(exc)}
     result["elapsed"] = round(time.monotonic() - started, 1)
     result["mode"] = mode
     if not result.get("ok"):
@@ -608,6 +732,7 @@ def read_last(*, tab: int | None = None, verbose: bool = True) -> dict:
             return {**result, "stage": "no_window"}
         if not (screen.bind(hwnd) and screen.focus()):
             return {**result, "stage": "page_not_front"}
+        screen.tab_site = "grok"
         view = Conversation(screen, "grok").read()
         found = scan(view.root).replies()
         if not found:
@@ -686,4 +811,4 @@ def main() -> int:
 if __name__ == "__main__":
     console.setup()          # 入口编码：GBK 控制台不再被 \u200b 打崩（CARD-08 第 1 条）
     # UI 前台锁（CARD-09a 第 6 条）：和服务端抢同一把 runs\ui.lock
-    raise SystemExit(uilock.run("grok_use", main))
+    raise SystemExit(uilock.entry("grok_use", main))

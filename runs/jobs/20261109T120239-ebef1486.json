@@ -1,0 +1,238 @@
+{
+  "job_id": "20261109T120239-ebef1486",
+  "request_id": "829757c0-18b2-48c4-aa52-01ea409d9c02",
+  "status": "failed",
+  "purpose": "test",
+  "prompt": "只回复下面这一行，不要任何解释、不要加标点：BRIDGE-B16-R4-77c6e0ab",
+  "created_at": "2026-11-09T04:02:39+00:00",
+  "started_at": "2026-11-09T04:02:39+00:00",
+  "finished_at": "2026-11-09T04:07:52+00:00",
+  "order": [
+    "codex",
+    "opencode",
+    "dsh",
+    "workbuddy"
+  ],
+  "endpoints": {
+    "codex": {
+      "status": "failed",
+      "reply": null,
+      "error": {
+        "code": "use_timeout",
+        "message": "use timed out after 300s; process tree killed",
+        "step": "use",
+        "exit_code": null
+      },
+      "error_code": "use_timeout",
+      "exit_code": null,
+      "choose": {
+        "ok": true,
+        "dimension": "model",
+        "target": "gpt6_luna",
+        "readback": "gpt6_luna",
+        "targets": {
+          "model": "gpt6_luna"
+        },
+        "confirmed": true,
+        "exit_code": 0,
+        "timeout": false,
+        "elapsed": 12.485,
+        "error_code": null,
+        "error_message": null,
+        "stderr": ""
+      },
+      "use": {
+        "ok": false,
+        "stage": null,
+        "reply": null,
+        "exit_code": null,
+        "timeout": true,
+        "elapsed": 300.109,
+        "error_code": "use_timeout",
+        "error_message": "use timed out after 300s; process tree killed",
+        "stderr": ""
+      },
+      "started_at": "2026-11-09T04:02:39+00:00",
+      "finished_at": "2026-11-09T04:07:52+00:00",
+      "elapsed": 312.81,
+      "evidence_l1": {
+        "job_id": "20261109T120239-ebef1486",
+        "request_id": "829757c0-18b2-48c4-aa52-01ea409d9c02",
+        "at": "2026-11-09T04:02:39+00:00",
+        "source": "server"
+      },
+      "progress": {
+        "schema_version": 1,
+        "job_id": "20261109T120239-ebef1486",
+        "endpoint": "codex",
+        "pid": 12092,
+        "at": "2026-11-09T12:07:51+0800",
+        "stage": "finished",
+        "reads": 531,
+        "busy": false,
+        "copies": 9,
+        "baseline": 9,
+        "why": "no_copies"
+      }
+    },
+    "opencode": {
+      "status": "failed",
+      "reply": null,
+      "error": {
+        "code": "use_timeout",
+        "message": "use timed out after 120s; process tree killed",
+        "step": "use",
+        "exit_code": null
+      },
+      "error_code": "use_timeout",
+      "exit_code": null,
+      "choose": {
+        "ok": true,
+        "dimension": "model",
+        "target": "deepseek_v41_flash_free",
+        "readback": "deepseek_v41_flash_free",
+        "targets": {
+          "model": "deepseek_v41_flash_free"
+        },
+        "confirmed": true,
+        "exit_code": 0,
+        "timeout": false,
+        "elapsed": 7.86,
+        "error_code": null,
+        "error_message": null,
+        "stderr": ""
+      },
+      "use": {
+        "ok": false,
+        "stage": null,
+        "reply": null,
+        "exit_code": null,
+        "timeout": true,
+        "elapsed": 120.125,
+        "error_code": "use_timeout",
+        "error_message": "use timed out after 120s; process tree killed",
+        "stderr": ""
+      },
+      "started_at": "2026-11-09T04:02:39+00:00",
+      "finished_at": "2026-11-09T04:04:47+00:00",
+      "elapsed": 128.22,
+      "evidence_l1": {
+        "job_id": "20261109T120239-ebef1486",
+        "request_id": "829757c0-18b2-48c4-aa52-01ea409d9c02",
+        "at": "2026-11-09T04:02:39+00:00",
+        "source": "server"
+      },
+      "progress": {
+        "schema_version": 1,
+        "job_id": "20261109T120239-ebef1486",
+        "endpoint": "opencode",
+        "pid": 27840,
+        "at": "2026-11-09T12:04:47+0800",
+        "stage": "finished",
+        "reads": 198,
+        "busy": false,
+        "copies": 5,
+        "baseline": 5,
+        "why": "no_copies"
+      }
+    },
+    "dsh": {
+      "status": "failed",
+      "reply": null,
+      "error": {
+        "code": "choose_failed",
+        "message": "子菜单没打开（chip_not_found）：窗口是否在前台、发送键/⌄ 模板是否失配？看 debug_shot",
+        "step": "choose",
+        "exit_code": 1
+      },
+      "error_code": "choose_failed",
+      "exit_code": 1,
+      "choose": {
+        "ok": false,
+        "dimension": "model",
+        "target": "deepseek_v41_flash",
+        "readback": null,
+        "targets": {
+          "model": "deepseek_v41_flash"
+        },
+        "confirmed": false,
+        "exit_code": 1,
+        "timeout": false,
+        "elapsed": 15.719,
+        "error_code": "choose_failed",
+        "error_message": "子菜单没打开（chip_not_found）：窗口是否在前台、发送键/⌄ 模板是否失配？看 debug_shot",
+        "stderr": ""
+      },
+      "use": null,
+      "started_at": "2026-11-09T04:02:39+00:00",
+      "finished_at": "2026-11-09T04:02:55+00:00",
+      "elapsed": 15.84,
+      "evidence_l1": {
+        "job_id": "20261109T120239-ebef1486",
+        "request_id": "829757c0-18b2-48c4-aa52-01ea409d9c02",
+        "at": "2026-11-09T04:02:39+00:00",
+        "source": "server"
+      }
+    },
+    "workbuddy": {
+      "status": "done",
+      "reply": "BRIDGE-B16-R4-77c6e0ab",
+      "error": null,
+      "error_code": null,
+      "exit_code": 0,
+      "choose": {
+        "ok": true,
+        "dimension": "model",
+        "target": "DeepSeek-V4.1-Flash",
+        "readback": "DeepSeek-V4.1-Flash",
+        "targets": {
+          "model": "DeepSeek-V4.1-Flash"
+        },
+        "confirmed": true,
+        "exit_code": 0,
+        "timeout": false,
+        "elapsed": 14.265,
+        "error_code": null,
+        "error_message": null,
+        "stderr": ""
+      },
+      "use": {
+        "ok": true,
+        "stage": "answered",
+        "reply": "BRIDGE-B16-R4-77c6e0ab",
+        "exit_code": 0,
+        "timeout": false,
+        "elapsed": 13.922,
+        "error_code": null,
+        "error_message": null,
+        "stderr": ""
+      },
+      "started_at": "2026-11-09T04:02:39+00:00",
+      "finished_at": "2026-11-09T04:03:07+00:00",
+      "elapsed": 28.44,
+      "evidence_l1": {
+        "job_id": "20261109T120239-ebef1486",
+        "request_id": "829757c0-18b2-48c4-aa52-01ea409d9c02",
+        "at": "2026-11-09T04:02:39+00:00",
+        "source": "server"
+      },
+      "progress": {
+        "schema_version": 1,
+        "job_id": "20261109T120239-ebef1486",
+        "endpoint": "workbuddy",
+        "pid": 5588,
+        "at": "2026-11-09T12:03:07+0800",
+        "stage": "finished",
+        "accepted": true,
+        "busy": false,
+        "copies": 1
+      }
+    }
+  },
+  "quorum": {
+    "required": 3,
+    "recovered": 1,
+    "met": false,
+    "clamped": false
+  }
+}

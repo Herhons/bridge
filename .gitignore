@@ -14,12 +14,3 @@ evidence/
 *.pem
 *.p12
 *.pfx
-
-# B20：合并时补的忽略项
-_selftest/
-_tmp/
-.chrome-window.json
-progress.json.lock
-runs/
-docs/history/checkpoints/
-@AutomationLog.txt

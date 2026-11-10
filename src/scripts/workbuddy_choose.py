@@ -8,4 +8,4 @@ from qi.workbuddy import main  # noqa: E402
 
 if __name__ == "__main__":
     console.setup()
-    raise SystemExit(uilock.run("workbuddy_choose", main))
+    raise SystemExit(uilock.entry("workbuddy_choose", main))

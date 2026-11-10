@@ -1,0 +1,32 @@
+Bridge v0.0.9 · Codex 独立只读复验 · 2026-11-06（北京时间）
+工作目录：F:\Bridge\v0.0.9
+共同回归命令：py -3.10 -X utf8 -B -m unittest discover -s tests -v
+Python 3.10.11；最终隔离复跑 Ran 731 tests in 24.369s；OK；EXIT=0；无跳过。
+正式日志 unittest_isolated.txt；首轮731/23.319s原日志unittest.txt保留。两轮使用同一src/tests，第二轮只在运行期重定向写盘并拦截越界写入/真实输入。
+执行偏差：首轮测试漏隔离导致目录外日志/合成输入标记/失败截图写盘，详 READONLY_INCIDENT.txt；不把首轮冒称完全只读。最终隔离复跑目录外变更为0。
+保护对象 src/tests/cards/PLAN.md/progress.json 共402个既有文件SHA256不变；未新增受保护文件，详integrity_final.json。
+独立反例：independent_probes.py/.txt/_result.json；补充 independent_additional.py/.txt/_result.json，共15项，不计入731单测。
+判定口径：PASS仅针对本卡；FAIL区分实现缺陷与证据不足。未主动运行真机choose/use发送入口或外部通知，不重放旧提问。
+后续卡明确改变的行为按后续要求评估，不把合法后续变更算成旧卡回归。
+
+VERDICT FAIL
+缺口性质：新开窗口后的异常路径仍不能保证清理。
+卡片：cards/CARD-WEB-fix-window.md:11-16。
+
+逐条核对
+1. 新窗口等待和绑定：正常/返回失败路径已实现，异常路径 FAIL。
+   src/qi/browser.py:267-307 _spawn 会新建、等待、place、focus、等标题；ensure_site:459-468 在 _spawn 返回 hwnd 后等待目标页，绑定失败会 close。
+   但 _spawn:299 的 place / 后续 focus 或 ready 若抛异常，_spawn 不返回 hwnd，外层收尾无机会执行；没有 try/finally 清理已经创建的窗口。
+   独立 PWEB_spawn_exception_leak：ShellExecuteW、窗口枚举、place、close 都打桩，窗口123已创建后 place 抛错，cleanup_close_calls=0。
+   tests/test_cardweb.py:99-116 把 _spawn 整体替换成返回999，只覆盖“正常返回后绑定失败”；:118-134 覆盖迟到窗口；均漏了创建后异常。
+2. pycaw 依赖与缺库提示：实现 PASS。
+   requirements.txt 有 pycaw；src/qi/audio.py:27-52 返回 available/playing/hint，browser.py:433-439 明确提示不可用。
+   test_cardweb.AudioDetectionTests 3项验证缺库、真实会话状态、忽略其他进程。
+   evidence/cardweb_pycaw_install.txt 记录成功安装版本及输出，但文件未写完整安装命令；与卡面“安装命令和输出记证据”仍有小缺项。
+3. 目标文档查找与诊断：PASS。
+   src/qi/ui.py:177-202 区分未知URL和无文档，477-543 绑定/枚举诊断；test_cardweb.DocumentLookupTests 覆盖空文档、候选、未知URL、多个文档拒猜及重试。
+4. 新增离线覆盖与全量：现有14项全绿、全量731 OK；第1条异常反例未覆盖。
+5. 历史真机：evidence/cardweb_live.txt:22-41 Gemini/Grok、62-64 OpenCode 的最终 token 收回且 EXIT=0；:73-90 新窗口成功及普通绑定失败清理；:92-95 WorkBuddy --list 读出模型与编辑框。
+   早期失败记录保留，没有把首次失败删掉。已有证据不证明异常路径也安全。本轮未再跑 UI。
+
+建议返工卡：WEB-spawn-cleanup。把自己创建窗口的所有后续失败统一收尾，覆盖 place/focus/等待/读取抛异常，以及不关闭复用的用户窗口；补完整安装命令记录。

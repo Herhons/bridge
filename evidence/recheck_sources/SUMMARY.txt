@@ -1,0 +1,79 @@
+Bridge v0.0.9 · Codex独立复验汇总 · 2026-11-06（北京时间）
+STATUS: COMPLETE — 用户明确指定的16张卡均有单独txt报告。
+工作目录：F:\Bridge\v0.0.9
+报告目录：F:\Bridge\v0.0.9\evidence\codex_recheck_20261106
+
+结果：PASS 3，FAIL 13。PASS = GEM、05、06d。
+FAIL按本次要求只用二元结论；其中WEB2主要为最低档实测证据不足，09e同时含功能缺口和WorkBuddy重启补证。没有把“未证明”写成“已证明功能失败”。
+
+一、全量单测（亲自执行，非引用旧evidence）
+解释器 py -3.10：Python 3.10.11 / C:\Users\Administrator\AppData\Local\Programs\Python\Python310\python.exe
+命令：py -3.10 -X utf8 -B -m unittest discover -s tests -v
+首轮：Ran 731 tests in 23.319s；OK；EXIT=0；unittest.txt。
+最终隔离复跑：Ran 731 tests in 24.369s；OK；EXIT=0；无跳过；unittest_isolated.txt。
+两轮使用同一套未改动的src/tests。第二轮仅用本目录sitecustomize重定向运行期日志/失败证据/合成输入标记并拦截越界写入、非本地网络和真实输入API。守卫事件0，复跑目录外新增/变更/删除均0。
+另做15项独立离线核查/反例，见independent_probes_result.json与independent_additional_result.json，不计入731。没有运行真机choose/use发送或外部通知；回环假HTTP服务器属于单测。
+
+二、逐卡结论
+卡号 | VERDICT | 本卡测试模块当前Ran数 | 主要依据/缺口 | 单卡报告
+--- | --- | --- | --- | ---
+04c | FAIL | 10 | note-only错误原因未进入runlog；原两条idle/hint核心修复通过。 | CARD-04c.txt
+PLAN-r1 | FAIL | 文档卡，不要求新增代码测试 | 当前状态表仍称05未发、插件无卡、7b未实现，与后续记录/成品矛盾。 | CARD-PLAN-r1.txt
+GEM | PASS | 25 | 真实树夹具/完成判据/accepted/只读均有实现与单测；低档补证见07原文。 | CARD-GEM.txt
+WEB | FAIL | 14 | 新窗口已创建后place等抛异常不会清理；现有测试把_spawn整体mock。 | CARD-WEB.txt
+05 | PASS | 32 | 状态机/15条边/非法不写/修复卡/hold/advance/备份原子写/CLI均核对通过。 | CARD-05.txt
+WEB2 | FAIL | 26 | 收发功能及26测通过；Grok最低档fast→--new的原始读回证据不足。 | CARD-WEB2.txt
+06a | FAIL | 79 | WorkBuddy用途白名单为空仍放行，accept/review并未强制最高档。 | CARD-06a.txt
+06b | FAIL | 72 | WorkBuddy在写前就消费回执，未接写后复核；档位失败未统一留证。 | CARD-06b.txt
+06c | FAIL | 45 | ChatGPT后写effort覆盖model回执，不能保证GPT-6与高同时成立。 | CARD-06c.txt
+06d | PASS | 35 | 新对话模型恢复/再读回与复制失败回退UIA均有直接覆盖及限定实测。 | CARD-06d.txt
+07 | FAIL | 40 | WorkBuddy主循环未用baseline，未出现本提问仍把旧回复报成功。 | CARD-07.txt
+08 | FAIL | 42 | 自动推命令没有choose/新回执，20分钟停顿后无法通过120秒一次性门禁。 | CARD-08.txt
+09a | FAIL | 54 | 父子进程自锁；超过最近200条会重复派发；workflow覆盖并发通知更新。 | CARD-09a.txt
+09b | FAIL | 62 | health多返port；超时在响应头后取消，慢/挂起正文可无限等。 | CARD-09b.txt
+09e | FAIL | 64 | 三个单文件use仍误报自身输入；WorkBuddy完整重启真机证据缺失。 | CARD-09e.txt
+09f-fix2 | FAIL | 22（fix2新增5） | 新增5测确实有效，但两次ask绕过实际入口；已消费回执阻断已答恢复，高档外层仍180秒。 | CARD-09f-fix2.txt
+
+三、建议返工顺序（仅建议，没有创建/修改任何正式卡）
+1. 09a-lock-integration：先解决server持锁后子CLI再拿同锁的阻塞。父子进程应有可校验的共同持锁关系，普通CLI仍须互斥；补真实子进程但无UI的集成测试。
+2. 06a-workbuddy-purpose、06b-workbuddy-presend、06c-composite-tier：用途表未配置拒发、实际写后门禁、ChatGPT writer/model/effort联合验证；补入口级负例。
+3. 07-reply-attribution、09f-fix3-entry-recovery：拒绝旧轮回复；已答只读检查必须先于一次性回执拒绝；覆盖真正accepted后中断/重跑与UiDocsLost；统一900秒及所有外层超时预算。
+4. 09a-durable-idempotency、09a-workflow-concurrency：持久化request_id去重不可只看最近200个；server与notify_done共用读改写文件锁，不丢并发更新；持久化失败不应静默202。
+5. 08-autopush-integration：取得新回执再推，正确处理already_answered、计数和并发，避免再引入父子锁自锁。
+6. WEB-spawn-cleanup、09b-health-contract-and-timeout、09e-self-input-all-entries：异常窗口清理、完整响应截止时间与精确health合同、三端合成输入排除。
+7. 04c-log-note、PLAN-sync：补note-only原因保存与当前状态表。
+8. WEB2-evidence、09e-workbuddy-restart-evidence：优先找已有原始记录；确需真机时必须另在允许发送/重启的任务中补，不重放旧提问。本次没有为补证而操作真机。
+9. TEST-ISOLATION：修整套测试的真实截图/运行日志/合成输入标记泄漏（见下一节）。
+
+四、只读完整性与执行偏差（必须保留）
+402个受保护既有文件（src/tests/cards/PLAN.md/progress.json）SHA256前后全部一致；无新增受保护文件。progress.verdicts未更新。
+首轮测试并非完全无副作用：漏mock的failure.record写了验收目录外的2个失败截图/JSON，漏mock的runlog.record追加4条假UiDocsLost及失败证据行，Screen.type_text虽然_send已mock，后续_mark_input仍改了synthetic_input.json。
+同时外部巡检改了patrol-log.md，外部启动者codex_use等待本任务到900秒也追加一行。没有把外部行为归给本次主动发送，没有回滚混合日志或删除证据。
+这些是本次执行的偏差，不能声称首轮严格满足“只新增指定目录”。已在READONLY_INCIDENT.txt逐一定位调用与文件；首轮原日志保留。
+隔离复跑已消除上述目录外写盘：1859个复跑前既有文件比较，目录外新增/变更/删除为0，见isolated_before_sha256.json、integrity_final.json。
+初始runs/ui.lock被外部进程持锁，无法哈希，已列例外；.git未纳入哈希。本轮没有碰UI锁的真实持有者。
+
+五、边界/口径
+- 源根没有.codegraph，按用户规则跳过CodeGraph；未索引仓库。
+- 只读查卡片、源代码、真实测试断言和已有原始证据，不沿用GLM/Hy4的PASS为本次判断。
+- PLAN-r1验文档交付，不把F1-F6尚未进行误判为该文档卡代码问题；当前状态表确有矛盾。
+- CARD-05“5种退出码”实际只列0/2/3/4，按明确4个值核对。
+- 06c的免费额度例外来自PLAN.md:133明确决定，只承认链路到服务端，不伪称收到token回复。
+- 09b本卡禁止自动加载Chrome，实际加载/最终插件验收留给09d；没有据此无端判09b失败。
+- 09f-fix2没有单独卡文件，按CARD-09f+PLAN和CHANGES本次补测范围核对；其progress实际已PASS，仍按用户明确范围独立重验。
+- 后续卡合法改变前卡行为按后续规则核验，不把有授权的行为变更当回归。
+- 本汇总不宣称v0.0.9完工；本次15项独立反例也不等于真实UI端到端验证。
+
+六、文件索引
+CARD-<卡号>.txt：16份逐条实现/单测/证据对照及返工建议。
+unittest_isolated.txt / unittest_isolated_result.json：最终全量结果。
+unittest.txt / unittest_result.json：首轮原结果，保留副作用上下文。
+independent_probes.py/.txt/_result.json：12项独立核查；independent_additional.py/.txt/_result.json：3项补充。
+health_body_deadline_probe.mjs：无网络fetch桩的JS超时复现。
+baseline_sha256.json / isolated_before_sha256.json / integrity_final.json：原始与最终完整性证据。
+READONLY_INCIDENT.txt：首轮执行偏差、定位、隔离办法与复跑结果。
+readonly_guard/sitecustomize.py：本次运行期守卫，仅由子进程PYTHONPATH加载，未改安装或项目配置。
+isolated_runtime/ 与 _tmp/：全部在指定目录内的测试临时产物。
+SUMMARY.checkpoint.txt：最终汇总前的原始逐卡检查点。
+
+完成时间：2026-11-06T01:01:37.373935+08:00

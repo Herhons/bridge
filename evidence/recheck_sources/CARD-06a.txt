@@ -1,0 +1,40 @@
+Bridge v0.0.9 · Codex 独立只读复验 · 2026-11-06（北京时间）
+工作目录：F:\Bridge\v0.0.9
+共同回归命令：py -3.10 -X utf8 -B -m unittest discover -s tests -v
+Python 3.10.11；最终隔离复跑 Ran 731 tests in 24.369s；OK；EXIT=0；无跳过。
+正式日志 unittest_isolated.txt；首轮731/23.319s原日志unittest.txt保留。两轮使用同一src/tests，第二轮只在运行期重定向写盘并拦截越界写入/真实输入。
+执行偏差：首轮测试漏隔离导致目录外日志/合成输入标记/失败截图写盘，详 READONLY_INCIDENT.txt；不把首轮冒称完全只读。最终隔离复跑目录外变更为0。
+保护对象 src/tests/cards/PLAN.md/progress.json 共402个既有文件SHA256不变；未新增受保护文件，详integrity_final.json。
+独立反例：independent_probes.py/.txt/_result.json；补充 independent_additional.py/.txt/_result.json，共15项，不计入731单测。
+判定口径：PASS仅针对本卡；FAIL区分实现缺陷与证据不足。未主动运行真机choose/use发送入口或外部通知，不重放旧提问。
+后续卡明确改变的行为按后续要求评估，不把合法后续变更算成旧卡回归。
+
+VERDICT FAIL
+缺口性质：用途所需最低/最高档在 WorkBuddy 上没有被强制执行；现有单测把该放行当成预期。
+卡片：cards/CARD-06a-tier-uia-minimize.md:4-17。
+
+逐条核对
+(a)1. 原子档位回执字段：PASS。
+   src/qi/tier_guard.py:318-353 写 schema/endpoint/target/readback/hwnd/pid/start/tab/UTC/monotonic/raw；_atomic_write:240-250 临时文件+replace。
+   test_card06a.ReceiptWriteTests 验字段、UTC、原子、不留tmp；ChooseWiringTests 验读回后才落回执、--list不写。
+(a)2. use 必填 purpose、test最低/review与accept最高：参数要求已接线；档位语义 FAIL。
+   docs/tiers.json:142-149 把 WorkBuddy 的 test/review/accept 都设成 []。
+   tier_guard.check:540-544 将空白名单标 table_unconfigured，然后继续到:566 ok=true，没有拒发。
+   独立 P06A_unconfigured_tier_accepts：WorkBuddy --purpose accept、任意读回模型通过 gate，expected=[]，tier_check=table_unconfigured。
+   test_card06a.py:398 test_workbuddy_is_declared_unconfigured_not_faked 只确认空表声明，未验证本卡“最高档”强制语义；当前错误放行被测试容许。
+(a)3. 缺回执/schema/端名/目标读回/过期未来/身份不符拒发5：主要分支 PASS。
+   check:478-567，ReceiptCheckTests 与 ReceiptIdentityTests 覆盖，2秒时钟容差明示在代码及测试；不能把“每张回执都读回过”当成已核对用途。
+(a)4. 发送前锁内消费、防重放、失败作废：PASS。
+   consume:571-588、gate:681-695；测试含线程/真实子进程争抢、发送失败/漂移/读回失败后作废。
+(a)5. 当前UI复核：主要已接线，不能认定所有端最后一刻都正确；WorkBuddy提前过闸的集成缺口详见06b。
+(a)6. 只防误用不防恶意伪造的边界：PASS，tier_guard.py:50-59，不要求本卡引入密钥。
+(b) UIA唤醒：PASS。
+   ui.documents 每次新Root；ui._recover:367-405、candidates:408-474 做置前/Notify/FindAll/MSAA/小幅移动，默认三轮与总限时，逐轮runlog；UiDocsLost为6。
+   WakeTests 覆盖恢复计数/三轮/总限时/逐轮日志/零文档；工作端后续09e允许一次重启，不按06a旧禁重启规则误判后续功能。
+(c) 最小化：PASS。
+   qi.window 公用restore+轮询矩形，Screen及三桌面rect_of接线；WindowTests覆盖哨兵、尺寸、失败7、负坐标等。
+(d) 退出码：PASS，qi.exit_codes与docs/exit-codes.md登记；test_card06a.ExitCodeTests验证新码不冲突及workflow例外。
+全量：本卡当前79项，全量731 OK。
+原始实测：card06a_live.txt:60-83 WorkBuddy --list与最小化Grok；:93-145 Gemini低档token及三种拒发。:152-160 的旧“读不到仍放行”事故已由06b改成fail-closed，不当成当前还存在的同一缺陷。
+
+建议返工卡：06a-workbuddy-purpose。登记可核实的WorkBuddy用途模型白名单，或未配置时拒发；补“低档不能accept/review”“未知表拒发”的实际入口测试。别只给 table_unconfigured 提示后继续发送。

@@ -1,0 +1,259 @@
+{
+  "job_id": "20261109T213734-49faba98",
+  "request_id": "75916d09-0961-4ac2-9f0d-53e64c000ca1",
+  "status": "partial",
+  "purpose": "test",
+  "prompt": "只回复下面这一行，不要任何解释、不要加标点：BRIDGE-B17-R4c-6708af83",
+  "created_at": "2026-11-09T13:37:34+00:00",
+  "started_at": "2026-11-09T13:37:34+00:00",
+  "finished_at": "2026-11-09T13:39:33+00:00",
+  "order": [
+    "codex",
+    "opencode",
+    "dsh",
+    "workbuddy"
+  ],
+  "endpoints": {
+    "codex": {
+      "status": "done",
+      "reply": "BRIDGE-B17-R4c-6708af83",
+      "error": null,
+      "error_code": null,
+      "exit_code": 0,
+      "choose": {
+        "ok": true,
+        "dimension": "model",
+        "target": "gpt6_luna",
+        "readback": "gpt6_luna",
+        "targets": {
+          "model": "gpt6_luna"
+        },
+        "confirmed": true,
+        "exit_code": 0,
+        "timeout": false,
+        "elapsed": 22.328,
+        "error_code": null,
+        "error_message": null,
+        "stderr": ""
+      },
+      "use": {
+        "ok": true,
+        "stage": "answered",
+        "reply": "BRIDGE-B17-R4c-6708af83",
+        "exit_code": 0,
+        "timeout": false,
+        "elapsed": 96.86,
+        "error_code": null,
+        "error_message": null,
+        "stderr": "",
+        "detail": {
+          "warnings": [
+            "text_never_settled"
+          ],
+          "settle_basis": "capped",
+          "basis": "new_user_message_and_reply_control"
+        }
+      },
+      "started_at": "2026-11-09T13:37:34+00:00",
+      "finished_at": "2026-11-09T13:39:33+00:00",
+      "elapsed": 119.42,
+      "evidence_l1": {
+        "job_id": "20261109T213734-49faba98",
+        "request_id": "75916d09-0961-4ac2-9f0d-53e64c000ca1",
+        "at": "2026-11-09T13:37:34+00:00",
+        "source": "server"
+      },
+      "progress": {
+        "schema_version": 1,
+        "job_id": "20261109T213734-49faba98",
+        "endpoint": "codex",
+        "pid": 28112,
+        "at": "2026-11-09T21:39:33+0800",
+        "stage": "finished",
+        "outcome": "answered"
+      }
+    },
+    "opencode": {
+      "status": "done",
+      "reply": "BRIDGE-B17-R4c-6708af83",
+      "error": null,
+      "error_code": null,
+      "exit_code": 0,
+      "choose": {
+        "ok": true,
+        "dimension": "model",
+        "target": "deepseek_v41_flash_free",
+        "readback": "deepseek_v41_flash_free",
+        "targets": {
+          "model": "deepseek_v41_flash_free"
+        },
+        "confirmed": true,
+        "exit_code": 0,
+        "timeout": false,
+        "elapsed": 7.813,
+        "error_code": null,
+        "error_message": null,
+        "stderr": ""
+      },
+      "use": {
+        "ok": true,
+        "stage": "answered",
+        "reply": "BRIDGE-B17-R4c-6708af83",
+        "exit_code": 0,
+        "timeout": false,
+        "elapsed": 25.828,
+        "error_code": null,
+        "error_message": null,
+        "stderr": "",
+        "detail": {
+          "settle_basis": "text_stable",
+          "basis": "new_user_message_and_reply_control"
+        }
+      },
+      "started_at": "2026-11-09T13:37:34+00:00",
+      "finished_at": "2026-11-09T13:38:08+00:00",
+      "elapsed": 33.91,
+      "evidence_l1": {
+        "job_id": "20261109T213734-49faba98",
+        "request_id": "75916d09-0961-4ac2-9f0d-53e64c000ca1",
+        "at": "2026-11-09T13:37:34+00:00",
+        "source": "server"
+      },
+      "progress": {
+        "schema_version": 1,
+        "job_id": "20261109T213734-49faba98",
+        "endpoint": "opencode",
+        "pid": 34468,
+        "at": "2026-11-09T21:38:07+0800",
+        "stage": "finished",
+        "outcome": "answered"
+      }
+    },
+    "dsh": {
+      "status": "failed",
+      "reply": null,
+      "error": {
+        "code": "copied_prompt",
+        "message": "复制到的是提问本身，不是回答",
+        "step": "use",
+        "exit_code": 1
+      },
+      "error_code": "copied_prompt",
+      "exit_code": 1,
+      "choose": {
+        "ok": true,
+        "dimension": "model",
+        "target": "deepseek_v41_flash",
+        "readback": "deepseek_v41_flash",
+        "targets": {
+          "model": "deepseek_v41_flash"
+        },
+        "confirmed": true,
+        "exit_code": 0,
+        "timeout": false,
+        "elapsed": 16.844,
+        "error_code": null,
+        "error_message": null,
+        "stderr": ""
+      },
+      "use": {
+        "ok": false,
+        "stage": "copied_prompt",
+        "reply": null,
+        "exit_code": 1,
+        "timeout": false,
+        "elapsed": 72.64,
+        "error_code": "copied_prompt",
+        "error_message": "复制到的是提问本身，不是回答",
+        "stderr": "",
+        "detail": {
+          "warnings": [
+            "busy_ignored"
+          ],
+          "settle_basis": "text_stable"
+        }
+      },
+      "started_at": "2026-11-09T13:37:34+00:00",
+      "finished_at": "2026-11-09T13:39:04+00:00",
+      "elapsed": 89.72,
+      "evidence_l1": {
+        "job_id": "20261109T213734-49faba98",
+        "request_id": "75916d09-0961-4ac2-9f0d-53e64c000ca1",
+        "at": "2026-11-09T13:37:34+00:00",
+        "source": "server"
+      },
+      "progress": {
+        "schema_version": 1,
+        "job_id": "20261109T213734-49faba98",
+        "endpoint": "dsh",
+        "pid": 5688,
+        "at": "2026-11-09T21:39:03+0800",
+        "stage": "finished",
+        "outcome": "copied_prompt"
+      }
+    },
+    "workbuddy": {
+      "status": "done",
+      "reply": "BRIDGE-B17-R4c-6708af83",
+      "error": null,
+      "error_code": null,
+      "exit_code": 0,
+      "choose": {
+        "ok": true,
+        "dimension": "model",
+        "target": "DeepSeek-V4.1-Flash",
+        "readback": "DeepSeek-V4.1-Flash",
+        "targets": {
+          "model": "DeepSeek-V4.1-Flash"
+        },
+        "confirmed": true,
+        "exit_code": 0,
+        "timeout": false,
+        "elapsed": 17.75,
+        "error_code": null,
+        "error_message": null,
+        "stderr": ""
+      },
+      "use": {
+        "ok": true,
+        "stage": "answered",
+        "reply": "BRIDGE-B17-R4c-6708af83",
+        "exit_code": 0,
+        "timeout": false,
+        "elapsed": 20.297,
+        "error_code": null,
+        "error_message": null,
+        "stderr": "",
+        "detail": {
+          "basis": "uia_stop_gone_and_stable_text"
+        }
+      },
+      "started_at": "2026-11-09T13:37:34+00:00",
+      "finished_at": "2026-11-09T13:38:12+00:00",
+      "elapsed": 38.33,
+      "evidence_l1": {
+        "job_id": "20261109T213734-49faba98",
+        "request_id": "75916d09-0961-4ac2-9f0d-53e64c000ca1",
+        "at": "2026-11-09T13:37:34+00:00",
+        "source": "server"
+      },
+      "progress": {
+        "schema_version": 1,
+        "job_id": "20261109T213734-49faba98",
+        "endpoint": "workbuddy",
+        "pid": 628,
+        "at": "2026-11-09T21:38:11+0800",
+        "stage": "finished",
+        "accepted": true,
+        "busy": false,
+        "copies": 1
+      }
+    }
+  },
+  "quorum": {
+    "required": 3,
+    "recovered": 3,
+    "met": true,
+    "clamped": false
+  }
+}

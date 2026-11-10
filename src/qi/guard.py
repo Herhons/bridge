@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import ctypes
 import json
+import os
 import time
 from ctypes import wintypes
 from pathlib import Path
@@ -71,7 +72,8 @@ def idle_seconds() -> float:
 
 
 # ---------------------------------------------------------------- 合成输入标记
-_MARK_CACHE: dict = {"path": None, "mtime": None, "tick": None}
+SYNTHETIC_TTL = 5.0
+_MARK_CACHE: dict = {"path": None, "mtime": None, "tick": None, "wall": None}
 
 
 def mark_synthetic(kind: str = "input", *, path: str | Path | None = None) -> int | None:
@@ -85,7 +87,7 @@ def mark_synthetic(kind: str = "input", *, path: str | Path | None = None) -> in
     target = Path(path) if path is not None else MARK_FILE
     try:
         target.parent.mkdir(parents=True, exist_ok=True)
-        tmp = target.with_name(f".{target.name}.{time.time_ns()}.tmp")
+        tmp = target.with_name(f".{target.name}.{os.getpid()}.{time.time_ns()}.tmp")
         tmp.write_text(json.dumps({"tick": tick, "wall": time.time(), "kind": kind},
                                   ensure_ascii=False), encoding="utf-8")
         tmp.replace(target)
@@ -95,23 +97,27 @@ def mark_synthetic(kind: str = "input", *, path: str | Path | None = None) -> in
 
 
 def synthetic_tick(*, path: str | Path | None = None) -> int | None:
-    """读回记下的 tick；文件不在/读坏了返回 None。按 mtime 缓存，循环里调用不心疼。"""
+    """Only a recent, well-formed exact tick can suppress idle protection."""
     target = Path(path) if path is not None else MARK_FILE
     try:
         stamp = target.stat().st_mtime_ns
     except OSError:
         return None
-    if _MARK_CACHE["path"] == str(target) and _MARK_CACHE["mtime"] == stamp:
-        return _MARK_CACHE["tick"]
-    tick = None
-    try:
-        data = json.loads(target.read_text(encoding="utf-8"))
-        if isinstance(data, dict) and data.get("tick") is not None:
-            tick = int(data["tick"])
-    except (OSError, ValueError, TypeError):
-        tick = None
-    _MARK_CACHE.update(path=str(target), mtime=stamp, tick=tick)
-    return tick
+    if _MARK_CACHE.get("path") != str(target) or _MARK_CACHE.get("mtime") != stamp:
+        tick, wall = None, None
+        try:
+            data = json.loads(target.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                tick, wall = int(data["tick"]), float(data["wall"])
+                if not 0 <= tick <= 0xFFFFFFFF:
+                    tick = None
+        except (OSError, ValueError, TypeError, KeyError):
+            tick, wall = None, None
+        _MARK_CACHE.update(path=str(target), mtime=stamp, tick=tick, wall=wall)
+    wall = _MARK_CACHE.get("wall")
+    if wall is None or not -2.0 <= time.time() - wall <= SYNTHETIC_TTL:
+        return None
+    return _MARK_CACHE.get("tick")
 
 
 def wait_for_idle(need: float = 2.0, timeout: float = 120.0, verbose: bool = True) -> tuple[bool, float]:

@@ -54,7 +54,13 @@ _LAST_PATH: dict[tuple, str | None] = {}
 MAX_FULL_WIDTH = 1600      # 整屏截图缩到这个宽度再存（窗口截图不缩）
 
 # 精确 stage
-EXACT = {"human_check", "input_mismatch"}
+# CARD-06b 返工：`--new` 之后按回执重选模型失败（model_reset_after_new）也是
+# "档位不可信、没发送"的失败，必须和 tier_* 一样留 PNG+JSON，否则统一失败出口
+# 只是把 print 换了个地方。登记在这里，别让证据链断在这一条分支上。
+# R11：端点拒绝这一轮的三条结构判据。这三条**只能靠看现场判断**（发送键灰着、
+# 输入框里还有字），光看一行 JSON 是判不出来的，所以必须留截图。
+EXACT = {"human_check", "input_mismatch", "model_reset_after_new",
+         "submit_refused", "send_unavailable", "accepted_silent"}
 # 前缀 stage
 PREFIXES = ("tier_", "zoom_")
 

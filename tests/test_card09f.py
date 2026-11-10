@@ -15,6 +15,10 @@
 """
 from __future__ import annotations
 
+from offline_guard import ensure_offline
+ensure_offline()
+
+
 import os
 import sys
 import tempfile
@@ -29,7 +33,7 @@ for entry in (str(SRC), str(SRC / "scripts")):
     if entry not in sys.path:
         sys.path.insert(0, entry)
 
-from qi import conversation, exit_codes, gemini, sendgate, tier_guard, ui, uilock  # noqa: E402
+from qi import conversation, exit_codes, gemini, sendgate, submissions, tier_guard, ui, uilock  # noqa: E402
 from qi import workbuddy as wb  # noqa: E402
 from qi.conversation import Conversation  # noqa: E402
 from qi.screen import Screen  # noqa: E402
@@ -109,7 +113,9 @@ class PasteViaClipboard(unittest.TestCase):
              mock.patch.object(conversation.guard, "last_input_tick", return_value=999):
             conv.write(view, "这是很长的一段提问内容")
         screen.type_text.assert_called_once_with("这是很")
-        paste.assert_called_once_with("长的一段提问内容")
+        # B19：写入现在带 attempts（`WriteNotLanded` 要报"第几次失败"）
+        paste.assert_called_once_with("长的一段提问内容", attempts=0,
+                                     expect="这是很长的一段提问内容")
 
     def test_seq_unchanged_raises_and_does_not_paste(self):
         """第 5 条：剪贴板序列号没变 → 不粘贴并报错，且恢复原剪贴板。"""
@@ -143,7 +149,11 @@ class PasteViaClipboard(unittest.TestCase):
 # ================================================================ 3/6. 发送逻辑
 class SendGuard(unittest.TestCase):
     def test_existing_reply_returns_already_answered(self):
-        """第 6 条：对话已有本提问之后的回复 → 只读返回，不发送。"""
+        """第 6 条：对话已有本提问之后的回复 → 只读返回，不发送。
+
+        R8：必须同时是**本事务、同一会话**（记录里的 session id 与 URL 一致），
+        才允许认领；没有证明的旧回答一律 fail-closed（见 test_r8_existing_reply）。
+        """
         prompt_node = text("我的提问", top=0)
         copy_btn = button("复制", top=40)
         bubble = node("GroupControl", "", [prompt_node, copy_btn], height=100)
@@ -151,10 +161,17 @@ class SendGuard(unittest.TestCase):
         view = SimpleNamespace(root=tree, value="", url="https://chatgpt.com/c/1",
                                busy=False, copies=[copy_btn], editor=None)
         conv = mock.Mock()
+        conv.site = "chatgpt"
         conv.empty = lambda v: True
         conv.read = mock.Mock(return_value=view)
         conv.copy = mock.Mock(return_value="回复正文")
-        got = conversation.ask(conv, "我的提问", timeout=5)
+        with tempfile.TemporaryDirectory() as tmp, \
+             mock.patch.object(tier_guard, "ROOT", Path(tmp)):
+            submissions.reserve("chatgpt", "我的提问",
+                                scope={"site": "chatgpt", "url": "https://chatgpt.com/c/1",
+                                       "doc_rid": [1], "hwnd": 4242, "session_id": "1"})
+            submissions.finish("chatgpt", "我的提问", {"submission": "accepted"})
+            got = conversation.ask(conv, "我的提问", timeout=5)
         self.assertEqual(got["stage"], "already_answered")
         self.assertEqual(got["reply"], "回复正文")
         self.assertTrue(got["ok"])
@@ -191,9 +208,9 @@ class SendGuard(unittest.TestCase):
         self.assertEqual(exit_codes.code_for("concurrent_ui"), 9)
 
     def test_floor_timeout(self):
-        """第 6 条：高档 review/accept 等待下限 900s，其余用途原样。"""
-        self.assertEqual(tier_guard.floor_timeout("review", 180), 900)
-        self.assertEqual(tier_guard.floor_timeout("accept", 1000), 1000)
+        """第 6 条：高档 review/accept 等待下限 1500s（B12），其余用途原样。"""
+        self.assertEqual(tier_guard.floor_timeout("review", 180), 1500)
+        self.assertEqual(tier_guard.floor_timeout("accept", 1000), 1500)
         self.assertEqual(tier_guard.floor_timeout("test", 180), 180)
         self.assertEqual(tier_guard.floor_timeout("accept_lite", 180), 180)
 
@@ -213,10 +230,18 @@ class ResendGuard(unittest.TestCase):
                                 url="https://chatgpt.com/c/1", busy=False,
                                 copies=[], editor=None)
         conv = mock.Mock()
+        conv.site = "chatgpt"
         conv.empty = lambda v: not v.value.strip()
         conv.read = mock.Mock(side_effect=[before, empty])
         conv.copy = mock.Mock(return_value="回复正文")
-        got = conversation.ask(conv, "我的提问", timeout=5)
+        with tempfile.TemporaryDirectory() as tmp, \
+             mock.patch.object(tier_guard, "ROOT", Path(tmp)):
+            # R8：本事务 + 同一会话（URL 会话 id 与记录一致），才是合法已答。
+            submissions.reserve("chatgpt", "我的提问",
+                                scope={"site": "chatgpt", "url": "https://chatgpt.com/c/1",
+                                       "doc_rid": [1], "hwnd": 4242, "session_id": "1"})
+            submissions.finish("chatgpt", "我的提问", {"submission": "accepted"})
+            got = conversation.ask(conv, "我的提问", timeout=5)
         self.assertEqual(got["stage"], "already_answered")
         self.assertEqual(got["reply"], "回复正文")
         self.assertTrue(got["cleared_draft"])
@@ -330,7 +355,7 @@ class WebResendGuard(unittest.TestCase):
             children.append(button("发送", top=80))
         return node("DocumentControl", "", children, height=200)
 
-    def _assert_answered_before_draft(self, module, site_name, url):
+    def _assert_answered_before_draft(self, module, site_name, url, *, seeded=False):
         tree = self._gemini_tree() if site_name == "gemini" else self._grok_tree()
         before = SimpleNamespace(root=tree, value="", url=url, busy=False)
         empty = SimpleNamespace(root=node("DocumentControl", ""), value="", url=url, busy=False)
@@ -341,7 +366,20 @@ class WebResendGuard(unittest.TestCase):
         with mock.patch.object(module, "Conversation", return_value=conv), \
              mock.patch.object(module, "write_prompt") as wp, \
              mock.patch.object(module, "_submit") as submit:
-            got = module._send_and_wait(mock.Mock(), site, "我的提问", timeout=5)
+            if seeded:
+                # R9：Gemini 发送前认领旧回答必须先证明本事务 + 同一会话 id。
+                # 真实发送一定先 reserve，这里按真实时序补一条 accepted。
+                tmp = tempfile.mkdtemp(prefix="r9_gemini_refill_")
+                with mock.patch.object(tier_guard, "ROOT", Path(tmp)):
+                    submissions.reserve(site_name, "我的提问",
+                                        scope=submissions.scope_from(
+                                            site=site_name, url=url,
+                                            doc_rid=[900]))
+                    submissions.finish(site_name, "我的提问",
+                                       {"submission": "accepted"})
+                    got = module._send_and_wait(mock.Mock(), site, "我的提问", timeout=5)
+            else:
+                got = module._send_and_wait(mock.Mock(), site, "我的提问", timeout=5)
         self.assertEqual(got["stage"], "already_answered")
         self.assertEqual(got["reply"], "回复正文")
         self.assertTrue(got["cleared_draft"])
@@ -350,7 +388,8 @@ class WebResendGuard(unittest.TestCase):
         submit.assert_not_called()
 
     def test_gemini_answered_before_draft_and_clears_refill(self):
-        self._assert_answered_before_draft(gemini, "gemini", "https://gemini.google.com/c/1")
+        self._assert_answered_before_draft(
+            gemini, "gemini", "https://gemini.google.com/c/1", seeded=True)
 
     def test_grok_answered_before_draft_and_clears_refill(self):
         self._assert_answered_before_draft(grok_use, "grok", "https://grok.com/c/1")
@@ -365,23 +404,47 @@ class AlreadyRepliedGuard(unittest.TestCase):
     覆盖已答（返回 already_answered 结果并清回填草稿）与未答（返回 None）两种情况。
     """
 
+    HWND = 4242
+    RID = 900
+    # R7：恢复现在必须带"与标题无关的会话 id"。这里用一个带会话路径的地址当身份载体
+    # （`_already_replied` 本身与端无关；这不是对 WorkBuddy 真机的断言）。
+    CHAT_URL = "https://gemini.google.com/app/s-09f"
+
+    def _scope(self, **over):
+        base = dict(site="workbuddy", url=self.CHAT_URL, doc_rid=[self.RID],
+                    hwnd=self.HWND)
+        base.update(over)
+        return submissions.scope_from(**base)
+
     def _answered_root(self):
         prompt_leaf = text("我的提问", top=0)
         reply_leaf = text("回复正文", top=40)
         copy_btn = button("复制", top=60)
         toolbar = node("ToolBarControl", "", [copy_btn], height=40, top=60)
         bubble = node("GroupControl", "", [reply_leaf, toolbar], height=100, top=40)
-        return node("DocumentControl", "", [prompt_leaf, bubble], height=200)
+        root = node("DocumentControl", "", [prompt_leaf, bubble], height=200)
+        # R5：恢复要比对文档身份，这里给一个稳定的 runtime id
+        root.control.GetRuntimeId = lambda: [self.RID]
+        return root
 
     def test_already_replied_answered_returns_result(self):
-        before = SimpleNamespace(root=self._answered_root(), value="我的提问", busy=False)
-        recheck = SimpleNamespace(root=node("DocumentControl", ""), value="", busy=False)
+        # 2026-11-07 起"已答"还要求**本事务的提交记录**（没有记录 = 不是我们发的）。
+        # 真实发送一定先 reserve，所以这里按真实时序先造一条 accepted。
+        before = SimpleNamespace(root=self._answered_root(), value="我的提问", busy=False,
+                                 url=self.CHAT_URL)
+        recheck = SimpleNamespace(root=node("DocumentControl", ""), value="", busy=False,
+                                  url=self.CHAT_URL)
         conv = mock.Mock()
         conv.read = mock.Mock(side_effect=[before, recheck])
         conv.empty = mock.Mock(side_effect=[False, True])
         conv.clear = mock.Mock()
-        with mock.patch.object(wb, "open_app", return_value=mock.Mock()), \
+        with tempfile.TemporaryDirectory() as tmp, \
+             mock.patch.object(tier_guard, "ROOT", Path(tmp)), \
+             mock.patch.object(wb, "open_app",
+                               return_value=SimpleNamespace(target_hwnd=self.HWND)), \
              mock.patch.object(wb, "ReplyConversation", return_value=conv):
+            submissions.reserve("workbuddy", "我的提问", scope=self._scope())
+            submissions.finish("workbuddy", "我的提问", {"submission": "accepted"})
             got = wb._already_replied("我的提问")
         self.assertIsNotNone(got)
         self.assertEqual(got["stage"], "already_answered")
@@ -393,13 +456,35 @@ class AlreadyRepliedGuard(unittest.TestCase):
 
     def test_already_replied_not_answered_returns_none(self):
         root = node("DocumentControl", "", [text("别的内容", top=0)], height=200)
-        before = SimpleNamespace(root=root, value="", busy=False)
+        root.control.GetRuntimeId = lambda: [self.RID]   # 同一个文档，只是没这条提问
+        before = SimpleNamespace(root=root, value="", busy=False, url=self.CHAT_URL)
         conv = mock.Mock()
         conv.read = mock.Mock(return_value=before)
-        with mock.patch.object(wb, "open_app", return_value=mock.Mock()), \
+        with tempfile.TemporaryDirectory() as tmp, \
+             mock.patch.object(tier_guard, "ROOT", Path(tmp)), \
+             mock.patch.object(wb, "open_app",
+                               return_value=SimpleNamespace(target_hwnd=self.HWND)), \
+             mock.patch.object(wb, "ReplyConversation", return_value=conv), \
+             mock.patch.object(wb, "open_app",
+                               return_value=SimpleNamespace(target_hwnd=self.HWND)):
+            submissions.reserve("workbuddy", "我的提问", scope=self._scope())
+            got = wb._already_replied("我的提问")
+        self.assertIsNone(got, "有提交记录、但页面上没有这条提问 -> 不能认已答")
+        self.assertEqual(wb.recovery_note()["reason"], "prompt_not_unique")
+
+    def test_already_replied_without_transaction_record_returns_none(self):
+        """没有本事务提交记录时，即使页面上有同文提问+回答也不认（防跨会话误归属）。"""
+        before = SimpleNamespace(root=self._answered_root(), value="我的提问", busy=False)
+        conv = mock.Mock()
+        conv.read = mock.Mock(return_value=before)
+        with tempfile.TemporaryDirectory() as tmp, \
+             mock.patch.object(tier_guard, "ROOT", Path(tmp)), \
+             mock.patch.object(wb, "open_app",
+                               return_value=SimpleNamespace(target_hwnd=self.HWND)), \
              mock.patch.object(wb, "ReplyConversation", return_value=conv):
             got = wb._already_replied("我的提问")
         self.assertIsNone(got)
+        self.assertEqual(wb.recovery_note()["reason"], "no_journal")
 
 
 # ================================================================ 7d. 两次调用同一流程
@@ -431,15 +516,38 @@ class TwoCallRerun(unittest.TestCase):
         conv.empty = lambda v: not v.value.strip()
         conv.settle = 0
         conv.screen = None
-        conv.site = None
-        conv.read = mock.Mock(side_effect=[empty, written, answered, refilled, empty])
+        conv.site = "chatgpt"
+        # T2-2 之后，点完发送会先做一轮 PRE_SUBMIT 探测（≤5s），"已提交"那一帧会被多读
+        # 一次。读取次数不再写死：第一次发送按 empty→written→answered 发放，之后稳定返回
+        # answered（**框是空的**，主循环只在这时才认"已提交"）。
+        first = [empty, written, answered]
+
+        def read_first(*args, **kwargs):
+            return first.pop(0) if first else answered
+
+        conv.read = mock.Mock(side_effect=read_first)
         conv.write = mock.Mock()
         conv.submit = mock.Mock()
         conv.clear = mock.Mock()
         conv.copy = mock.Mock(return_value="回复正文")
 
-        got1 = conversation.ask(conv, prompt, timeout=5)
-        got2 = conversation.ask(conv, prompt, timeout=5)
+        with tempfile.TemporaryDirectory() as tmp, \
+             mock.patch.object(tier_guard, "ROOT", Path(tmp)):
+            got1 = conversation.ask(conv, prompt, timeout=5)
+            # R8：第一次发送在真实入口会先 reserve；这里补上同一事务 + 同一会话，
+            # 第二次才有资格按 already_answered 只读返回。
+            submissions.reserve("chatgpt", prompt,
+                                scope={"site": "chatgpt", "url": url,
+                                       "doc_rid": [1], "hwnd": 4242, "session_id": "1"})
+            submissions.finish("chatgpt", prompt, {"submission": "accepted"})
+            # 第二次：输入框里回填着上一轮的提问（refilled），清掉之后读回空框。
+            second = [refilled]
+
+            def read_second(*args, **kwargs):
+                return second.pop(0) if second else empty
+
+            conv.read = mock.Mock(side_effect=read_second)
+            got2 = conversation.ask(conv, prompt, timeout=5)
 
         self.assertEqual(got1["stage"], "answered")
         self.assertEqual(got1["submission"], "accepted")

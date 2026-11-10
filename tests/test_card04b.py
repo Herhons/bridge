@@ -12,6 +12,10 @@ CARD-04 被打回的第 2 条：初始化（打开窗口、建会话）在异常
 """
 from __future__ import annotations
 
+from offline_guard import ensure_offline
+ensure_offline()
+
+
 import contextlib
 import importlib.util
 import io

@@ -16,6 +16,10 @@ stage=exception 且 error 里带异常类型和原文、异常照原样抛出；
 """
 from __future__ import annotations
 
+from offline_guard import ensure_offline
+ensure_offline()
+
+
 import contextlib
 import importlib.util
 import io

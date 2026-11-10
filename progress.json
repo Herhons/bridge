@@ -1,54 +1,239 @@
 {
-  "card_id": "09f-fix2",
+  "card_id": "T2-T3-T4-IMPLEMENTED",
   "status": "done",
-  "note": "CARD-09f-fix2 完成：09f 第二轮返工（只补测试，不改 src 生产代码）。补 5 项单测：①gemini/grok 各 1 项——已答先于草稿判定（回填草稿存在返回 already_answered 而非 draft_present）+ 清回填草稿读回为空 + 不重发（write_prompt/_submit 未调用），真树走真实 scan/parse/_already_answered/_clear_draft；②workbuddy._already_replied 真实执行 2 项（只 patch open_app/ReplyConversation，prompt_at/last_reply/reply_text/reply_copy 真跑），覆盖已答与未答两种情况断言返回值；③两次调用同一流程 1 项——第一次 accepted 真实提交、第二次重跑只读不重发，submit 仅一次且回填草稿清空读回为空。py3.10 731 OK（726+5）。证据 card09f_fix2_unittest.txt。未验：三项均离线，真机路径未制造。",
-  "updated_at": "2026-11-02T19:22:07+08:00",
+  "note": "B1-B5 施工完成(自测)+B6评估不做: 六态账本/五端接入/四错误码/插件F4F5/窗口归属; 离线1159 OK EXIT=0; 独立验收与实机全部 pending。",
+  "updated_at": "2026-11-07T12:45:16+08:00",
   "running": [],
-  "verdicts": {
-    "01": "PASS",
-    "02": "PASS",
-    "03": "PASS",
-    "04+04b": "BLOCK",
-    "04c": "PASS(GLM,待Codex复验)",
-    "PLAN-r1": "PASS(GLM,待Codex复验)",
-    "GEM": "PASS(GLM,待Codex复验)",
-    "WEB": "PASS(GLM,待Codex复验)",
-    "05": "PASS(GLM,待Codex复验)",
-    "WEB2": "PASS(GLM,待Codex复验)",
-    "06a": "PASS(GLM,待Codex复验)",
-    "06b": "PASS(Hy3,WorkBuddy只读,412 OK;待Codex复验)",
-    "06c": "PASS(Hy4 preview,只读,447 OK;GLM 链路按额度报错规则;待Codex复验)",
-    "06d": "PASS(Hy4 preview,只读,447 OK;待Codex复验)",
-    "07": "PASS(Hy4 preview,只读,py3.10 487 OK;evidence\\accept_07_hy4_reply_uia.txt;待Codex复验)",
-    "08": "PASS(Hy4 preview,只读,py3.10 529 OK;evidence\\accept_08_hy4.txt;第3项 chatgpt_choose --list UIA读出 聊天/GPT-6/高 EXIT=0;7b 仅dry-run,真推未发未接调度;待Codex复验)",
-    "09a": "PASS(Hy4 preview,??,583 OK;evidence\\accept_09a_hy4_r2.txt;??FAIL?????,??card09a_notify.txt;BRIDGE_NOTIFY_URL???????;?Codex??)",
-    "09b": "PASS(Hy4 preview,只读,py3.10 645 OK;evidence\\accept_09b_hy4_reply_uia.txt;/health保留port为已知偏差;扩展未真机加载待09d;待Codex复验)",
-    "09e": "PASS(Hy4 preview,只读,py3.10 709 OK;evidence\\accept_09e_hy4.txt;未验:WorkBuddy自身重启真机,粘贴兜底真机未触发;待Codex复验)",
-    "09f": {
-      "verdict": "FAIL",
-      "by": "Hy4 preview accept",
-      "at": "2026-11-02 18:49",
-      "reason": "第7条 accepted后不自动重发+清回填草稿读回为空：无实现无单测；第6条中断重跑不重复提交单测缺；其余条有实现+单测；720 OK",
-      "evidence": "evidence/accept_09f_hy4_send.txt"
+  "queue": [],
+  "batches": [
+    {
+      "id": "B1",
+      "scope": "T2-1 前半 + T2-2 + T4-1",
+      "changed": "submissions.py 六态v2 + 三级证据 + 三条不变量; use_timeout 180→120; tiers.json 补 WorkBuddy test/accept; notify NOT_CONFIGURED; +2 工具",
+      "tests_after": 1069,
+      "result": "OK"
     },
-    "09f-fix": {
-      "verdict": "FAIL",
-      "by": "Hy4 preview accept",
-      "at": "2026-11-02 19:12",
-      "reason": "gemini/grok 已答先判+清回填草稿无单测；_already_replied 判据单测全被 mock 未真实执行；第3/4项PASS；726 OK",
-      "evidence": "evidence/accept_09f_fix_hy4_send.txt"
+    {
+      "id": "B2",
+      "scope": "T2-1 后半",
+      "changed": "conversation.ask 挂账本（覆盖 chatgpt/deepseek/codex/dsh/opencode 五端）; flow 透传 purpose; server 写 evidence_l1 并下发 env",
+      "tests_after": 1094,
+      "result": "OK"
+    },
+    {
+      "id": "B3",
+      "scope": "T3-1",
+      "changed": "replycodes.py 四个错误码; reply_text/last_reply/attributed_reply 加 detail 版; wait_reply 连续结构原因早退（stage 仍叫 timeout）",
+      "tests_after": 1117,
+      "result": "OK"
+    },
+    {
+      "id": "B5",
+      "scope": "T4-2",
+      "changed": "插件 F4 从零接（只写 progress-test.json，三重防护 + mtime 乐观锁）; F5 错误三维去重 + 补 bad_request/server; 终态 job 输出回填; request_id 落盘; 服务端故障注入（双条件）",
+      "tests_after": 1144,
+      "result": "OK"
+    },
+    {
+      "id": "B4",
+      "scope": "T1-1 + T1-2 登记",
+      "changed": "删掉迟到窗口认领（不再误关用户窗口）; 加 nonce 归属校验（灰度三端）; known_gaps.md 登记 T1-2=NOT_IMPLEMENTED",
+      "tests_after": 1159,
+      "result": "OK"
+    },
+    {
+      "id": "B6",
+      "scope": "F3 并发评估",
+      "changed": "评估后决定不做（只改调度会导致子进程抢同一把锁，墙钟不变且多出 ui_busy）; 登记 known_gaps",
+      "tests_after": 1159,
+      "result": "NOT_IMPLEMENTED"
+    }
+  ],
+  "known_gaps": [
+    {
+      "id": "T1-2",
+      "title": "真人输入让位（事件级归属）",
+      "status": "not_implemented",
+      "decided_by": "用户",
+      "decided_at": "2026-11-07",
+      "reason": "不愿引入全局低级键盘/鼠标钩子",
+      "impact": "打字/粘贴后约 150ms 盲区；检查到点击前约 2 秒空窗",
+      "evidence": "docs/known_gaps.md"
+    },
+    {
+      "id": "F3-concurrency",
+      "title": "多端真并发（锁粒度）",
+      "status": "not_implemented",
+      "decided_by": "施工方评估",
+      "decided_at": "2026-11-07",
+      "reason": "只改调度无效（子进程抢同一把 ui.lock）；真并发需同时收窄 6 个入口的锁，无法离线验证",
+      "impact": "多端会审功能可用但总墙钟≈各端之和，不满足 F3 的“任务时间重叠”",
+      "evidence": "evidence/batch6/CONCURRENCY_ASSESSMENT.md"
+    }
+  ],
+  "three_state_legend": {
+    "dev_status": "施工方自测，不构成通过",
+    "offline_audit_status": "非施工方独立离线复核；pending=未做",
+    "e2e_accept_status": "非施工方实机验收；not_run=未做"
+  },
+  "final": {
+    "tests": 1159,
+    "exit": 0,
+    "formal_dir_untouched": true,
+    "evidence_index": "evidence/FINAL_SUMMARY.md",
+    "gate": "全部改动 dev_status=selftested；offline_audit 与 e2e 均未做，不得宣称任何一项通过"
+  },
+  "verdicts": {
+    "04c": {
+      "recheck": "FAIL",
+      "dev": "selftested",
+      "offline_audit": "pending",
+      "e2e": "not_run"
+    },
+    "PLAN-r1": {
+      "recheck": "FAIL",
+      "dev": "selftested",
+      "offline_audit": "pending",
+      "e2e": "not_run"
+    },
+    "GEM": {
+      "recheck": "PASS",
+      "dev": "unchanged",
+      "offline_audit": "pass_prior",
+      "e2e": "not_run"
+    },
+    "WEB": {
+      "recheck": "FAIL",
+      "dev": "selftested",
+      "offline_audit": "pending",
+      "e2e": "not_run"
+    },
+    "05": {
+      "recheck": "PASS",
+      "dev": "unchanged",
+      "offline_audit": "pass_prior",
+      "e2e": "not_run"
+    },
+    "WEB2": {
+      "recheck": "FAIL",
+      "dev": "selftested",
+      "offline_audit": "pending",
+      "e2e": "not_run"
+    },
+    "06a": {
+      "recheck": "FAIL",
+      "dev": "selftested",
+      "offline_audit": "pending",
+      "e2e": "not_run"
+    },
+    "06b": {
+      "recheck": "FAIL",
+      "dev": "selftested",
+      "offline_audit": "pending",
+      "e2e": "not_run"
+    },
+    "06c": {
+      "recheck": "FAIL",
+      "dev": "selftested",
+      "offline_audit": "pending",
+      "e2e": "not_run"
+    },
+    "06d": {
+      "recheck": "PASS",
+      "dev": "unchanged",
+      "offline_audit": "pass_prior",
+      "e2e": "not_run"
+    },
+    "07": {
+      "recheck": "FAIL",
+      "dev": "selftested",
+      "offline_audit": "pending",
+      "e2e": "not_run"
+    },
+    "08": {
+      "recheck": "FAIL",
+      "dev": "selftested",
+      "offline_audit": "pending",
+      "e2e": "not_run"
+    },
+    "09a": {
+      "recheck": "FAIL",
+      "dev": "selftested",
+      "offline_audit": "pending",
+      "e2e": "not_run"
+    },
+    "09b": {
+      "recheck": "FAIL",
+      "dev": "selftested",
+      "offline_audit": "pending",
+      "e2e": "not_run"
+    },
+    "09e": {
+      "recheck": "FAIL",
+      "dev": "selftested",
+      "offline_audit": "pending",
+      "e2e": "not_run"
     },
     "09f-fix2": {
-      "verdict": "PASS",
-      "by": "Hy4 preview accept",
-      "at": "2026-11-02 19:26",
-      "where": "构建者对话（例外，仅此一次；Herhons 批准）",
-      "note": "Ran 731 OK；变异验证5/5；src 未改。新对话验收由 Herhons 在7s 主动中断以免重复，作废、未重发。下张卡起验收一律新对话。",
-      "evidence": "evidence/accept_09f_fix2_builderchat_reply_REFERENCE.txt; evidence/wb_dump_builderchat_1927.txt",
-      "void": "evidence/accept_09f_fix2_hy4_send.txt（新对话，已中断）"
+      "recheck": "FAIL",
+      "dev": "selftested",
+      "offline_audit": "pending",
+      "e2e": "not_run"
+    },
+    "round:UI-BOOTSTRAP-2": {
+      "dev": "done",
+      "offline_audit": "none",
+      "e2e": "not_run",
+      "test_baseline": null
+    },
+    "round:UI-BOOTSTRAP-3": {
+      "dev": "done",
+      "offline_audit": "none",
+      "e2e": "not_run",
+      "test_baseline": 909
+    },
+    "round:R4": {
+      "dev": "done",
+      "offline_audit": "glm_reviewed",
+      "e2e": "not_run",
+      "test_baseline": 919
+    },
+    "round:R5": {
+      "dev": "done",
+      "offline_audit": "none",
+      "e2e": "not_run",
+      "test_baseline": 949
+    },
+    "round:R6": {
+      "dev": "done",
+      "offline_audit": "none",
+      "e2e": "not_run",
+      "test_baseline": null
+    },
+    "round:R7": {
+      "dev": "done",
+      "offline_audit": "none",
+      "e2e": "not_run",
+      "test_baseline": null
+    },
+    "round:R8": {
+      "dev": "done",
+      "offline_audit": "hy4_PASS",
+      "e2e": "not_run",
+      "test_baseline": 992
+    },
+    "round:R9": {
+      "dev": "done",
+      "offline_audit": "hy4_S8_FAIL_S9_S10_OPEN",
+      "e2e": "not_run",
+      "test_baseline": 1005
+    },
+    "round:R10": {
+      "dev": "done",
+      "offline_audit": "pending",
+      "e2e": "not_run",
+      "test_baseline": 1023,
+      "note": "live_long_echo NOT_VERIFIED"
     }
-  },
-  "queue": [
-    "10"
-  ]
+  }
 }

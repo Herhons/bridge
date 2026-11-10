@@ -1,0 +1,44 @@
+Bridge v0.0.9 · Codex 独立只读复验 · 2026-11-06（北京时间）
+工作目录：F:\Bridge\v0.0.9
+共同回归命令：py -3.10 -X utf8 -B -m unittest discover -s tests -v
+Python 3.10.11；最终隔离复跑 Ran 731 tests in 24.369s；OK；EXIT=0；无跳过。
+正式日志 unittest_isolated.txt；首轮731/23.319s原日志unittest.txt保留。两轮使用同一src/tests，第二轮只在运行期重定向写盘并拦截越界写入/真实输入。
+执行偏差：首轮测试漏隔离导致目录外日志/合成输入标记/失败截图写盘，详 READONLY_INCIDENT.txt；不把首轮冒称完全只读。最终隔离复跑目录外变更为0。
+保护对象 src/tests/cards/PLAN.md/progress.json 共402个既有文件SHA256不变；未新增受保护文件，详integrity_final.json。
+独立反例：independent_probes.py/.txt/_result.json；补充 independent_additional.py/.txt/_result.json，共15项，不计入731单测。
+判定口径：PASS仅针对本卡；FAIL区分实现缺陷与证据不足。未主动运行真机choose/use发送入口或外部通知，不重放旧提问。
+后续卡明确改变的行为按后续要求评估，不把合法后续变更算成旧卡回归。
+
+VERDICT FAIL
+缺口性质：新增5项正向测试确实存在且执行真实判据；但“accepted后中断再重跑”的路径未覆盖实际入口，真实消费回执后WorkBuddy根本到不了已答检查。
+
+范围与依据
+cards目录只有 CARD-09f-ui-lock.md，没有单独09f-fix2卡。按用户明确列出的fix2，将原09f条款6及PLAN防重发规则作为生产合同，并按CHANGES-20261030.md:1755-1798、progress.note、旧复验原始提示重建本次“只补测试”的四项范围。
+progress中的09f-fix2实际上已经标PASS（并注明旧新对话验收作废/构建对话参考），并非文字“待Codex复验”；用户这次明确要求纳入，故仍独立复核，不把旧PASS当本次结论。
+
+fix2四项逐条核对
+1. Gemini/Grok 已答+回填草稿，先already_answered后draft_present、清空读回且不重发：PASS。
+   tests/test_card09f.py:310-356各1项，真实_send_and_wait/parse/scan/_already_answered/draft_present/_clear_draft执行，只mock数据入口和禁止提交的观察点，断言clear/cleared_draft/wp/submit。不是只mock最终判据。
+2. WorkBuddy _already_replied本人真实执行、已答/未答两种返回：PASS。
+   :360-402两项只替换open_app与ReplyConversation；prompt_at/last_reply/reply_text/reply_copy真跑，有reply/submission/sent/cleared/None的断言。
+3. accepted后中断再调用同一流程、只提交一次且草稿空：PARTIAL，不能验收PASS。
+   :414-451确实调用conversation.ask两次，第一次真走假输入的write→submit→answered，第二次refilled→already_answered并clear。
+   但第一次明确断言stage=answered，未发生“accepted后中断”；没有检验实际workbuddy_use入口的回执校验和重启重试。两个ask直调绕过了关键入口。
+   独立 P09F_wb_consumed_rerun：临时目录写回执并真实consume，调用workbuddy._run(--continue)；实际gate返回exit5/reason=consumed，ask_calls=0、preflight_already_replied_calls=0。
+   对当前对话已答的重跑，普通_run仍在workbuddy.py:828-834先过消费门禁，后面ask的已答检查永远到不了。_already_replied只在_restart_and_retry分支被调用，不能覆盖普通重跑。
+   因此已答判据本身正确并不等于“任何*_use发送前先查已答”已接线。
+4. 本轮不改生产代码：新增测试与备份差异支持“5项新增、无删除”，本次哈希基线证实本次只读审查未改src。不能仅凭mtime证明历史施工窗口生产代码绝未修改；此处不制造无证据的篡改指控。
+
+继承09f生产合同的额外核对
+- 运行级UI锁：各CLI入口有uilock.run，元数据含pid/启动时间、超时码8及进程死亡回收测试存在；server持锁再启动同锁子进程会自锁，独立P09A_parent_child_lock，详09a，不能把单独互斥测试当端到端锁正确。
+- 输入前缀+剪贴板序号/异常恢复：Conversation.write/_paste_via_clipboard及PasteViaClipboard测试存在，基本正向/异常路径全绿。
+- 发送中文档变化→清草稿/code9：SendGuard测试存在，但检测主要在写前/写后比较，并非对每次底层输入逐步证明。未把这点单独升级成已确认真机事故。
+- 高档至少900秒：各use有floor_timeout；server外层仍用180秒杀进程。独立补充P09F_server_outer_timeout捕获真实_run_use构造cmd和runner外限=180，即使内部floor到900也活不到900。test_floor_timeout只测纯函数，漏了调用方预算。
+- accepted后绝不自动重发、回填草稿清理：共享及Web已有启动时已答清理；上述普通WorkBuddy消费门禁仍阻断重跑只读恢复。Gemini/Grok等待成功阶段没有一处统一accepted后回填清理，现有两项仅证明进入时已有答的路径，建议覆盖“接受后等待中回填”的负例，避免把5个新增测试泛化成所有阶段完工。
+
+测试与证据
+当前test_card09f共22项；与 _backup_20261102/test_card09f.py.bak-09ffix2 按AST测试名对比，恰好新增5项，未删除旧测试；全量731 OK。
+evidence/accept_09f_fix2_builderchat_reply_REFERENCE.txt本人也承认第一趟正常成功、没测accepted后异常；文件名标REFERENCE，不能当新对话独立验收已满足。accept_09f_fix2_hy4_send.txt已被progress注明作废，不采用为PASS证据。
+本轮完全离线，不制造accepted提交、不触发重启、不重放旧提问。
+
+建议返工卡：09f-fix3-entry-recovery。补真实入口级离线集成：第一次accepted后抛中断，回执已消费；第二次已答只读且清回填、未答但accepted/unknown禁止盲目重发；覆盖WorkBuddy普通重跑/UiDocsLost以及Gemini/Grok。修高档的所有外层预算；发现生产bug应开明确生产修复卡，不能继续只增加绕过入口的成功样例。

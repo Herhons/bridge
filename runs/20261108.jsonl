@@ -1,0 +1,50 @@
+{"time": "2026-11-08T13:32:57+0800", "endpoint": "workbuddy", "ok": true, "result": "answered", "timeout_kind": null, "submission": "accepted", "elapsed": 7.6, "error": null}
+{"time": "2026-11-08T15:00:21+0800", "endpoint": "workbuddy", "ok": true, "result": "answered", "timeout_kind": null, "submission": "accepted", "elapsed": 9.2, "error": null}
+{"time": "2026-11-08T15:01:16+0800", "endpoint": "codex", "ok": true, "result": "answered", "timeout_kind": null, "submission": "accepted", "elapsed": 22.5, "error": null}
+{"time": "2026-11-08T15:02:27+0800", "endpoint": "codex", "ok": true, "result": "answered", "timeout_kind": null, "submission": "accepted", "elapsed": 10.8, "error": null}
+{"time": "2026-11-08T15:04:21+0800", "endpoint": "codex", "ok": true, "result": "answered", "timeout_kind": null, "submission": "accepted", "elapsed": 11.1, "error": null}
+{"time": "2026-11-08T15:05:13+0800", "endpoint": "codex", "ok": true, "result": "answered", "timeout_kind": null, "submission": "accepted", "elapsed": 9.9, "error": null}
+{"time": "2026-11-08T15:06:25+0800", "endpoint": "codex", "ok": true, "result": "answered", "timeout_kind": null, "submission": "accepted", "elapsed": 9.0, "error": null}
+{"time": "2026-11-08T15:07:18+0800", "endpoint": "codex", "ok": false, "result": "user_took_over", "timeout_kind": null, "submission": "accepted", "elapsed": 11.6, "error": "目标窗口不在前台（前台=1378394，目标=132456）。你可能切到了别的窗口，已中止，不猜位置。"}
+{"time": "2026-11-08T15:07:18+0800", "endpoint": "workbuddy", "ok": true, "result": "answered", "timeout_kind": null, "submission": "accepted", "elapsed": 8.6, "error": null}
+{"time": "2026-11-08T15:07:56+0800", "endpoint": "workbuddy", "ok": true, "result": "answered", "timeout_kind": null, "submission": "accepted", "elapsed": 9.1, "error": null}
+{"time": "2026-11-08T15:07:58+0800", "endpoint": "codex", "ok": true, "result": "answered", "timeout_kind": null, "submission": "accepted", "elapsed": 11.1, "error": null}
+{"time": "2026-11-08T15:08:35+0800", "endpoint": "opencode", "ok": false, "result": "draft_present", "timeout_kind": null, "submission": "not_sent", "elapsed": 9.6, "error": "当前输入框已有草稿"}
+{"time": "2026-11-08T15:08:45+0800", "endpoint": "workbuddy", "ok": true, "result": "answered", "timeout_kind": null, "submission": "accepted", "elapsed": 8.8, "error": null}
+{"time": "2026-11-08T15:11:59+0800", "endpoint": "workbuddy", "ok": true, "result": "answered", "timeout_kind": null, "submission": "accepted", "elapsed": 9.2, "error": null}
+{"time": "2026-11-08T15:12:01+0800", "endpoint": "gemini", "ok": true, "result": "answered", "timeout_kind": null, "submission": "accepted", "elapsed": 14.6, "error": null}
+{"time": "2026-11-08T15:12:01+0800", "endpoint": "gemini", "ok": true, "result": "reply_criteria", "timeout_kind": null, "submission": "accepted", "elapsed": 14.6, "error": null, "criteria": "reply_bar+text_stable_3s", "basis": "tree_reply_bar_and_stable_text", "read_via": null}
+{"time": "2026-11-08T15:15:28+0800", "endpoint": "opencode", "ok": true, "result": "answered", "timeout_kind": null, "submission": "accepted", "elapsed": 9.2, "error": null}
+{"time": "2026-11-08T15:15:33+0800", "endpoint": "workbuddy", "ok": true, "result": "answered", "timeout_kind": null, "submission": "accepted", "elapsed": 9.4, "error": null}
+{"time": "2026-11-08T15:15:37+0800", "endpoint": "gemini", "ok": true, "result": "answered", "timeout_kind": null, "submission": "accepted", "elapsed": 14.2, "error": null}
+{"time": "2026-11-08T15:15:37+0800", "endpoint": "gemini", "ok": true, "result": "reply_criteria", "timeout_kind": null, "submission": "accepted", "elapsed": 14.2, "error": null, "criteria": "reply_bar+text_stable_3s", "basis": "tree_reply_bar_and_stable_text", "read_via": null}
+{"time": "2026-11-08T15:16:17+0800", "endpoint": "opencode", "ok": true, "result": "answered", "timeout_kind": null, "submission": "accepted", "elapsed": 10.6, "error": null}
+{"time": "2026-11-08T15:16:22+0800", "endpoint": "gemini", "ok": true, "result": "answered", "timeout_kind": null, "submission": "accepted", "elapsed": 12.8, "error": null}
+{"time": "2026-11-08T15:16:22+0800", "endpoint": "gemini", "ok": true, "result": "reply_criteria", "timeout_kind": null, "submission": "accepted", "elapsed": 12.8, "error": null, "criteria": "reply_bar+text_stable_3s", "basis": "tree_reply_bar_and_stable_text", "read_via": null}
+{"time": "2026-11-08T15:16:23+0800", "endpoint": "workbuddy", "ok": true, "result": "answered", "timeout_kind": null, "submission": "accepted", "elapsed": 10.8, "error": null}
+{"time": "2026-11-08T15:16:53+0800", "endpoint": "opencode", "ok": true, "result": "answered", "timeout_kind": null, "submission": "accepted", "elapsed": 5.1, "error": null}
+{"time": "2026-11-08T15:16:59+0800", "endpoint": "workbuddy", "ok": true, "result": "answered", "timeout_kind": null, "submission": "accepted", "elapsed": 9.0, "error": null}
+{"time": "2026-11-08T15:18:44+0800", "endpoint": "opencode", "ok": true, "result": "answered", "timeout_kind": null, "submission": "accepted", "elapsed": 10.9, "error": null}
+{"time": "2026-11-08T15:18:48+0800", "endpoint": "gemini", "ok": true, "result": "answered", "timeout_kind": null, "submission": "accepted", "elapsed": 8.6, "error": null}
+{"time": "2026-11-08T15:18:48+0800", "endpoint": "gemini", "ok": true, "result": "reply_criteria", "timeout_kind": null, "submission": "accepted", "elapsed": 8.6, "error": null, "criteria": "stop_gone+text_stable_2_reads", "basis": "stop_gone_and_stable_text", "read_via": null}
+{"time": "2026-11-08T15:18:49+0800", "endpoint": "workbuddy", "ok": true, "result": "answered", "timeout_kind": null, "submission": "accepted", "elapsed": 9.5, "error": null}
+{"time": "2026-11-08T21:24:53+0800", "endpoint": "gemini", "ok": true, "result": "answered", "timeout_kind": null, "submission": "accepted", "elapsed": 13.9, "error": null}
+{"time": "2026-11-08T21:24:53+0800", "endpoint": "gemini", "ok": true, "result": "reply_criteria", "timeout_kind": null, "submission": "accepted", "elapsed": 13.9, "error": null, "criteria": "reply_bar+text_stable_3s", "basis": "tree_reply_bar_and_stable_text", "read_via": null}
+{"time": "2026-11-08T21:25:35+0800", "endpoint": "gemini", "ok": false, "result": "interrupted", "timeout_kind": null, "submission": "not_sent", "elapsed": 11.9, "error": "gemini: 目标文档数量为 0，无法绑定（hwnd=133502 标题='仅输出指定字符串 - DeepSeek - Google Chrome' 前台=是 最小化=否；读到 1 个文档：#1 name='仅输出指定字符串 - DeepSeek' url=https://chat.deepseek.com/a/chat/s/22c3b06e-add6-4ccc-a4b8-e0a9cfbcf7b9）"}
+{"time": "2026-11-08T21:25:38+0800", "endpoint": "deepseek", "ok": true, "result": "answered", "timeout_kind": null, "submission": "accepted", "elapsed": 17.9, "error": null}
+{"time": "2026-11-08T21:27:02+0800", "endpoint": "gemini", "ok": false, "result": "interrupted", "timeout_kind": null, "submission": "not_sent", "elapsed": 19.4, "error": "gemini: 目标文档数量为 0，无法绑定（hwnd=133502 标题='仅输出指定字符串 - DeepSeek - Google Chrome' 前台=是 最小化=否；读到 1 个文档：#1 name='仅输出指定字符串 - DeepSeek' url=https://chat.deepseek.com/a/chat/s/22c3b06e-add6-4ccc-a4b8-e0a9cfbcf7b9）"}
+{"time": "2026-11-08T21:27:12+0800", "endpoint": "deepseek", "ok": true, "result": "answered", "timeout_kind": null, "submission": "accepted", "elapsed": 10.2, "error": null}
+{"time": "2026-11-08T21:28:46+0800", "endpoint": "gemini", "ok": true, "result": "answered", "timeout_kind": null, "submission": "accepted", "elapsed": 51.2, "error": null}
+{"time": "2026-11-08T21:28:46+0800", "endpoint": "gemini", "ok": true, "result": "reply_criteria", "timeout_kind": null, "submission": "accepted", "elapsed": 51.2, "error": null, "criteria": "reply_bar+text_stable_3s", "basis": "tree_reply_bar_and_stable_text", "read_via": null}
+{"time": "2026-11-08T21:32:02+0800", "endpoint": "gemini", "ok": true, "result": "answered", "timeout_kind": null, "submission": "accepted", "elapsed": 40.8, "error": null}
+{"time": "2026-11-08T21:32:02+0800", "endpoint": "gemini", "ok": true, "result": "reply_criteria", "timeout_kind": null, "submission": "accepted", "elapsed": 40.8, "error": null, "criteria": "reply_bar+text_stable_3s", "basis": "tree_reply_bar_and_stable_text", "read_via": null}
+{"time": "2026-11-08T21:32:05+0800", "endpoint": "chatgpt", "ok": true, "result": "answered", "timeout_kind": null, "submission": "accepted", "elapsed": 17.3, "error": null}
+{"time": "2026-11-08T21:32:42+0800", "endpoint": "deepseek", "ok": true, "result": "answered", "timeout_kind": null, "submission": "accepted", "elapsed": 25.6, "error": null}
+{"time": "2026-11-08T21:32:53+0800", "endpoint": "gemini", "ok": true, "result": "answered", "timeout_kind": null, "submission": "accepted", "elapsed": 33.4, "error": null}
+{"time": "2026-11-08T21:32:53+0800", "endpoint": "gemini", "ok": true, "result": "reply_criteria", "timeout_kind": null, "submission": "accepted", "elapsed": 33.4, "error": null, "criteria": "reply_bar+text_stable_3s", "basis": "tree_reply_bar_and_stable_text", "read_via": null}
+{"time": "2026-11-08T21:33:49+0800", "endpoint": "gemini", "ok": false, "result": "prepare_failed", "timeout_kind": null, "submission": "not_sent", "elapsed": 19.1, "error": "stage=prepare_failed (no hint/error/note)"}
+{"time": "2026-11-08T21:33:52+0800", "endpoint": "deepseek", "ok": true, "result": "answered", "timeout_kind": null, "submission": "accepted", "elapsed": 19.7, "error": null}
+{"time": "2026-11-08T21:34:28+0800", "endpoint": "opencode", "ok": true, "result": "answered", "timeout_kind": null, "submission": "accepted", "elapsed": 6.3, "error": null}
+{"time": "2026-11-08T21:34:32+0800", "endpoint": "codex", "ok": true, "result": "answered", "timeout_kind": null, "submission": "accepted", "elapsed": 11.4, "error": null}
+{"time": "2026-11-08T21:34:35+0800", "endpoint": "workbuddy", "ok": true, "result": "answered", "timeout_kind": null, "submission": "accepted", "elapsed": 9.8, "error": null}
+{"time": "2026-11-08T21:35:27+0800", "endpoint": "workbuddy", "ok": true, "result": "answered", "timeout_kind": null, "submission": "accepted", "elapsed": 8.8, "error": null}

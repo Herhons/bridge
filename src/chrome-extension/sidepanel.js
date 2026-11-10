@@ -11,12 +11,25 @@
  * - job_id 存 storage.local（带创建时间，24h 清理）；重开面板先跑一轮 /jobs/<id>。
  * - 轮询用 PollScheduler：单例定时器，连点/重开都不叠加。
  */
-import { BridgeError, JOB_TTL_MS, ask, endpoints as fetchEndpoints, health, job as fetchJob } from "./bridge-api.js";
+import { BridgeError, JOB_TTL_MS, ask, endpoints as fetchEndpoints, health, job as fetchJob, moveCard, workflow as fetchWorkflow } from "./bridge-api.js";
 import { PollScheduler } from "./poll-scheduler.js";
 
 const DRAFT_KEY = "bridge.v009.interfaceDraft";
 const TOKEN_KEY = "bridge.v009.token";
 const JOBS_KEY = "bridge.v009.jobs";
+/* T4-2 F4：工作流卡片。**测试模式默认开**——默认安全侧：就算验收方忘了切换，
+   也只会动 progress-test.json，碰不到正式 progress.json。 */
+const TEST_KEY = "bridge.v009.testMode";
+const WORKFLOW_KEY = "bridge.v009.workflow";
+const ERRORS_KEY = "bridge.v009.errors";
+const WORKFLOW_TEST_FILE = "progress-test.json";
+/* 只用来给「推进」按钮选一个默认目标；合法与否由服务端状态机裁决（非法迁移返回 409）。
+   这份表必须与 docs/workflow/workflow.json 的 transitions 首项一致，测试会校验。 */
+const WORKFLOW_NEXT = {
+  draft: "sent", sent: "running", running: "done", done: "verifying",
+  failed: "sent", stuck: "sent", verifying: "pass", block: null,
+  hold: "verifying", pass: null,
+};
 const ACTIVE_INTERVAL_MS = 3000;
 const IDLE_INTERVAL_MS = 20000;
 const PROMPT_PREVIEW = 80;
@@ -139,6 +152,11 @@ let trackedJobs = [];             // [{job_id, created_at, purpose, endpoints, p
 let selectedJobId = null;
 let tickBusy = false;
 const jobCache = new Map();       // job_id -> 后端完整 job 记录
+let testMode = true;              // T4-2 F4：默认只读写 progress-test.json
+let workflowMirror = null;        // {file, data, mtime} —— mtime 是乐观锁的依据
+let workflowBusy = false;
+const errorSeen = new Map();      // T4-2 F5：错误去重键 -> 次数
+const fetchedJobs = new Set();    // 终态 job 只补拉一次，避免每 3 秒放大请求
 
 /* ------------------------------------------------------------------ 存储 */
 async function lockStorage() {
@@ -551,6 +569,84 @@ function jobLabel(status) {
   }[status] || status || "未知";
 }
 
+/* 端脚本返回的 stage → 给人看的中文。
+   放在这里而不是新开一个文件：静态断言只扫固定那几个 JS 文件，
+   新文件等于给自己开一个测试盲区。 */
+const STAGE_LABELS = {
+  answered: "已回答",
+  already_answered: "页面已有本轮回答",
+  read: "已读取",
+  timeout: "等回复超时",
+  interrupted: "收集中断",
+  conversation_changed: "会话或页面变了",
+  copied_prompt: "复制到的是提问本身",
+  draft_present: "输入框已有草稿",
+  input_mismatch: "写入的文本和提问不一致",
+  session_unproven: "无法证明是同一会话",
+  tier_unconfirmed: "档位未确认",
+  human_check: "遇到人机验证",
+  /* R11：端点拒绝这一轮的三条结构判据（不猜原因，只报看到的事实） */
+  submit_refused: "端把提交退回来了（未确认送达）",
+  send_unavailable: "发送键一直不可用（一个字都没发出去）",
+  accepted_silent: "端收下了但一直没有生成回复",
+  /* B14：并发时前台是共享资源，抢不到就干净失败（不是"用户接管"） */
+  focus_lost: "目标窗口拿不到前台",
+  ui_busy: "端被别的席位占着（下一轮再试）",
+  /* 采集停摆的具体原因（原来只显示"等回复超时"，看不出为什么） */
+  STREAMING_IN_PROGRESS: "仍在生成中，继续等",
+  CONTAINER_BOUNDARY_UNPROVEN: "有文字但证明不了消息边界",
+  ATTRIBUTION_UNVERIFIED: "证明不了这是本轮答案",
+  SESSION_ID_MISSING: "账本没有会话 id，无法自动恢复",
+  REPLY_NEVER_APPEARED: "收下了但一直读不到正文",
+  use_timeout: "单端等待超过预算，进程已终止",
+  identity_unreadable: "读不出会话标题（不是换了会话）",
+};
+
+/* 执行阶段 → 中文（心跳用） */
+const PROGRESS_STAGES = {
+  dispatching: "已派发", preparing: "准备中", sending: "发送中",
+  waiting: "等待回复", copying: "取回答", finished: "已结束",
+  blind: "读不到页面", blocked_lock: "等锁",
+};
+
+function progressText(item) {
+  const beat = item && item.progress;
+  if (!beat || !beat.stage) return "";
+  const bits = [PROGRESS_STAGES[beat.stage] || beat.stage];
+  if (typeof beat.elapsed === "number") bits.push(`${Math.round(beat.elapsed)}s`);
+  if (typeof beat.reads === "number") bits.push(`已读 ${beat.reads}`);
+  if (beat.busy === true) bits.push("生成中");
+  if (beat.accepted === true) bits.push("已收下");
+  if (typeof beat.copies === "number") bits.push(`候选 ${beat.copies}`);
+  if (beat.lock && beat.lock.owner) bits.push(`等 ${beat.lock.owner} 放锁`);
+  return bits.join(" · ");
+}
+
+/* 需要人工先处理该端、再决定是否解锁重发的 stage */
+const STUCK_STAGES = new Set(["submit_refused"]);
+
+function stageOf(item) {
+  if (!item) return null;
+  const use = item.use || {};
+  /* B11：timeout 只说明"没等到"，真正原因在 detail.error_code 里 */
+  if (use.stage === "timeout" && use.detail && use.detail.error_code) {
+    return use.detail.error_code;
+  }
+  if (use.stage) return use.stage;
+  return item.error_code || null;
+}
+
+/* 服务端把 error 给成对象 {code,message,step,exit_code}，直接塞进 textContent
+   会显示成 "[object Object]"。这里按优先级取人话。 */
+function errorText(item) {
+  const err = item && item.error;
+  if (typeof err === "string" && err) return err;
+  if (err && typeof err.message === "string" && err.message) return err.message;
+  if (item && typeof item.error_message === "string" && item.error_message) return item.error_message;
+  if (item && item.use && item.use.error_message) return item.use.error_message;
+  return "（没有错误信息）";
+}
+
 function isActive(entry) {
   return !entry.lost && !TERMINAL.has(entry.status);
 }
@@ -567,6 +663,177 @@ async function persistJobs() {
   } catch {
     /* 存储满之类的问题不该打断轮询；界面上还能看到当前这轮。 */
   }
+}
+
+/* ------------------------------------------------- T4-2 F5：错误去重（单条） */
+/**
+ * 一次请求生命周期内，同一 (job, 端, 码) 只算一条用户可见错误。
+ *
+ * 改造前的问题是：`renderOutput` 每次全量 `replaceChildren`，`tick` 每 3 秒跑一轮，
+ * 同一个故障会被反复写进 DOM、反复触发 aria-live 播报。施工单要求「恰好一条」。
+ *
+ * key 里**不含 message 文本**：文案会变，故障不会。
+ */
+function errorKey(jobId, endpoint, error) {
+  const code = (error && (error.code || error.kind)) || "unknown";
+  return [jobId || "-", endpoint || "-", code].join("|");
+}
+
+function showError(jobId, endpoint, error, target) {
+  const key = errorKey(jobId, endpoint, error);
+  const seen = (errorSeen.get(key) || 0) + 1;
+  errorSeen.set(key, seen);
+  const message = (error && (error.code || error.message)) || "未知错误";
+  if (target) {
+    target.textContent = seen > 1 ? `${endpoint}：${message}（×${seen}）` : `${endpoint}：${message}`;
+  }
+  return seen;
+}
+
+/* ------------------------------------------------- 终态 job 的输出回填 */
+/**
+ * 已完成（done/partial/failed）的 job，`jobCache` 里没有记录时补拉一次。
+ *
+ * 不补的后果（改造前的真实缺陷）：重开面板后，任务列表上明明写着"已完成"，
+ * 输出区却永远显示「会审结论将在这里汇集」——因为 `tick` 只轮询 active 的 job。
+ */
+async function ensureJob(entry) {
+  if (!entry || !entry.job_id) return;
+  if (jobCache.has(entry.job_id)) return;
+  if (fetchedJobs.has(entry.job_id)) return;
+  if (!isActive(entry) && !entry.lost) fetchedJobs.add(entry.job_id);
+  try {
+    const data = await fetchJob(token, entry.job_id);
+    jobCache.set(entry.job_id, data.job || {});
+    renderOutput();
+  } catch {
+    /* 拉不到就维持空态；下次点击该行再试 */
+  }
+}
+
+/* ------------------------------------------------- T4-2 F4：工作流卡片 */
+/** 当前该读写哪个文件。**只有测试模式才有值** —— progress.json 永久只读。 */
+function workflowFile() {
+  return testMode ? WORKFLOW_TEST_FILE : null;
+}
+
+function canWrite() {
+  const file = workflowFile();
+  return Boolean(file) && file === WORKFLOW_TEST_FILE;
+}
+
+/** 写操作的第一道硬闸：任何分支都不可能拼出 progress.json。 */
+function assertWritable(file) {
+  if (!canWrite() || file !== WORKFLOW_TEST_FILE) {
+    throw new Error("正式 progress.json 只读；请打开测试模式（只写 progress-test.json）");
+  }
+}
+
+async function loadWorkflow() {
+  const file = workflowFile();
+  if (!file || !token) return;
+  try {
+    const data = await fetchWorkflow(token, file);
+    const next = { file, data: data.data || {}, mtime: data.mtime };
+    workflowMirror = next;
+    // 落盘镜像：插件重载 / Service Worker 重启后先渲染旧值，再等这一轮网络刷新。
+    try {
+      await writeLocal(WORKFLOW_KEY, next);
+    } catch {
+      /* 存储满之类不该打断读取；界面上还能看到这一轮的值 */
+    }
+    renderWorkflow();
+  } catch (error) {
+    if (error instanceof BridgeError && error.kind === "unauthorized") {
+      needPair("请重新配对：token 无效或已被 rotate。");
+    }
+  }
+}
+
+async function moveWorkflowCard(card, to) {
+  const file = workflowFile();
+  if (!file) {
+    toast("正式 progress.json 只读：先打开测试模式。");
+    return;
+  }
+  if (!to) {
+    toast("这张卡已经到终态了，没有可推进的下一步。");
+    return;
+  }
+  assertWritable(file);
+  if (workflowBusy) return;
+  workflowBusy = true;
+  try {
+    // 乐观锁：写之前先比对 mtime。外部改过就刷新并让用户重看一眼，
+    // 绝不拿旧状态盖掉别人的新状态。
+    const fresh = await fetchWorkflow(token, file);
+    if (workflowMirror && fresh.mtime !== workflowMirror.mtime) {
+      workflowMirror = { file, data: fresh.data || {}, mtime: fresh.mtime };
+      renderWorkflow();
+      toast("progress-test.json 已被外部修改，已刷新；请确认后再点一次。");
+      return;
+    }
+    await moveCard(token, { file, card, to });
+    await loadWorkflow();
+    toast(`卡片 ${card} → ${to}`);
+  } catch (error) {
+    if (!(error instanceof BridgeError)) {
+      $("workflow-status").textContent = "不可写：请先打开测试模式";
+      return;
+    }
+    if (error.kind === "unauthorized") {
+      needPair("请重新配对：token 无效或已被 rotate。");
+    } else if (error.kind === "offline") {
+      setBackend("offline", "后端离线（连不上）");
+    } else {
+      toast(`工作流：${error.code || error.message}`);
+    }
+  } finally {
+    workflowBusy = false;
+  }
+}
+
+function renderWorkflow() {
+  const mode = $("workflow-mode");
+  if (mode) {
+    mode.textContent = testMode ? "测试模式：开" : "测试模式：关（只读）";
+    mode.setAttribute("aria-pressed", String(testMode));
+  }
+  const holder = $("workflow-list");
+  const status = $("workflow-status");
+  const file = workflowFile();
+  if (!file) {
+    if (status) status.textContent = "只读：正式 progress.json 不允许面板写入";
+    if (holder) holder.replaceChildren(node("p", "field-hint", "需要改卡片时打开测试模式（只写 progress-test.json）。"));
+    return;
+  }
+  if (!workflowMirror || workflowMirror.file !== file) {
+    if (status) status.textContent = "未连接";
+    if (holder) holder.replaceChildren(node("p", "field-hint", "还没有读到 progress-test.json。"));
+    return;
+  }
+  const cards = (workflowMirror.data.workflow || {}).cards || {};
+  const names = Object.keys(cards).sort();
+  if (status) status.textContent = names.length ? `${names.length} 张 · ${file}` : `空 · ${file}`;
+  if (!holder) return;
+  if (!names.length) {
+    holder.replaceChildren(node("p", "field-hint", "progress-test.json 里还没有卡片。"));
+    return;
+  }
+  holder.replaceChildren(...names.map((name) => {
+    const state = String((cards[name] || {}).state || "draft");
+    const row = node("div", "workflow-row");
+    row.setAttribute("role", "listitem");
+    row.append(node("span", "workflow-card", name));
+    row.append(node("span", `workflow-state is-${state}`, state));
+    const next = WORKFLOW_NEXT[state];
+    const advance = button("subtle-button", next ? `推进 → ${next}` : "终态");
+    advance.type = "button";
+    advance.disabled = !next;
+    advance.addEventListener("click", () => { void moveWorkflowCard(name, next); });
+    row.append(advance);
+    return row;
+  }));
 }
 
 function timeText(ms) {
@@ -618,9 +885,22 @@ async function pollJob(entry) {
       entry.status = "lost";
       if (entry.job_id === selectedJobId) $("result-status").textContent = "任务已丢失";
     } else if (error.kind === "unauthorized") {
-      needPair("请重新配对：token 无效或已被 rotate。");
+      // 每 3 秒重来一轮，绝不能让同一句「请重新配对」反复播报。
+      if (showError(entry.job_id, "认证", error) === 1) {
+        needPair("请重新配对：token 无效或已被 rotate。");
+      }
     } else if (error.kind === "offline") {
-      setBackend("offline", "后端离线（连不上）");
+      if (showError(entry.job_id, "后端", error) === 1) {
+        setBackend("offline", "后端离线（连不上）");
+      }
+    } else {
+      // T4-2 F5：`bad_request` / `server` 原来在这里被**静默吞掉**，
+      // 面板上一点反馈都没有（F5 场景会表现为"面板卡死")。
+      if (entry.job_id === selectedJobId) {
+        showError(entry.job_id, "后端", error, $("result-status"));
+      } else {
+        showError(entry.job_id, "后端", error);
+      }
     }
   }
 }
@@ -633,6 +913,12 @@ async function tick() {
     const active = trackedJobs.filter(isActive);
     if (online && token) {
       for (const entry of active) await pollJob(entry);
+      // T4-2 F4：外部改了 progress-test.json 要 ≤10s 反映到面板。
+      // 复用现有 3 秒轮询，不新增定时器（也不许新增 setInterval）。
+      await loadWorkflow();
+      // 已完成的 job 只补拉一次，否则重开面板永远是空白。
+      const selected = trackedJobs.find((item) => item.job_id === selectedJobId);
+      if (selected) await ensureJob(selected);
       await persistJobs();
       renderJobs();
       renderOutput();
@@ -686,7 +972,10 @@ function outputRows(record, tab) {
   const rows = [];
   if (tab === "summary") {
     const done = names.filter((name) => record.endpoints[name].status === "done").length;
-    rows.push(node("p", "output-line", `状态 ${jobLabel(record.status)} · ${done}/${names.length} 端完成`));
+    const line = record.quorum
+      ? `状态 ${jobLabel(record.status)} · 已回收 ${done}/${names.length}（线 ${record.quorum.required}）`
+      : `状态 ${jobLabel(record.status)} · ${done}/${names.length} 端完成`;
+    rows.push(node("p", "output-line", line));
     rows.push(node("p", "output-line quiet", `job ${record.job_id} · 创建 ${record.created_at || ""}`));
     if (record.status === "partial" || record.status === "failed") {
       rows.push(node("p", "output-line error", "有端失败，点「分歧点」看错误码。"));
@@ -698,14 +987,22 @@ function outputRows(record, tab) {
       const item = record.endpoints[name] || {};
       rows.push(node("p", "output-label", `${name} · ${jobLabel(item.status)}`));
       rows.push(node("p", "output-text", item.reply ? String(item.reply).slice(0, 2000) : "（暂无回复）"));
+      const beat = progressText(item);
+      if (beat) rows.push(node("p", "output-line quiet", beat));
     }
     return rows;
   }
   for (const name of names) {
     const item = record.endpoints[name] || {};
     if (item.status === "done") continue;
-    rows.push(node("p", "output-label", `${name} · ${item.error_code || item.status || "未知"}`));
-    rows.push(node("p", "output-text", item.error || "（没有错误信息）"));
+    const stage = stageOf(item);
+    const label = STAGE_LABELS[stage] || stage || jobLabel(item.status);
+    rows.push(node("p", "output-label", `${name} · ${label}`));
+    const text = errorText(item);
+    rows.push(node("p", "output-text",
+      STUCK_STAGES.has(stage)
+        ? `${text}。需先处理该端，再用 tools/submission_clear.py 解锁重发。`
+        : text));
   }
   if (!rows.length) rows.push(node("p", "output-line quiet", "各端都完成了，没有失败项。"));
   return rows;
@@ -751,11 +1048,12 @@ async function startAsk() {
   $("start-button").disabled = true;
   $("result-status").textContent = "正在提交…";
   try {
+    const requestId = id();
     const data = await ask(token, {
       endpoints: names,
       prompt: state.prompt.trim(),
       purpose: state.purpose,
-      requestId: id(),
+      requestId,
     });
     const entry = {
       job_id: data.job_id,
@@ -765,6 +1063,9 @@ async function startAsk() {
       prompt: state.prompt.trim().slice(0, PROMPT_PREVIEW),
       status: data.status || "queued",
       lost: false,
+      // T4-2：把 request_id 落盘。原来它现生成现丢，重开面板就对不上这次提交了。
+      // 只作诊断与重复提交识别，**不做错误去重主键**（一个 request_id 可能对应多端）。
+      request_id: requestId,
     };
     trackedJobs = pruneJobs(trackedJobs.filter((item) => item.job_id !== entry.job_id).concat(entry));
     selectedJobId = entry.job_id;
@@ -821,8 +1122,7 @@ async function saveToken() {
   }
   setPairStatus("已配对：token 只保存在本机 chrome.storage.local。", "ok");
   $("pair-state").textContent = "已配对";
-  await loadEndpoints();
-  await refreshHealth();
+  await Promise.all([loadEndpoints(), refreshHealth()]);
   poll.kick();
 }
 
@@ -923,6 +1223,16 @@ function bindEvents() {
       $("result-status").textContent = trackedJobs.length ? "已刷新" : "尚未提交任务";
     });
   });
+  // T4-2 F4：测试模式开关。关掉就等于把面板对工作流的写入能力整个摘掉
+  // （workflowFile 返回 null → canWrite 恒 false → 任何写分支都过不去）。
+  $("workflow-mode")?.addEventListener("click", () => {
+    testMode = !testMode;
+    void writeLocal(TEST_KEY, testMode).catch(() => {});
+    workflowMirror = testMode ? workflowMirror : null;
+    renderWorkflow();
+    if (testMode) void loadWorkflow();
+    toast(testMode ? "测试模式已开：只读写 progress-test.json" : "测试模式已关：工作流卡片只读");
+  });
   $("handoff-button").disabled = true;
   $("handoff-button").title = "交付施工不在本卡范围";
 
@@ -963,7 +1273,20 @@ function bindEvents() {
     if (saveVersion > lastSavedVersion) saveDraft();
   });
   chrome.storage.onChanged?.addListener((changes, area) => {
-    if (area !== "local" || !changes[DRAFT_KEY]?.newValue || saveVersion > lastSavedVersion) return;
+    if (area !== "local") return;
+    // T4-2：开关与工作流镜像也要跨面板同步（原来只监听草稿，其余一律丢弃）。
+    if (changes[TEST_KEY]) {
+      testMode = changes[TEST_KEY].newValue !== false;
+      workflowMirror = null;
+      renderWorkflow();
+      if (testMode) void loadWorkflow();
+    }
+    if (changes[WORKFLOW_KEY]?.newValue && typeof changes[WORKFLOW_KEY].newValue === "object") {
+      workflowMirror = changes[WORKFLOW_KEY].newValue;
+      renderWorkflow();
+    }
+    if (changes[ERRORS_KEY]) errorSeen.clear();
+    if (!changes[DRAFT_KEY]?.newValue || saveVersion > lastSavedVersion) return;
     const next = restore(changes[DRAFT_KEY].newValue);
     if (JSON.stringify(next) === JSON.stringify(state)) return;
     if ($("config-dialog").open) {
@@ -1003,6 +1326,29 @@ async function initialize() {
   }
   if (trackedJobs.length) selectedJobId = trackedJobs.slice().sort((a, b) => b.created_at - a.created_at)[0].job_id;
 
+  // T4-2 F4：开关缺省为 true（安全侧）。镜像先渲染旧值，网络刷新随后覆盖。
+  try {
+    testMode = (await readLocal(TEST_KEY)) !== false;
+  } catch {
+    testMode = true;
+  }
+  try {
+    const storedWorkflow = await readLocal(WORKFLOW_KEY);
+    workflowMirror = storedWorkflow && typeof storedWorkflow === "object" ? storedWorkflow : null;
+  } catch {
+    workflowMirror = null;
+  }
+  try {
+    const storedErrors = await readLocal(ERRORS_KEY);
+    if (Array.isArray(storedErrors)) {
+      for (const pair of storedErrors) {
+        if (Array.isArray(pair) && pair.length === 2) errorSeen.set(String(pair[0]), Number(pair[1]) || 1);
+      }
+    }
+  } catch {
+    /* 诊断数据读不到不影响主流程 */
+  }
+
   $("pair-state").textContent = token ? "已配对" : "未配对";
   if (token) setPairStatus("已配对：token 只保存在本机 chrome.storage.local。", "ok");
   $("prompt-input").value = state.prompt;
@@ -1015,10 +1361,12 @@ async function initialize() {
   renderEndpointList();
   renderJobs();
   renderOutput();
+  renderWorkflow();
   if (loadFailed) toast("读取本地草稿失败，暂时显示默认配置；你可以继续编辑并尝试保存。");
 
-  await loadEndpoints();
-  await refreshHealth();
+  await Promise.all([loadEndpoints(), refreshHealth()]);
+  // T4-2 F4：启动就读一次工作流（不等下一次 tick），否则面板初开是"未连接"。
+  await loadWorkflow();
   // 面板重开先补一轮：未完成的 job 立刻恢复，而不是等下一个 3 秒。
   const active = trackedJobs.filter(isActive);
   poll.interval = active.length ? ACTIVE_INTERVAL_MS : IDLE_INTERVAL_MS;

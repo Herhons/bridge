@@ -1,6 +1,6 @@
 """dsh（DeepSeek Harness 桌面端 / DeepSeek Harness.exe）：选模型 + 调强度。
 
-**单文件，只依赖 cv2 / numpy / ctypes，不 import 本项目的任何模块。**
+**定位主体使用 cv2/numpy/ctypes；运行入口共用 qi 的锁和自身输入标记。**
 
 用法：
     python dsh_choose.py --list                        读当前模型和强度
@@ -131,9 +131,8 @@ class _LII(ctypes.Structure):
 
 
 def idle_seconds():
-    lii = _LII(ctypes.sizeof(_LII), 0)
-    user32.GetLastInputInfo(ctypes.byref(lii))
-    return (kernel32.GetTickCount() - lii.dwTime) / 1000.0
+    from qi.guard import idle_seconds as shared_idle
+    return shared_idle()
 
 
 def _pid_of(hwnd):
@@ -245,27 +244,19 @@ def place(hwnd, pos, size):
 
 
 def activate(hwnd, tries=3):
-    if user32.GetForegroundWindow() == int(hwnd):
-        return True
-    for _ in range(tries):
-        user32.SetForegroundWindow(int(hwnd))
-        if user32.GetForegroundWindow() == int(hwnd):
-            return True
-        fg = user32.GetForegroundWindow()
-        t1 = user32.GetWindowThreadProcessId(fg, None)
-        t2 = kernel32.GetCurrentThreadId()
-        if t1 and t1 != t2:
-            user32.AttachThreadInput(t2, t1, True)
-            user32.SetForegroundWindow(int(hwnd))
-            user32.SetFocus(int(hwnd))
-            user32.AttachThreadInput(t2, t1, False)
-        if user32.GetForegroundWindow() == int(hwnd):
-            return True
-        time.sleep(0.3)
-    return user32.GetForegroundWindow() == int(hwnd)
+    # B16：choose 也统一走 desk.ensure_foreground（B15 只改了三个 *_use.py）。
+    # 旧实现没有 SW_RESTORE：前台是桌面 WorkerW 时 SetForegroundWindow 一律失败，
+    # 这正是 dsh choose 在 4 席并发下 `menu_not_open` 的高频原因。
+    # 只改函数体：名字、签名、调用点都不动（测试按名字打桩）。
+    from qi import desk as _desk
+    return _desk.ensure_foreground(hwnd, tries=max(3, int(tries)))
 
 
 class Desk:
+    def _mark_input(self):
+        from qi.guard import mark_synthetic
+        mark_synthetic("desk")
+
     CLICK_MAX, CLICK_GAP = 16, 0.35
 
     def __init__(self, hwnd):
@@ -287,6 +278,10 @@ class Desk:
         mdc = gdi32.CreateCompatibleDC(hdc)
         bmp = gdi32.CreateCompatibleBitmap(hdc, w, h)
         gdi32.SelectObject(mdc, bmp)
+        # 64 位下不声明 argtypes 时，HDC 会被当 32 位 int 传，直接
+        # `OverflowError: int too long to convert`（2026-11-08 dsh 真机）。
+        user32.PrintWindow.argtypes = [wintypes.HWND, wintypes.HDC, wintypes.UINT]
+        user32.PrintWindow.restype = wintypes.BOOL
         ok = user32.PrintWindow(self.hwnd, mdc, 2)
         img = self._dib(mdc, bmp, w, h) if ok else None
         gdi32.DeleteObject(bmp)
@@ -383,6 +378,7 @@ class Desk:
         time.sleep(0.05)
         user32.mouse_event(0x0004, 0, 0, 0, 0)
         self._clicks.append(time.time())
+        self._mark_input()
         self._invalidate()
 
     def press(self, key, times=1):
@@ -393,6 +389,7 @@ class Desk:
             time.sleep(0.02)
             user32.keybd_event(vk, 0, 2, 0)
             time.sleep(0.05)
+        self._mark_input()
         self._invalidate()
 
     def hotkey(self, *keys):
@@ -404,6 +401,7 @@ class Desk:
         for c in reversed(codes):
             user32.keybd_event(c, 0, 2, 0)
             time.sleep(0.02)
+        self._mark_input()
         self._invalidate()
 
     def type_text(self, text, interval=0.004):
@@ -442,6 +440,7 @@ class Desk:
                     inp = _IN(type=1, u=_U(ki=_K(0, code, flags, 0, 0)))
                     user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(_IN))
                     time.sleep(interval)
+        self._mark_input()
         self._invalidate()
 
     def tpl(self, name):
@@ -488,12 +487,99 @@ class Desk:
                        for sc, x, y in out), key=lambda p: p[0])
 
 
+# ============================================================ 几何校准
+# B17：dsh 首页把输入框摆在窗口中部（「探索未至之境」下面），会话页才贴底。
+# 旧 `_band()` 固定取窗口底部 170px，首页里连发送键都找不到：R4 实测
+# `dsh_send` 全窗 1.000、band 内 0。发送键模板是可靠锚点（x 稳定、y 随布局
+# 大幅变化），所以这一帧的全部 composer 相对量都从它推导。
+_GEO = {}
+
+
+def _geo(win):
+    """取当前窗口的校准几何；没校准 / 窗口变了返回 None（严格回退）。"""
+    cache = globals().get("_GEO")
+    if not isinstance(cache, dict) or cache.get("win") != tuple(win):
+        return None
+    return cache
+
+
+def calibrate(d, win):
+    """整窗找蓝色发送键，算好这一帧的全部 composer 相对量。
+
+    `Desk.find` 传 region 时返回屏幕绝对 5 元组 `(x,y,w,h,score)`。
+    只认形状与分数，避免测试桩 / MagicMock 污染缓存导致整轮走偏。
+    """
+    global _GEO
+    _GEO = {}
+    try:
+        m = d.find(globals().get("TPL_SEND", "dsh_send"), 0.80, win)
+    except Exception:                                  # noqa: BLE001
+        return False
+    if not (isinstance(m, tuple) and len(m) == 5 and float(m[4]) >= 0.80):
+        return False
+    x, y, w, h = win
+    scx = m[0] - x + m[2] // 2
+    scy = m[1] - y + m[3] // 2
+    if not (0 <= scx <= w and 0 <= scy <= h):
+        return False
+    band_h = globals().get("BAND_H", 170)
+    top = max(0, min(scy - 130, h - band_h))
+    menu_x0 = max(0, scx - 300)
+    _GEO = {"win": tuple(win), "send": (scx, scy), "top": top,
+            "menu_x0": menu_x0, "menu_x1": min(w, scx + 20),
+            # B17 真机菜单态实测（evidence/batch17/dsh_menu_open_S1.png）：
+            # 卡片紧贴芯片上方，窗口 y≈669..749（send 中心 768），两行文字
+            # 在 688..701 / 720..735。旧的 scy-240..scy-84 完全错过它。
+            "menu_y0": max(0, scy - 110), "menu_y1": max(0, scy - 20),
+            "click_x": menu_x0 + 90,
+            "effort_y0": max(0, min(scy - 260, h - 300))}
+    return True
+
+
+def _click_x(win):
+    helper = globals().get("_geo")
+    geo = helper(win) if callable(helper) else None
+    return geo["click_x"] if geo else 950
+
+
+def _effort_y0(win):
+    helper = globals().get("_geo")
+    geo = helper(win) if callable(helper) else None
+    return geo["effort_y0"] if geo else max(0, win[3] - 300)
+
+
 # ============================================================ 定位
 
 def _band(win):
     x, y, w, h = win
-    top = y + max(0, h - BAND_H)
-    return (x, top, w, min(BAND_H, h))
+    helper = globals().get("_geo")
+    geo = helper(win) if callable(helper) else None
+    band_h = globals().get("BAND_H", 170)
+    if geo:
+        return (x, y + geo["top"], w, min(band_h, h))
+    return (x, y + max(0, h - band_h), w, min(band_h, h))
+
+
+def _deselect_page(d, win):
+    """折叠可能残留的「整页全选」，再让调用方去读芯片。
+
+    B17 真机（job_R4h）：一旦 Ctrl+A 落到页面上而不是面板搜索框，整页文字变成
+    **白字蓝底**，芯片也被一起染蓝，模板匹配必然崩 —— 实测 `dsh_m_deepseek`
+    从 0.956 掉到 **0.415**、`dsh_e_*` 全在 0.5 上下，于是 `read_model` 报
+    `model=unknown`、`set_model` 报 `unverified`；而截图里芯片明明写着
+    `DeepSeek-V4.1-Flash Off`（evidence/batch17/dsh_chip_now_zoom.png）。
+    表现像"选择失败"，其实是"读数被选中态骗了"。
+
+    点输入框里的空白占位区即可折叠选中：不改任何状态、不覆盖草稿、不动滚动位置。
+    """
+    helper = globals().get("_band")
+    try:
+        band_top = helper(win)[1] - win[1] if callable(helper) else max(0, win[3] - 170)
+    except Exception:                                  # noqa: BLE001 - 算不出就用兜底
+        band_top = max(0, win[3] - 170)
+    # 发送键上方约 60px 是占位文字那一行（实测 send 中心 y=1277 → 空白带 1215）
+    d.click(win[0] + win[2] // 2, win[1] + band_top + 45)
+    time.sleep(0.35)
 
 
 def chip_chevron(d, win):
@@ -504,14 +590,24 @@ def chip_chevron(d, win):
     改用几何：以蓝色发送键为右锚点，在它左边 80px 条带里找**最靠右的一撮
     非白像素**——那就是 ⌄（它和左边的模型名之间隔着 10px 空白）。
     """
-    m = d.find(TPL_SEND, 0.80, _band(win))
+    band = _band(win)
+    # B17：⌄ 模板在首页截图上有 0.966 的清晰命中；纯几何「最右非白列组」
+    # 在居中的 composer 上会误挑到旁边的深色像素（实测返回 x=1111 而非 1069）。
+    # 先用高阈值模板，没命中才退回原来的几何推断。
+    try:
+        tpl_hit = d.find(globals().get("TPL_CHEV", "dsh_chevron"), 0.90, band)
+    except Exception:                                  # noqa: BLE001
+        tpl_hit = None
+    if tpl_hit is not None:
+        return (tpl_hit[0] + tpl_hit[2] // 2, tpl_hit[1] + tpl_hit[3] // 2)
+    m = d.find(TPL_SEND, 0.80, band)
     if m is None:
         return None
-    img = d.grab(_band(win))
+    img = d.grab(band)
     if img.size == 0:
         return None
     g = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    top = win[1] + max(0, win[3] - BAND_H)
+    top = band[1]
     sx = m[0] - win[0]
     sy = m[1] - top + m[3] // 2
     x0, x1 = max(0, sx - 80), max(0, sx - 4)
@@ -551,8 +647,14 @@ def menu_rows(d, win):
         return []
     g = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     h = g.shape[0]
-    x0, x1 = 860, min(g.shape[1], 1160)
-    y0, y1 = max(0, h - 240), max(0, h - 84)
+    helper = globals().get("_geo")
+    geo = helper(win) if callable(helper) else None
+    if geo:
+        x0, x1 = geo["menu_x0"], geo["menu_x1"]
+        y0, y1 = geo["menu_y0"], geo["menu_y1"]
+    else:
+        x0, x1 = 860, min(g.shape[1], 1160)
+        y0, y1 = max(0, h - 240), max(0, h - 84)
     if y1 - y0 < 60 or x1 - x0 < 100:
         return []
     counts = (g[y0:y1, x0:x1] < 200).sum(axis=1)
@@ -574,15 +676,43 @@ def menu_open(d, win):
 
 
 def open_menu(d, win):
-    """点芯片打开子菜单。返回行列表（空 = 没开）。"""
+    """点芯片打开子菜单。返回 `(行列表, 原因)`；行空 = 没开。
+
+    B16：以前只返空列表，上层只能吐一个没有 hint 的 `menu_not_open`，
+    服务端从 stdout 末行 JSON 取不到 hint，最终只剩 `choose exit code 1`。
+    现在把「本来就没关」「找不到 ⌄」「点了但一行都没扫到」分开报。
+    """
     if menu_open(d, win):
-        return menu_rows(d, win)
+        return menu_rows(d, win), "already_open"
     c = chip_chevron(d, win)
     if c is None:
-        return []
+        return [], "chip_not_found"
     d.click(c[0], c[1])
     time.sleep(1.3)
-    return menu_rows(d, win)
+    rows = menu_rows(d, win)
+    return rows, ("opened" if rows else "rows_empty")
+
+
+def _menu_fail(d, win, why, tag):
+    """菜单没打开时统一留证：hint + 调试图 + 可复核的 probe。
+
+    原来的分支什么字段都没有，D4b 那轮 `exit_code=1 / stderr="" / 5.985s`
+    只能靠排除法猜是这里。现在失败现场直接落盘，不需要再猜。
+    """
+    dbg = os.path.join(DEBUG_DIR, f"dsh_menu_not_open_{tag}.png")
+    try:
+        cv2.imwrite(dbg, d.grab(win, fresh=True))
+    except Exception:                                  # noqa: BLE001 - 留证失败不掩盖主因
+        dbg = None
+    probe = {"why": why, "rows": 0, "win": list(win)}
+    try:
+        probe["send"] = d.find(TPL_SEND, 0.80, _band(win)) is not None
+        probe["chevron"] = chip_chevron(d, win) is not None
+    except Exception as exc:                           # noqa: BLE001
+        probe["error"] = f"{type(exc).__name__}: {exc}"
+    return {"ok": False, "stage": "menu_not_open", "why": why,
+            "hint": f"子菜单没打开（{why}）：窗口是否在前台、发送键/⌄ 模板是否失配？看 debug_shot",
+            "debug_shot": dbg, "probe": probe}
 
 
 def panel_bbox(d, win):
@@ -598,16 +728,42 @@ def panel_bbox(d, win):
     g = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     white = (g > 250).astype(np.uint8)
     n, _lab, st, _c = cv2.connectedComponentsWithStats(white, 8)
-    best = None
+    segs = []
     for i in range(1, n):
         x, y, w, h, a = (int(v) for v in st[i][:5])
         # 面板实测 248x358（只列 Recent 时），换成整组模型时更高更宽。
         # 上限要放到 450x700：卡太紧会把"分组多"的面板判成没开
         # （实测切 GPT-6 Luna 时面板高 500+，旧上限 520 刚好卡掉）。
         # 下限用来排掉页面全选时那种 1000x1200 的大白块。
-        if 150 <= w <= 450 and 120 <= h <= 700 and a > 40000:
-            if best is None or a > best[4]:
-                best = (x, y, w, h, a)
+        if 150 <= w <= 450 and 40 <= h <= 700 and a > 3000:
+            segs.append([x, y, w, h, a])
+    # B17（job_R4h）：面板里"当前选中"那一行是浅灰 #F4F4F5（244），过不了 >250 的
+    # 白色阈值，于是**同一块面板被切成上下两段**：上段是搜索框（240x62）、下段是其余
+    # 列表（240x218）。旧代码只取"面积最大的单块"，拿到的是下段 —— 于是
+    # `set_model` 点 `panel[1]+16` 落在模型行上而不是搜索框，接着 Ctrl+A 又选中整页，
+    # 芯片变白字蓝底、模板全崩（0.956 → 0.348），外面看到的是 `unverified`。
+    # 现在把同 x、同宽、竖直相邻（间隙 <= 一整行）的碎块重新合成一整块再挑。
+    segs.sort(key=lambda s: (s[0], s[1]))
+    merged = []
+    for seg in segs:
+        for m in merged:
+            if (abs(seg[0] - m[0]) <= 6 and abs(seg[2] - m[2]) <= 12
+                    and seg[1] - (m[1] + m[3]) <= 130):
+                m[3] = max(m[1] + m[3], seg[1] + seg[3]) - m[1]
+                m[4] += seg[4]
+                break
+        else:
+            merged.append(list(seg))
+    band_top = _band(win)[1] - y0          # 芯片带在 reg 里的相对 y
+    best = None
+    for x, y, w, h, a in merged:
+        if not (150 <= w <= 450 and 120 <= h <= 700 and a > 40000):
+            continue
+        # 面板一定贴在芯片上方（允许压到芯片带一点点），否则就是别处的白块
+        if y + h > band_top + 120:
+            continue
+        if best is None or a > best[4]:
+            best = (x, y, w, h, a)
     if best is None:
         return None
     return (reg[0] + best[0], reg[1] + best[1], best[2], best[3])
@@ -662,13 +818,32 @@ def set_model(d, win, name):
     if key is None:
         return {"ok": False, "stage": "unsupported_model", "want": name,
                 "options": MODEL_LABELS}
-    rows = open_menu(d, win)
+    # B17：先把残留的整页选中折掉，否则 `panel_bbox` 的"白块"统计也会被蓝底干扰。
+    # 单测按函数名抠单个 FunctionDef 再 exec，桩命名空间里没有模块级 helper ——
+    # 用 globals().get 软引用，取不到就跳过（本仓库既有的 `_geo` / `_click_x` 同款写法）。
+    def _clean():
+        helper = globals().get("_deselect_page")
+        if callable(helper):
+            helper(d, win)
+
+    _clean()
+    # B16：`open_menu` 现在返 `(rows, why)`；仍兼容只返 rows 的旧调用/测试桩。
+    opened = open_menu(d, win)
+    rows, why = opened if isinstance(opened, tuple) else (opened, "unknown")
     if not rows:
-        return {"ok": False, "stage": "menu_not_open"}
+        return _menu_fail(d, win, why, "model")
     top, bot = rows[0]                      # 第一行永远是「模型」
-    d.click(win[0] + 950, win[1] + (top + bot) // 2)
+    helper = globals().get("_click_x")
+    cx = helper(win) if callable(helper) else 950
+    d.click(win[0] + cx, win[1] + (top + bot) // 2)
     time.sleep(1.7)
     panel = panel_bbox(d, win)
+    if panel is None:
+        # B17：等完 UI 锁、窗口刚回到前台时，这一下点击会落在动画里（R4e 真机：
+        # 菜单明明开了，点「模型」行却没反应）。再点一次、多等一拍，仍不行才判死。
+        d.click(win[0] + cx, win[1] + (top + bot) // 2)
+        time.sleep(2.5)
+        panel = panel_bbox(d, win)
     if panel is None:
         dbg = os.path.join(DEBUG_DIR, "dsh_model_panel_fail.png")
         cv2.imwrite(dbg, d.grab(win, fresh=True))
@@ -676,10 +851,16 @@ def set_model(d, win, name):
         return {"ok": False, "stage": "panel_not_open", "debug_shot": dbg}
     d.click(panel[0] + panel[2] // 2, panel[1] + 16)
     time.sleep(0.4)
-    d.hotkey("ctrl", "a")
-    time.sleep(0.1)
-    d.press("delete")
-    time.sleep(0.2)
+    # B17：面板刚打开时搜索框本来就是空的，只有**上一次尝试的残留**才需要清空。
+    # 无条件按 Ctrl+A 有真实代价 —— 焦点若没落在搜索框（点在面板边缘/动画里），
+    # Ctrl+A 会选中整页，芯片变成白字蓝底，后续模板全崩（job_R4h 就是这么挂的：
+    # 0.956 → 0.348，read_model 报 unknown、set_model 报 unverified）。
+    # 占位文字还在 = 框是空的，直接用，一个 Ctrl+A 都不发。
+    if d.find("dsh_search_ph", 0.85, panel) is None:
+        d.hotkey("ctrl", "a")
+        time.sleep(0.1)
+        d.press("delete")
+        time.sleep(0.2)
     d.type_text(MODEL_LABELS[key])
     time.sleep(1.1)
     # 确认字真的进了搜索框：占位文字「搜索模型…」应该消失。
@@ -702,6 +883,10 @@ def set_model(d, win, name):
                 "hint": "回车后面板没关，可能没匹配到；看 debug_shot",
                 "debug_shot": dbg}
     got = read_model(d, win)
+    if got.get("model") == "unknown":
+        # 读成 unknown 多半是被"白字蓝底"骗了：清一次选中再读，别把读不到当没设上
+        _clean()
+        got = read_model(d, win)
     ok = got["model"] == key
     return {"ok": ok, "verified": ok, "want": key, "after": got["model"],
             "score": got.get("score"), "stage": "done" if ok else "unverified"}
@@ -712,18 +897,30 @@ def set_effort(d, win, key):
     key = EFFORT_ALIAS.get(key, key)
     if key not in EFFORTS:
         return {"ok": False, "stage": "bad_arg", "options": EFFORTS}
+    # B17：同 set_model —— 先折掉整页选中，再读 before / 找面板
+    def _clean():
+        helper = globals().get("_deselect_page")
+        if callable(helper):
+            helper(d, win)
+
+    _clean()
     before = read_effort(d, win)
-    rows = open_menu(d, win)
+    opened = open_menu(d, win)
+    rows, why = opened if isinstance(opened, tuple) else (opened, "unknown")
     if not rows:
-        return {"ok": False, "stage": "menu_not_open"}
+        return _menu_fail(d, win, why, "effort")
     if len(rows) < 2:
         close_all(d, win)
         return {"ok": False, "stage": "no_effort_row",
                 "hint": "这个模型的菜单只有「模型」一行（没有推理等级），换模型再调"}
     top, bot = rows[1]                      # 第二行 =「推理等级」
-    d.click(win[0] + 950, win[1] + (top + bot) // 2)
+    helper = globals().get("_click_x")
+    cx = helper(win) if callable(helper) else 950
+    d.click(win[0] + cx, win[1] + (top + bot) // 2)
     time.sleep(1.5)
-    m = d.find(TPL_E[key], 0.85, (win[0], win[1] + max(0, win[3] - 300), win[2], 300))
+    helper = globals().get("_effort_y0")
+    ey = helper(win) if callable(helper) else max(0, win[3] - 300)
+    m = d.find(TPL_E[key], 0.85, (win[0], win[1] + ey, win[2], 300))
     if m is None:
         dbg = os.path.join(DEBUG_DIR, "dsh_effort_item_fail.png")
         cv2.imwrite(dbg, d.grab(win, fresh=True))
@@ -736,6 +933,10 @@ def set_effort(d, win, key):
         d.press("esc")
         time.sleep(0.4)
     after = read_effort(d, win)
+    if after.get("effort") != key:
+        # B17：读成 unknown 多半是选中态/动画，清一次再读，别把"读不到"当"没设上"
+        _clean()
+        after = read_effort(d, win)
     ok = after.get("effort") == key
     return {"ok": ok, "before": before.get("effort"), "want": key,
             "after": after.get("effort"), "stage": "done" if ok else "unverified"}
@@ -751,7 +952,7 @@ def list_state(d, win):
 # ============================================================ 提问
 
 def band_top(win):
-    return win[1] + max(0, win[3] - BAND_H)
+    return _band(win)[1]
 
 
 def send_state(d, win):
@@ -794,10 +995,16 @@ def probe(d, win):
         rows.append({"name": name, "score": None if m is None else round(m[4], 4),
                      "at_window": None if m is None else (m[0] - win[0], m[1] - win[1])})
     pan = panel_bbox(d, win)
+    helper = globals().get("_geo")
+    geo = helper(win) if callable(helper) else None
+    keys = ("send", "top", "menu_x0", "menu_x1", "menu_y0", "menu_y1",
+            "click_x", "effort_y0")
     return {"window": list(win), "templates": rows,
             "menu_rows": menu_rows(d, win),
             "panel": None if pan is None else
-            (pan[0] - win[0], pan[1] - win[1], pan[2], pan[3])}
+            (pan[0] - win[0], pan[1] - win[1], pan[2], pan[3]),
+            "calibrated": bool(geo),
+            "geo": None if geo is None else {k: geo[k] for k in keys}}
 
 
 def _record_receipt(hwnd, dimension, target, readback, raw):
@@ -855,7 +1062,9 @@ def main():
             time.sleep(1.0)
             hwnd = find_window()
     if hwnd is None:
-        print(json.dumps({"ok": False, "stage": "no_window"}, ensure_ascii=False))
+        print(json.dumps({"ok": False, "stage": "no_window",
+                          "hint": "dsh 窗口没找到：40s 内没拉起来，先手动打开应用再跑"},
+                         ensure_ascii=False))
         return 1
 
     win = rect_of(hwnd)
@@ -868,6 +1077,14 @@ def main():
         return 7
 
     d = Desk(hwnd)
+    # B17：整窗找发送键、校准 composer 几何。probe 不要求前台，所以放在激活之前；
+    # 用 globals().get 是为了不打破「按函数名抠出来 exec」的测试桩命名空间。
+    _cal = globals().get("calibrate")
+    if callable(_cal):
+        try:
+            _cal(d, win)
+        except Exception:                             # noqa: BLE001
+            pass
 
     if a.probe:
         print(json.dumps(probe(d, win), ensure_ascii=False, indent=1))
@@ -880,6 +1097,11 @@ def main():
     time.sleep(0.7)
     d.grab(win, fresh=True)
     win = rect_of(hwnd)
+    if callable(_cal):
+        try:
+            _cal(d, win)
+        except Exception:                             # noqa: BLE001
+            pass
 
     try:
         if a.list:
@@ -932,4 +1154,15 @@ if __name__ == "__main__":
             except Exception:                          # noqa: BLE001
                 pass
     # UI 前台锁（CARD-09f 第 1 条）：choose 也要和服务端/use 抢同一把 runs\ui.lock
-    raise SystemExit(_lock.run("dsh_choose", main) if _lock else main())
+    if _lock is None:
+        print(json.dumps({"ok": False, "stage": "ui_busy", "reason": "lock_runtime_unavailable"}))
+        raise SystemExit(8)
+    # B16：兜底放 __main__、不包 main（测试按函数名 exec main，包一层会缺名字）。
+    try:
+        code = _lock.entry("dsh_choose", main)
+    except Exception as exc:                          # noqa: BLE001
+        print(json.dumps({"ok": False, "stage": "internal_error",
+                          "error_type": type(exc).__name__,
+                          "hint": f"{type(exc).__name__}: {exc}"}, ensure_ascii=False))
+        code = 1
+    raise SystemExit(code)

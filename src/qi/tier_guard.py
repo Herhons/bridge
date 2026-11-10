@@ -83,13 +83,15 @@ LOCK_TIMEOUT = 5.0
 
 PURPOSES = ("test", "review", "accept", "accept_lite")
 
-# CARD-09f 第 6 条：高档（review/accept）会审/验收等待回复的上限下限 ≥900s，
-# 不得 300s 就判超时（CARD-10 会审 chatgpt_use 思考 4 分 10 秒，300s 会提前判死）。
-REVIEW_TIMEOUT = 900.0
+# CARD-09f 第 6 条：高档（review/accept）会审/验收等待回复的下限。
+# 2026-11-08（B12）：900 → 1500。依据是实测——workbuddy 有 7 次在 ~902s 超时，
+# 而产出物在 1070–1360s 才落盘（答案就在页面上，是预算不够）。
+# 取实测上界 ×1.10 ≈ 1496，圆到 1500。**不是拍脑袋，也不是无限等。**
+REVIEW_TIMEOUT = 1500.0
 
 
 def floor_timeout(purpose: str, timeout: float) -> float:
-    """高档（review/accept）等待下限 900s；其余用途原样返回。"""
+    """高档（review/accept）等待下限 1500s；其余用途原样返回。"""
     if str(purpose) in ("review", "accept"):
         return max(float(timeout), REVIEW_TIMEOUT)
     return float(timeout)
@@ -318,7 +320,7 @@ def file_lock(path: Path, *, timeout: float = LOCK_TIMEOUT, poll: float = 0.02):
 def write_receipt(endpoint: str, *, target, readback, dimension: str = "model",
                   hwnd=None, tab=None, raw=None, pid=None,
                   start_time=None, path=None, root=None, now: str | None = None,
-                  writer: str | None = None) -> dict:
+                  writer: str | None = None, dimensions: dict | None = None) -> dict:
     """原子写一张回执，返回写下去的内容。
 
     `readback` 为空表示"点了但没读回来"——这种回执**照样写**，
@@ -349,6 +351,10 @@ def write_receipt(endpoint: str, *, target, readback, dimension: str = "model",
         "raw": raw if isinstance(raw, str) else (
             None if raw is None else json.dumps(raw, ensure_ascii=False, sort_keys=True)),
     }
+    if dimensions is not None:
+        # One write and one identity/timestamp, never merge separate old rounds.
+        payload["composite_version"] = 1
+        payload["dimensions"] = dimensions
     _atomic_write(where, payload)
     return payload
 
@@ -366,7 +372,7 @@ def read_receipt(endpoint: str, *, path=None, root=None) -> dict | None:
 
 def record_choice(endpoint: str, *, target, readback, dimension: str = "model",
                   hwnd=None, tab=None, raw=None, path=None, root=None,
-                  writer: str | None = None) -> dict:
+                  writer: str | None = None, dimensions: dict | None = None) -> dict:
     """给 `*_choose` 用：读回确认后写回执。**任何异常都不许带崩 choose。**
 
     返回 {"written": bool, "path": str|None, "reason": str}。
@@ -376,7 +382,7 @@ def record_choice(endpoint: str, *, target, readback, dimension: str = "model",
     try:
         written = write_receipt(endpoint, target=target, readback=readback,
                                dimension=dimension, hwnd=hwnd, tab=tab, raw=raw,
-                               path=path, root=root, writer=writer)
+                               path=path, root=root, writer=writer, dimensions=dimensions)
         out.update({"written": True, "path": str(Path(path) if path
                                                  else receipt_path(endpoint, root=root)),
                     "reason": "ok" if readback == target else "readback_mismatch"})
@@ -388,18 +394,50 @@ def record_choice(endpoint: str, *, target, readback, dimension: str = "model",
 
 # ---------------------------------------------------------------- 档位表
 def load_tiers(path=None) -> dict:
+    """读档位表本体。**格式错误抛 ValueError / 读不到抛 OSError**。
+
+    这是"纯读取"层：给 server、autopush 这类自己会把异常翻译成业务错误的调用方用。
+    发送门禁那一路要走 `_load_tiers_for_gate`——它把同样的错误统一成
+    `TierUnconfirmed`，否则 `endpoints` 写成 list/string 时会在 `.get` 上抛
+    AttributeError，从入口漏出去（CARD-06a 返工：格式错误必须一律 tier_unconfirmed/5）。
+    """
     where = Path(path) if path else TIERS_FILE
-    with open(where, "r", encoding="utf-8") as fh:
-        data = json.load(fh)
+    try:
+        with open(where, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except ValueError as exc:                 # json.JSONDecodeError 也是 ValueError
+        raise ValueError(f"档位表不是合法 JSON：{where}（{exc}）") from exc
     if not isinstance(data, dict):
-        raise ValueError(f"档位表不是对象：{where}")
+        raise ValueError(f"档位表不是对象：{where}（{type(data).__name__}）")
     return data
+
+
+def _load_tiers_for_gate(path=None) -> dict:
+    """门禁路径专用：任何"读不出/读不懂"都换成 TierUnconfirmed（退出码 5）。"""
+    try:
+        return load_tiers(path)
+    except OSError as exc:
+        raise TierUnconfirmed("table_unreadable",
+                              f"读不到档位表 {path or TIERS_FILE}：{exc}") from exc
+    except ValueError as exc:
+        raise TierUnconfirmed("table_malformed", str(exc)) from exc
 
 
 def endpoint_entry(endpoint: str, *, tiers: dict | None = None, path=None) -> dict:
     """一个端的整段登记（`dimensions` 和可选的 `writers` 都在里面）。"""
-    data = tiers if tiers is not None else load_tiers(path)
-    entries = data.get("endpoints") or {}
+    data = tiers if tiers is not None else _load_tiers_for_gate(path)
+    if not isinstance(data, dict):
+        raise TierUnconfirmed("table_malformed",
+                              f"档位表根节点必须是对象，实际是 {type(data).__name__}")
+    entries = data.get("endpoints")
+    if entries is None:
+        entries = {}
+    if not isinstance(entries, dict):
+        # 2026-11-06 返工反例：`{"endpoints": ["workbuddy"]}` / `"workbuddy"`
+        # 以前直接 .get → AttributeError 从入口漏出，退出码既不是 5 也没留证。
+        raise TierUnconfirmed(
+            "table_malformed",
+            f"档位表的 endpoints 必须是对象（端名 → 登记），实际是 {type(entries).__name__}")
     entry = entries.get(str(endpoint).lower())
     if not isinstance(entry, dict):
         raise TierUnconfirmed("endpoint_not_in_table",
@@ -462,7 +500,7 @@ def _dimension_entry(endpoint: str, dimension: str, *, writer: str | None,
 def allowed_tiers(endpoint: str, purpose: str, dimension: str, *,
                   tiers: dict | None = None, path=None,
                   writer: str | None = None) -> list[str]:
-    """这个端、这个维度、这个用途允许的读回值。空列表 = 本端没登记（不判档，只判结构）。"""
+    """这个端、这个维度、这个用途允许的读回值。空列表 = 未配置；check/gate必须拒发。"""
     if purpose not in PURPOSES:
         raise TierUnconfirmed("bad_purpose", f"purpose 只能是 {list(PURPOSES)}")
     entry = _dimension_entry(endpoint, dimension, writer=writer,
@@ -471,7 +509,10 @@ def allowed_tiers(endpoint: str, purpose: str, dimension: str, *,
     if values is None:
         where = f"{endpoint}/{writer}/{dimension}" if writer else f"{endpoint}/{dimension}"
         raise TierUnconfirmed("purpose_not_in_table", f"{where} 没登记 {purpose} 档")
-    return [str(v) for v in values]
+    if not isinstance(values, list) or any(
+            not isinstance(v, str) or not v.strip() for v in values):
+        raise TierUnconfirmed("table_malformed", f"{endpoint}/{dimension}/{purpose} 必须是非空档名列表")
+    return list(values)
 
 
 # ---------------------------------------------------------------- 校验
@@ -539,13 +580,61 @@ def check(endpoint: str, purpose: str, *, path=None, root=None, now=None,
         return out
     out["expected"] = expected
     if not expected:
-        # 本端没登记最低/最高档：只做结构性校验，并显式标注，不假装比过档
         out["tier_check"] = "table_unconfigured"
+        out["reasons"].append("table_unconfigured")
+        out["hint"] = (f"{endpoint}/{dimension}/{purpose} 未配置用途档位，拒绝发送；"
+                       "先核实最低/最高档并配置 docs/tiers.json，再重新 choose")
+        return out
     elif str(readback) not in expected:
         out["reasons"].append("purpose_mismatch")
         out["hint"] = (f"--purpose {purpose} 要求 {dimension} 是 {expected}，"
                        f"回执里读回的是 {readback}；先按用途重新跑一次 choose")
         return out
+
+    # Endpoints declaring required dimensions cannot use a legacy single-axis
+    # receipt. Check every dimension against the same purpose and writer table.
+    try:
+        entry = endpoint_entry(endpoint, tiers=tiers)
+    except TierUnconfirmed as exc:
+        out["reasons"].append(exc.reason)
+        out["hint"] = exc.hint
+        return out
+    required = entry.get("required_dimensions") or []
+    if required:
+        blocks = receipt.get("dimensions")
+        if receipt.get("composite_version") != 1 or not isinstance(blocks, dict):
+            out["reasons"].append("composite_missing")
+            return out
+        if entry.get("require_writer") and not writer:
+            out["reasons"].append("writer_missing")
+            return out
+        out["expected_dimensions"] = {}
+        for dim in required:
+            block = blocks.get(dim)
+            if not isinstance(block, dict) or not block.get("readback"):
+                out["reasons"].append("composite_missing")
+                out["dimension"] = dim
+                return out
+            if block.get("target") != block["readback"]:
+                out["reasons"].append("readback_mismatch")
+                out["dimension"] = dim
+                return out
+            try:
+                allowed = allowed_tiers(endpoint, purpose, dim, tiers=tiers, writer=writer)
+            except TierUnconfirmed as exc:
+                out["reasons"].append(exc.reason)
+                out["hint"] = exc.hint
+                return out
+            out["expected_dimensions"][dim] = allowed
+            if not allowed or block["readback"] not in allowed:
+                out["reasons"].append("purpose_mismatch" if allowed else "table_unconfigured")
+                out["dimension"] = dim
+                out["hint"] = f"{dim} 必须是 {allowed}，联合回执读回 {block['readback']!r}"
+                return out
+        primary = blocks.get(dimension) or {}
+        if primary.get("target") != target or primary.get("readback") != readback:
+            out["reasons"].append("readback_mismatch")
+            return out
 
     # 窗口：hwnd + pid + 进程启动时间，三者都要对得上
     live = live if live is not None else fingerprint(receipt.get("hwnd"))
@@ -604,6 +693,30 @@ def _readback_of(got) -> tuple:
     return str(got), {"source": "caller"}
 
 
+def _composite_reread(receipt, reread):
+    """One read-only snapshot must confirm writer AND every saved dimension."""
+    try:
+        got = reread("composite") if callable(reread) else None
+    except Exception as exc:
+        got = {"reason": f"{type(exc).__name__}: {exc}"}
+    if not isinstance(got, dict):
+        got = {}
+    values = got.get("dimensions") or {}
+    if not isinstance(values, dict):
+        values = {}
+    detail = {"source": got.get("source"), "raw": got.get("raw"),
+              "values": values, "writer": got.get("writer")}
+    wanted = {key: value.get("readback") for key, value in receipt["dimensions"].items()
+              if isinstance(value, dict)}
+    failure = None
+    if not got.get("writer") or any(not values.get(key) for key in wanted):
+        failure = TierUnconfirmed("tier_unreadable", "联合档位有维度读不到，拒绝发送", detail)
+    elif got["writer"] != receipt.get("writer") or any(values[key] != value for key, value in wanted.items()):
+        failure = TierUnconfirmed("tier_drift", "writer/model/effort任一漂移，拒绝发送", detail)
+    return {"checked": failure is None, "value": values, "source": got.get("source"),
+            "detail": detail}, failure
+
+
 def gate(endpoint: str, purpose: str, *, reread=None, require_readback: bool = True,
          path=None, root=None, now=None, tiers: dict | None = None, live: dict | None = None,
          hwnd=None, do_consume: bool = True) -> dict:
@@ -633,6 +746,10 @@ def gate(endpoint: str, purpose: str, *, reread=None, require_readback: bool = T
                     tiers=tiers, live=live)
     if not verdict["ok"]:
         reason = verdict["reasons"][0]
+        # A failed sending attempt invalidates its receipt too. A read-only
+        # preflight explicitly uses do_consume=False and leaves it untouched.
+        if do_consume and verdict.get("receipt"):
+            consume(endpoint, path=path, root=root)
         raise TierUnconfirmed(reason, _hint_for(endpoint, purpose, reason, verdict),
                               {k: v for k, v in verdict.items()
                                if k in ("age", "expected", "live", "tier_check",
@@ -642,7 +759,9 @@ def gate(endpoint: str, purpose: str, *, reread=None, require_readback: bool = T
     dimension = str(receipt.get("dimension") or "model")
     drift: dict = {"checked": False, "value": None, "source": None}
     failure: TierUnconfirmed | None = None
-    if callable(reread):
+    if receipt.get("composite_version") == 1:
+        drift, failure = _composite_reread(receipt, reread)
+    elif callable(reread):
         try:
             got = reread(dimension)
         except Exception as exc:             # noqa: BLE001 - 读失败一律按"没读到"处理
@@ -715,7 +834,12 @@ def _hint_for(endpoint: str, purpose: str, reason: str, verdict: dict) -> str:
         "endpoint_not_in_table": "docs/tiers.json 缺这个端",
         "dimension_not_in_table": "docs/tiers.json 缺这个维度",
         "purpose_not_in_table": "docs/tiers.json 缺这个用途",
+        "table_unreadable": "读不到 docs/tiers.json，拒绝发送；先修好档位表再 choose",
         "writer_not_in_table": verdict.get("hint") or "docs/tiers.json 缺这个模式的档位表",
+        "table_unconfigured": verdict.get("hint") or "用途档位未配置，拒绝发送",
+        "table_malformed": verdict.get("hint") or "用途档位表格式错误，拒绝发送",
+        "composite_missing": "需要同轮writer/model/effort联合回执，旧单维回执不可发送；重新choose",
+        "writer_missing": "联合回执缺少writer，拒绝发送；重新choose",
         "bad_purpose": f"--purpose 只能是 {'/'.join(PURPOSES)}",
     }
     return base.get(reason, f"档位没确认：先跑 {choose}")

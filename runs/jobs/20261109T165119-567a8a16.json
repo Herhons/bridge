@@ -1,0 +1,231 @@
+{
+  "job_id": "20261109T165119-567a8a16",
+  "request_id": "0f4b6691-f6ba-49f2-bf77-c87f9f5294f6",
+  "status": "partial",
+  "purpose": "test",
+  "prompt": "只回复下面这一行，不要任何解释、不要加标点：BRIDGE-B17-S2-f74c732e",
+  "created_at": "2026-11-09T08:51:19+00:00",
+  "started_at": "2026-11-09T08:51:19+00:00",
+  "finished_at": "2026-11-09T08:52:31+00:00",
+  "order": [
+    "chatgpt",
+    "gemini",
+    "grok",
+    "deepseek"
+  ],
+  "endpoints": {
+    "chatgpt": {
+      "status": "failed",
+      "reply": null,
+      "error": {
+        "code": "choose_failed",
+        "message": "重新打开列表读到的选中项是 'gpt6_astra'，不是 'gpt56_luna'；按第 10 条整体判失败，不沿用点击得到的结果",
+        "step": "choose",
+        "exit_code": 1
+      },
+      "error_code": "choose_failed",
+      "exit_code": 1,
+      "choose": {
+        "ok": false,
+        "dimension": "model",
+        "target": "gpt56_luna",
+        "readback": null,
+        "targets": {
+          "model": "gpt56_luna",
+          "effort": "low"
+        },
+        "confirmed": false,
+        "exit_code": 1,
+        "timeout": false,
+        "elapsed": 34.671,
+        "error_code": "choose_failed",
+        "error_message": "重新打开列表读到的选中项是 'gpt6_astra'，不是 'gpt56_luna'；按第 10 条整体判失败，不沿用点击得到的结果",
+        "stderr": ""
+      },
+      "use": null,
+      "started_at": "2026-11-09T08:51:19+00:00",
+      "finished_at": "2026-11-09T08:52:09+00:00",
+      "elapsed": 49.69,
+      "evidence_l1": {
+        "job_id": "20261109T165119-567a8a16",
+        "request_id": "0f4b6691-f6ba-49f2-bf77-c87f9f5294f6",
+        "at": "2026-11-09T08:51:19+00:00",
+        "source": "server"
+      }
+    },
+    "gemini": {
+      "status": "done",
+      "reply": "BRIDGE-B17-S2-f74c732e",
+      "error": null,
+      "error_code": null,
+      "exit_code": 0,
+      "choose": {
+        "ok": true,
+        "dimension": "model",
+        "target": "flash_lite",
+        "readback": "flash_lite",
+        "targets": {
+          "model": "flash_lite"
+        },
+        "confirmed": true,
+        "exit_code": 0,
+        "timeout": false,
+        "elapsed": 9.375,
+        "error_code": null,
+        "error_message": null,
+        "stderr": ""
+      },
+      "use": {
+        "ok": true,
+        "stage": "answered",
+        "reply": "BRIDGE-B17-S2-f74c732e",
+        "exit_code": 0,
+        "timeout": false,
+        "elapsed": 62.172,
+        "error_code": null,
+        "error_message": null,
+        "stderr": "",
+        "detail": {
+          "basis": "tree_reply_bar_and_stable_text"
+        }
+      },
+      "started_at": "2026-11-09T08:51:19+00:00",
+      "finished_at": "2026-11-09T08:52:31+00:00",
+      "elapsed": 71.78,
+      "evidence_l1": {
+        "job_id": "20261109T165119-567a8a16",
+        "request_id": "0f4b6691-f6ba-49f2-bf77-c87f9f5294f6",
+        "at": "2026-11-09T08:51:19+00:00",
+        "source": "server"
+      },
+      "progress": {
+        "schema_version": 1,
+        "job_id": "20261109T165119-567a8a16",
+        "endpoint": "gemini",
+        "pid": 31592,
+        "at": "2026-11-09T16:52:31+0800",
+        "stage": "finished",
+        "busy": false,
+        "copies": 1
+      }
+    },
+    "grok": {
+      "status": "done",
+      "reply": "BRIDGE-B17-S2-f74c732e",
+      "error": null,
+      "error_code": null,
+      "exit_code": 0,
+      "choose": {
+        "ok": true,
+        "dimension": "model",
+        "target": "fast",
+        "readback": "fast",
+        "targets": {
+          "model": "fast"
+        },
+        "confirmed": true,
+        "exit_code": 0,
+        "timeout": false,
+        "elapsed": 4.109,
+        "error_code": null,
+        "error_message": null,
+        "stderr": ""
+      },
+      "use": {
+        "ok": true,
+        "stage": "answered",
+        "reply": "BRIDGE-B17-S2-f74c732e",
+        "exit_code": 0,
+        "timeout": false,
+        "elapsed": 66.656,
+        "error_code": null,
+        "error_message": null,
+        "stderr": "",
+        "detail": {
+          "basis": "tree_reply_bar_and_stable_text"
+        }
+      },
+      "started_at": "2026-11-09T08:51:19+00:00",
+      "finished_at": "2026-11-09T08:52:30+00:00",
+      "elapsed": 70.94,
+      "evidence_l1": {
+        "job_id": "20261109T165119-567a8a16",
+        "request_id": "0f4b6691-f6ba-49f2-bf77-c87f9f5294f6",
+        "at": "2026-11-09T08:51:19+00:00",
+        "source": "server"
+      },
+      "progress": {
+        "schema_version": 1,
+        "job_id": "20261109T165119-567a8a16",
+        "endpoint": "grok",
+        "pid": 4744,
+        "at": "2026-11-09T16:52:30+0800",
+        "stage": "finished",
+        "busy": false,
+        "copies": 0
+      }
+    },
+    "deepseek": {
+      "status": "done",
+      "reply": "BRIDGE-B17-S2-f74c732e",
+      "error": null,
+      "error_code": null,
+      "exit_code": 0,
+      "choose": {
+        "ok": true,
+        "dimension": "think",
+        "target": "off",
+        "readback": "off",
+        "targets": {
+          "think": "off"
+        },
+        "confirmed": true,
+        "exit_code": 0,
+        "timeout": false,
+        "elapsed": 6.89,
+        "error_code": null,
+        "error_message": null,
+        "stderr": ""
+      },
+      "use": {
+        "ok": true,
+        "stage": "answered",
+        "reply": "BRIDGE-B17-S2-f74c732e",
+        "exit_code": 0,
+        "timeout": false,
+        "elapsed": 62.0,
+        "error_code": null,
+        "error_message": null,
+        "stderr": "",
+        "detail": {
+          "settle_basis": "text_stable",
+          "basis": "new_user_message_and_reply_control"
+        }
+      },
+      "started_at": "2026-11-09T08:51:19+00:00",
+      "finished_at": "2026-11-09T08:52:28+00:00",
+      "elapsed": 69.14,
+      "evidence_l1": {
+        "job_id": "20261109T165119-567a8a16",
+        "request_id": "0f4b6691-f6ba-49f2-bf77-c87f9f5294f6",
+        "at": "2026-11-09T08:51:19+00:00",
+        "source": "server"
+      },
+      "progress": {
+        "schema_version": 1,
+        "job_id": "20261109T165119-567a8a16",
+        "endpoint": "deepseek",
+        "pid": 28740,
+        "at": "2026-11-09T16:52:28+0800",
+        "stage": "finished",
+        "outcome": "answered"
+      }
+    }
+  },
+  "quorum": {
+    "required": 3,
+    "recovered": 3,
+    "met": true,
+    "clamped": false
+  }
+}

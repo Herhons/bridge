@@ -1,0 +1,25 @@
+{
+ "schema_version": 1,
+ "endpoint": "chatgpt",
+ "stage": "tier_unconfirmed",
+ "reason": "receipt_missing",
+ "code": 5,
+ "at": "2026-11-10T10:17:07+0800",
+ "hwnd": null,
+ "window": {
+  "rect": null,
+  "zoom_percent": null
+ },
+ "templates": [],
+ "hint": "先跑 chatgpt_choose",
+ "result": {
+  "ok": false,
+  "stage": "tier_unconfirmed",
+  "reason": "receipt_missing",
+  "code": 5,
+  "hint": "先跑 chatgpt_choose"
+ },
+ "extra": {},
+ "screenshot": "F:\\Bridge\\v0.0.9\\_selftest\\direct_20261110_101618_093358_12888\\fail\\chatgpt_20261110-101707.png",
+ "deduped": null
+}

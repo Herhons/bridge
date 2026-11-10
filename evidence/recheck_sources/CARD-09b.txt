@@ -1,0 +1,36 @@
+Bridge v0.0.9 · Codex 独立只读复验 · 2026-11-06（北京时间）
+工作目录：F:\Bridge\v0.0.9
+共同回归命令：py -3.10 -X utf8 -B -m unittest discover -s tests -v
+Python 3.10.11；最终隔离复跑 Ran 731 tests in 24.369s；OK；EXIT=0；无跳过。
+正式日志 unittest_isolated.txt；首轮731/23.319s原日志unittest.txt保留。两轮使用同一src/tests，第二轮只在运行期重定向写盘并拦截越界写入/真实输入。
+执行偏差：首轮测试漏隔离导致目录外日志/合成输入标记/失败截图写盘，详 READONLY_INCIDENT.txt；不把首轮冒称完全只读。最终隔离复跑目录外变更为0。
+保护对象 src/tests/cards/PLAN.md/progress.json 共402个既有文件SHA256不变；未新增受保护文件，详integrity_final.json。
+独立反例：independent_probes.py/.txt/_result.json；补充 independent_additional.py/.txt/_result.json，共15项，不计入731单测。
+判定口径：PASS仅针对本卡；FAIL区分实现缺陷与证据不足。未主动运行真机choose/use发送入口或外部通知，不重放旧提问。
+后续卡明确改变的行为按后续要求评估，不把合法后续变更算成旧卡回归。
+
+VERDICT FAIL
+缺口性质：/health返回字段偏离明确合同；3秒超时只覆盖响应头、读正文可以无限挂起。
+卡片：cards/CARD-09b-extension.md:5-16。
+
+逐条核对
+1. v008只读复制/0.0.9/name-description去空壳：当前成品与ManifestTests支持；evidence/card09b_v008_hash.txt给出20文件复制前后哈希。该历史证据不等于本轮重新安装Chrome，且本轮从未写v008。
+2. 固定公钥key/扩展ID/私钥不入仓/最小权限/host_permissions/CSP：PASS。
+   manifest.json实际为MV3、version0.0.9、permissions=[storage,sidePanel]、127.0.0.1:18765、精确CSP；配置ID与公钥哈希相符，tests直接计算ID/检查pem排除与资源存在。
+3. 单sidePanel、无popup、background只setPanelBehavior：PASS，background.js:1-7、manifest及静态测试。
+4. local配对、TRUSTED_CONTEXTS、无sync/日志/content脚本、401红字：实现与静态断言PASS。
+   sidepanel.initialize:984先收紧storage，token输入type=password，保存后清空；needPair明确红字。未把“读文件测试”当Chrome实际配对成功。
+5. 后端精确Origin、compare_digest、ACL失败只警告、health最小字段：前三者PASS；health FAIL。
+   server.py:1183-1185实际返回 {ok,version,port}，卡面要求仅 {ok,version}。
+   独立 P09B_health_fields真实执行handler分支得到多余port。
+   tests/test_card09b.py:377-382反而明确断言三字段，属于测试预期迎合实现，并未验证卡片合同。历史card09b_live.txt:64也明示偏差；旧验收者说“已知偏差”不等于用户批准改卡。
+6. endpoints/必选purpose/request_id/多job落storage/24h/单例恢复/离线3秒/404：主要机制存在；3秒完整请求 FAIL。
+   bridge-api.js:36-59在await fetch取得响应头后finally立刻clearTimeout；随后:61-68才await response.json。因此响应头到达但正文不结束时，health会永远pending。
+   独立补充 P09B_health_body_deadline 使用真实JS模块、完全假的fetch；把3000ms缩放到10ms，50ms后仍pending、aborted=false，无网络连接。
+   test_health_timeout_is_three_seconds只用正则检查常量3000；Node用例只验证PollScheduler，没有响应头已到/正文挂起反例。
+   sidepanel.initialize还先await无超时的loadEndpoints再refreshHealth；端点请求挂起也可阻止健康提示及恢复轮询。pollJob无超时可能占住唯一tick，建议一并覆盖。
+7. 离线测试：本卡62项（含实际Node轮询测试）全过，全量731 OK；证明组件可执行，不证明以上合同和超时分支正确。
+8. 手动加载清单：PASS，card09b_manual_checklist.md列加载ID/配对/侧栏生命周期/离线红字/重开恢复/401/404。
+9. 限定后端冒烟：card09b_live.txt有正确Origin200、错Origin403、无token401及预检/停服务，token打码。卡面明确09d才真机加载，本卡没有Chrome截图不作为FAIL理由。
+
+建议返工卡：09b-health-contract-and-timeout。health精确字段或先取得修改卡片的明确决定；超时预算持续覆盖正文读取，并给endpoints/job请求也设可恢复的截止时间；用假的fetch验证无响应头、慢正文、永不结束正文、401和恢复。

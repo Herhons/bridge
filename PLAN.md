@@ -1,3 +1,178 @@
+# Bridge v0.0.9 — isolated WIP 当前状态
+
+生成时间（Asia/Shanghai）：2026-11-07T13:05:00+08:00
+上次更新：2026-11-07T12:10:00（阶段 0 完成后）／2026-11-06T05:40:25（原文见文末「历史快照」，未删除）
+
+**本文件仅在独立 WIP 维护。正式目录 `F:\Bridge\v0.0.9` 保持只读。**
+**正式目录 322 个核心文件在 B1–B5 全程零偏差（逐文件哈希核对）。**
+
+---
+
+## 0. 一句话状态
+
+**代码改到位了，独立验收一项没做。**
+离线 **1282 条全绿 / EXIT=0**（2026-11-08 B14）。`offline_audit_status` 全部 `pending`、
+`e2e_accept_status` 全部 `not_run`。**不具备判完工条件，也不具备正式目录合并条件。**
+
+### 三态分离（施工单红线 5）
+
+| 字段 | 含义 | 谁能填 | 当前 |
+|---|---|---|---|
+| `dev_status` | 施工方自测 | 施工方 | B1–B5 已填；B6 `not_implemented` |
+| `offline_audit_status` | 独立离线复核 | **非施工方** | 全部 pending |
+| `e2e_accept_status` | 实机验收 | **非施工方** | 全部 not_run |
+
+**施工 `done` 不等于验收通过。**
+
+---
+
+## 0.1 沿用既有结论（原文保留，事实未变）
+
+以下三句是上一版状态表的结论，至今仍然成立，原样保留以免读者对照文末历史快照时误读：
+
+1. **所有 WIP 改动均待不同厂商独立验收。**
+2. CARD-05已存在并曾复验通过；插件已有09a/09b正式卡及成品；7b已由CARD-08实现，实际调度/真推不在本任务执行。旧表中的"无卡/未实现/05未发"仅留作历史。
+3. 09e 的 WorkBuddy 本人完整重启原始证据待补（属证据型缺口，须真机补，不得用历史记录替代）。
+
+---
+
+## 1. 本次施工批次（2026-11-07，B1–B6）
+
+> 施工单原定「逐阶段验收后才进下一阶段」。用户于 2026-11-07 明确要求
+> **不再逐阶段等待，一次性推进到可用状态，由他统一安排验收**。本表的
+> `offline_audit` / `e2e` 两列因此**全部为空**——这是事实，不是遗漏。
+
+| 批次 | 施工单任务 | 做了什么 | 测试数 | dev | offline_audit | e2e |
+|---|---|---|---|---|---|---|
+| **B1** | T2-1 前半 / T2-2 / T4-1 | `submissions.py` 六态 v2 + L1/L2/L3 + 三条不变量；`use_timeout` 180→120；WorkBuddy test/accept 白名单补齐；通知 `NOT_CONFIGURED` 显式登记 | 1069 | selftested | pending | not_run |
+| **B2** | T2-1 后半 | 五端（chatgpt/deepseek/codex/dsh/opencode）经 `conversation.ask` 统一接入账本；`flow` 透传 purpose；server 写 `evidence_l1` 并下发 env | 1094 | selftested | pending | not_run |
+| **B3** | T3-1 | `replycodes.py` 四个显式错误码；采集链改 detail 版；`wait_reply` 连续结构原因早退（`stage` 仍叫 `timeout`） | 1117 | selftested | pending | not_run |
+| **B5** | T4-2 | 插件 F4 从零接（只写 `progress-test.json`，三重防护 + mtime 乐观锁 + 3s 刷新 + 重载不丢）；F5 三维去重 + 补 `bad_request`/`server`；终态 job 输出回填；`request_id` 落盘；服务端双条件故障注入 | 1144 | selftested | pending | not_run |
+| **B4** | T1-1 / T1-2 登记 | 删掉迟到窗口认领（不再误关用户窗口）；加 nonce 归属校验（灰度 chatgpt/gemini/grok）；`docs/known_gaps.md` 登记 T1-2 | 1282 | selftested | pending | not_run |
+| **B6** | F3 并发 | **B13b/B14 已做**：锁下沉到分段临界区 + 线程池 + 回收线 + 错峰；真机 2/3 席全成、4 席回收 3 席（见 `evidence/batch14/`） | 1282 | **not_implemented** | n/a | not_run |
+
+批次证据：`evidence/batch1..6/`（各含 `before_hashes.txt`、`after_hashes.txt`、
+`unittest_batch*.txt`、`CHANGES_batch*.md`）。
+
+---
+
+## 2. 已声明的未完成项（`not_implemented`，不是 pending）
+
+| ID | 内容 | 谁定的 | 影响 |
+|---|---|---|---|
+| **T1-2** | 真人输入让位（事件级归属） | 用户 | 打字/粘贴后约 150ms 盲区；检查到点击前约 2 秒空窗。`guard.py` 现有机制原样保留未删 |
+| **F3-concurrency** | 多端真并发（锁粒度） | 施工方评估 | 多端会审功能可用，但总墙钟 ≈ 各端之和，**不满足"任务时间重叠"** |
+
+详见 `docs/known_gaps.md` 与 `evidence/batch6/CONCURRENCY_ASSESSMENT.md`。
+
+---
+
+## 3. 原 16 卡（Codex 复验 2026-11-06，全量 731 OK / EXIT=0 / 0 跳过）
+
+原复验结论与 WIP 自测分列，历史判定一字未改。详细缺口见
+`evidence/stage0_baseline_20261107_1133/FAILURE_MATRIX.md`。
+
+| 原卡 | 原复验 | 本卡 Ran | WIP 返工卡 | dev | offline_audit | e2e |
+|---|---|---|---|---|---|---|
+| 04c | FAIL | 10 | 04c-log-note | selftested | pending | not_run |
+| PLAN-r1 | FAIL | 文档卡 | PLAN-sync | selftested | pending | not_run |
+| GEM | PASS | 25 | 无（有后续保护改动） | unchanged | pass_prior | not_run |
+| WEB | FAIL | 14 | WEB-spawn-cleanup | selftested | pending | not_run |
+| 05 | PASS | 32 | 无（WIP 补并发锁） | unchanged | pass_prior | not_run |
+| WEB2 | FAIL | 26 | WEB2-evidence | selftested | pending | **not_run（证据型待真机）** |
+| 06a | FAIL | 79 | 06a-workbuddy-purpose | selftested | pending | not_run |
+| 06b | FAIL | 72 | 06b-workbuddy-presend | selftested | pending | not_run |
+| 06c | FAIL | 45 | 06c-composite-tier | selftested | pending | not_run |
+| 06d | PASS | 35 | 无（后续入口调整） | unchanged | pass_prior | not_run |
+| 07 | FAIL | 40 | 07-reply-attribution | selftested | pending | not_run |
+| 08 | FAIL | 42 | 08-autopush-integration | selftested | pending | not_run |
+| 09a | FAIL | 54 | 09a-lock / 09a-durable-idempotency / 09a-workflow-concurrency | selftested | pending | not_run |
+| 09b | FAIL | 62 | 09b-health-contract-and-timeout | selftested | pending | not_run |
+| 09e | FAIL | 64 | 09e-self-input-all-entries / 09e-workbuddy-restart-evidence | selftested | pending | **not_run（证据型待真机）** |
+| 09f-fix2 | FAIL | 22 | 09f-fix3-entry-recovery | selftested | pending | not_run |
+
+**合计**：PASS 3 / FAIL 13。13 项拆成 16 张返工卡 + TEST-ISOLATION = **17 张，全部 selftested**。
+
+---
+
+## 4. 16 卡复验之后的 9 轮（原文件生成时还没有）
+
+| 轮次 | 内容 | 全量基线 | dev | offline_audit | e2e |
+|---|---|---|---|---|---|
+| UI-BOOTSTRAP-2/3 | 恢复/引导修复 + 失败定位 | 909 OK | done | none | not_run |
+| R4 | opencode `read_effort` 下限 0.80→0.85 | 919 OK | done | glm_reviewed | not_run |
+| R5 | CE1/CE2 恢复事务身份 + opencode 安全收集 | 949 OK | done | none | not_run |
+| R6 | 同文档/同 URL 的 SPA 会话身份 | — | done | none | not_run |
+| R7 | 标题不再作身份；Gemini `input_mismatch` | — | done | none | not_run |
+| **R8** | `_existing_reply` 会话 id fail-closed | 992 OK | done | **Hy4 PASS** | not_run |
+| **R9** | 采集只交本轮答案；Gemini 发送前需证明同会话 | 1005 OK | done | **Hy4: S8 FAIL, S9/S10 OPEN** | not_run |
+| **R10** | 回答边界改为结构证据 | 1023 OK | done | **pending** | not_run |
+
+**R9 不得记为通过。** Hy4 原文：*"the general claim 'reply always contains only the current answer' is NOT proven: S8 is a reproducible FAIL counterexample."*
+
+---
+
+## 5. 当前基线
+
+```
+PYTHONPATH= py -3.10 -X utf8 -B -m unittest discover -s tests -v
+Ran 1282 tests in 141.285s
+OK
+EXIT=0
+```
+
+演进：1023（本次开工前）→ 1069 → 1094 → 1117 → 1144 → 1159 → 1255 → **1282**。
+
+> **跑测试必须清空 PYTHONPATH**：本机 `PYTHONPATH` 被预设为 WorkBuddy 的 shim 目录，
+> 会顶掉项目的离线守卫，导致 `EXIT=86` 与大量假 error。详见 `TEST_BASELINE.md` §4。
+
+---
+
+## 6. 阶段进度对照（施工单口径）
+
+| 阶段 | 代码改动 | 独立验收 | 能否进下一阶段 |
+|---|---|---|---|
+| 0 冻结基线 | 无 | — | ⏳ CALIBER / 审计例外仍待签 |
+| 1 高危安全 | T1-1 已做；**T1-2 跳过** | **无** | ✘（T1-2 未实现） |
+| 2 状态机 + CARD-08 | B1 + B2 已做 | **无** | ✘ |
+| 3 文本保真 | B3 已做 | **无** | ✘ |
+| 4 通道配置 + 插件 | B1 配置 + B5 已做 | **无** | ✘ |
+| 5 F1–F6 实机 | **未开始** | — | ✘ |
+| 6 合入 | **未开始** | — | ✘ |
+
+---
+
+## 7. 执行边界（沿用，未变）
+
+本 WIP 不执行 F1–F6 真机流程、不更新正式 progress 或 verdicts、不通知、不发送、不重启应用。
+GLM 额度例外仅代表链路到服务端，未冒称 token 回复。
+
+## 8. 并发会审：2026-11-08 起第 1、2 条作废（B13b）
+
+历史快照里「UI 并发与会审席位规则（Herhons 2026-11-02 定）」的前两条已被取代，
+**原文保持逐字不动**（`test_rework_plan.py` 钉了它的哈希），以此处为准：
+
+- ~~会审各席严格串行~~ → 桌面动作（焦点/剪贴板/合成输入/截图）仍**严格互斥**，
+  但"等回答"并行；单次持锁只覆盖"准备+发送"一段（≤25s），等待期间**不持锁**。
+  依据 `CALIBER §3.1`：不得持有全局锁串行等待完整回答。
+- ~~脚本从启动到读完回复全程持 `runs\ui.lock`~~ → 入口改为 `uilock.entry`：
+  `BRIDGE_UI_SECTIONED=1` 时锁下沉到 `uilock.section()` 短临界区；
+  同一端另有 `runs\turn\<端>.lock` 整轮互斥。探针脚本仍走 `uilock.run`，不受影响。
+
+并发度 / 回收线 / 错峰 / 读屏端名单：**以 `docs/bridge_server.json` 为准**
+（`endpoint_concurrency`、`min_success`、`endpoint_stagger`、`exclusive_endpoints`；改完重启后端）。
+真机结果：2 席与 3 席全成；4 席回收 3 席（`partial` + `quorum.met=true`），
+**第 4 席 codex 在 4 席同开时仍不稳**（choose 抢前台 / use 超时），详见 `docs/known_gaps.md` 的 F3。
+
+⑨ 后端常驻（B14）：`start` 起的子进程用 `DETACHED_PROCESS`（+ `CREATE_BREAKAWAY_FROM_JOB` 失败时回退）；
+验收方式是"另起一个 shell 后 `status` 仍 `running:true` 且 `pid_alive:true`"。
+`status` 新增 `pid_alive` / `stale_pid_file` / `mismatch`，`start` 现在会报真实 `pid` 与 `detached`。
+
+## 历史快照（以下原文不是当前状态表）
+
+以下保留原PLAN全文与带日期决定，不删除旧记录；本文件顶部当前表承接后续结果。
+
+<!-- ORIGINAL_PLAN_SNAPSHOT_START -->
 # Bridge v0.0.9 完工计划
 
 ## 目标
@@ -154,3 +329,4 @@
 - 高档（review/accept）等回复上限 ≥900s，不得 300s 就判超时。
 - 一次 submission=accepted 之后绝不自动重发；回填到输入框的提问要清掉并读回为空。workbuddy 因 UiDocsLost 自动重启后，重跑发送前先只读确认没答过，答过就只读返回，不重发。
 - 19:24 Herhons 新规：验收必须在 WorkBuddy 新对话里做，不得用构建者对话。步骤：新对话 → choose Hy4 preview → 读回档位 → use --purpose accept（实现：workbuddy_use --new --model "Hy4 preview" --purpose accept，脚本内顺序为新建→选模型→读回写回执→档位闸→发送）。验收提示只给卡、证据路径和仓库路径，由验收方自己跑检查。构建留在构建对话用 --continue。
+<!-- ORIGINAL_PLAN_SNAPSHOT_END -->

@@ -1,0 +1,31 @@
+Bridge v0.0.9 · Codex 独立只读复验 · 2026-11-06（北京时间）
+工作目录：F:\Bridge\v0.0.9
+共同回归命令：py -3.10 -X utf8 -B -m unittest discover -s tests -v
+Python 3.10.11；最终隔离复跑 Ran 731 tests in 24.369s；OK；EXIT=0；无跳过。
+正式日志 unittest_isolated.txt；首轮731/23.319s原日志unittest.txt保留。两轮使用同一src/tests，第二轮只在运行期重定向写盘并拦截越界写入/真实输入。
+执行偏差：首轮测试漏隔离导致目录外日志/合成输入标记/失败截图写盘，详 READONLY_INCIDENT.txt；不把首轮冒称完全只读。最终隔离复跑目录外变更为0。
+保护对象 src/tests/cards/PLAN.md/progress.json 共402个既有文件SHA256不变；未新增受保护文件，详integrity_final.json。
+独立反例：independent_probes.py/.txt/_result.json；补充 independent_additional.py/.txt/_result.json，共15项，不计入731单测。
+判定口径：PASS仅针对本卡；FAIL区分实现缺陷与证据不足。未主动运行真机choose/use发送入口或外部通知，不重放旧提问。
+后续卡明确改变的行为按后续要求评估，不把合法后续变更算成旧卡回归。
+
+VERDICT PASS
+卡片：cards/CARD-05-workflow.md r2:6-45。
+
+逐条核对
+1. 固定 JSON 状态/跳转/终态/三次阈值/席位：PASS。
+   docs/workflow/workflow.json 实际内容对应卡片；tests/test_card05.py:121-152 逐一遍历15条合法边并校验关键配置，不只检查文件存在。
+2. 标准库离线状态机：PASS。
+   src/qi/workflow.py 无UI/子进程/发送，默认定义路径由 __file__ 推导；move:299-335 校验跳转、同状态拒绝；advance:338-360 计数与 stuck；resolve_hold:363-380。
+   test_card05.IllegalEdges 验三类非法迁移且哈希不变；BlockAndRepair 验05b/05c及parent；HoldFlow 验非空missing、未清单不能回、resolve回verifying；ProgressWatch 验三次/中途清零/无stuck边不改状态。
+3. progress 数据形状/同步/备份/原子写/BOM：PASS。
+   workflow.py:156-203、206-294 读写并保留原数据；仅目标卡等于顶层card_id才更新顶层status和updated_at。
+   test_card05 的同步、7个顶层字段保留、写前备份、同秒不覆盖备份、BOM测试存在且通过。
+4. CLI --file 必填、四个子命令与0/2/3/4：PASS。
+   src/scripts/workflow_use.py:48-69、86-136；CommandLine测试覆盖成功、非法迁移、需监工、无文件/损坏/未知卡/未知状态和缺参数。本卡卡面误称“五种退出码”但只列四个值，按明确列出的0/2/3/4验，不凭空要求第五种。
+5. WORKFLOW-DRAFT “已定”补充：PASS，docs/workflow/WORKFLOW-DRAFT.md:25-46 写明JSON位置、权威跳转表、面板第6项定、通知沿用。
+6. 全量：本卡32项；全量731 OK。
+7. 原始离线/只读冒烟：PASS，evidence/card05_live.txt:12-125 有真实progress前后相同SHA256、status0、副本合法move0/非法move2/advance0/0/3及副本清理记录；未把临时副本写回真实progress。
+8. 历史 notify_done 曾覆盖其他顶层字段：card05_live.txt:145-154 如实记录恢复；当前问题已由09e的progress.merge修复。既不把旧缺陷当作当前状态，也不重跑通知。并发 server/workflow 的新问题另记09a，不把05的“原子写”扩张成未要求的跨进程事务承诺。
+
+建议返工卡：本卡无独立必返工项。本PASS不涵盖09c工作流面板或最终Chrome实机验收。

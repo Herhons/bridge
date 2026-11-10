@@ -15,6 +15,10 @@
 """
 from __future__ import annotations
 
+from offline_guard import ensure_offline
+ensure_offline()
+
+
 import argparse
 import ast
 import contextlib
@@ -395,14 +399,35 @@ class TierTableTests(Base):
         self.assertEqual(ladder[0], "low")
         self.assertEqual(ladder[-1], "ultra")
 
-    def test_workbuddy_is_declared_unconfigured_not_faked(self):
-        """不许把「不知道」写成「都一样」：workbuddy 的最低/最高档就是空表。"""
-        self.assertEqual(tg.allowed_tiers("workbuddy", "accept", "model"), [])
+    def test_workbuddy_allowlist_matches_owner_authorization(self):
+        """T4-1（2026-11-07 owner 授权）：test/accept 补成与 review 相同的模型。
+
+        这里把授权值钉死，防止以后被随手改掉；同时钉死 `ladder` 必须留空
+        —— WorkBuddy 没有权威的高低档排序，**不许从白名单反推档位高低**
+        （那正是本卡当初"不许把不知道写成都一样"要防的事）。
+        """
+        self.assertEqual(tg.allowed_tiers("workbuddy", "test", "model"),
+                         ["DeepSeek-V4.1-Flash"])
+        self.assertEqual(tg.allowed_tiers("workbuddy", "accept", "model"),
+                         ["DeepSeek-V4.1-Flash", "Hy4"])
+        ladder = tg.load_tiers()["endpoints"]["workbuddy"]["dimensions"]["model"]["ladder"]
+        self.assertEqual(ladder, [], "ladder 必须留空：没有权威高低排序，不许反推")
+
+    def test_empty_allowlist_still_fails_closed(self):
+        """门禁语义一个字没变：白名单为空时仍然必须拒发。
+
+        用**显式 fixture** 把 accept 清空，不再依赖"生产配置恰好是空的"这个事实
+        —— 生产配置现在有值了，门禁本身不能被它绑架。
+        """
+        tiers = tg.load_tiers()
+        tiers["endpoints"]["workbuddy"]["dimensions"]["model"]["accept"] = []
+        self.assertEqual(
+            tg.allowed_tiers("workbuddy", "accept", "model", tiers=tiers), [])
         self.receipt(endpoint="workbuddy", target="DeepSeek-V4.1-Flash")
-        result = tg.gate("workbuddy", "accept", root=self.tmp, do_consume=False,
-                         require_readback=False)
-        self.assertTrue(result["ok"])
-        self.assertEqual(result["tier_check"], "table_unconfigured")
+        with self.assertRaises(tg.TierUnconfirmed) as caught:
+            tg.gate("workbuddy", "accept", root=self.tmp, do_consume=False,
+                    require_readback=False, tiers=tiers)
+        self.assertEqual(caught.exception.reason, "table_unconfigured")
 
     def test_missing_dimension_is_reported(self):
         with self.assertRaises(tg.TierUnconfirmed) as caught:

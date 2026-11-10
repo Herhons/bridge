@@ -1,0 +1,48 @@
+{
+  "original": "F:\\Bridge\\v0.0.9",
+  "hashed_before": 1907,
+  "hashed_after": 1916,
+  "changed": [
+    "evidence/codex_rework_dispatch_20261106/use_out.txt",
+    "patrol-log.md",
+    "runs/20261106.jsonl",
+    "runs/synthetic_input.json"
+  ],
+  "missing": [],
+  "added_outside_drafts": [
+    "evidence/codex_rework_dispatch_20261106/codex_goal_active.png",
+    "evidence/codex_rework_dispatch_20261106/codex_goal_pre.png",
+    "evidence/codex_rework_dispatch_20261106/codex_goal_queued.png",
+    "evidence/codex_rework_dispatch_20261106/codex_now.png",
+    "evidence/codex_rework_dispatch_20261106/dispatch_status.txt",
+    "evidence/codex_rework_dispatch_20261106/goal_prompt.txt",
+    "evidence/codex_rework_dispatch_20261106/goal_queue_result.json",
+    "evidence/codex_rework_dispatch_20261106/queue_goal.py"
+  ],
+  "unreadable_before": {
+    "runs/ui.lock": "[Errno 13] Permission denied"
+  },
+  "unreadable_after": {},
+  "protected_changed": [],
+  "authorized_drafts": [
+    "DRAFT-04c-log-note.md",
+    "DRAFT-06a-workbuddy-purpose.md",
+    "DRAFT-06b-workbuddy-presend.md",
+    "DRAFT-06c-composite-tier.md",
+    "DRAFT-07-reply-attribution.md",
+    "DRAFT-08-autopush-integration.md",
+    "DRAFT-09a-durable-idempotency.md",
+    "DRAFT-09a-lock-integration.md",
+    "DRAFT-09a-workflow-concurrency.md",
+    "DRAFT-09b-health-contract-and-timeout.md",
+    "DRAFT-09e-self-input-all-entries.md",
+    "DRAFT-09e-workbuddy-restart-evidence.md",
+    "DRAFT-09f-fix3-entry-recovery.md",
+    "DRAFT-PLAN-sync.md",
+    "DRAFT-TEST-ISOLATION.md",
+    "DRAFT-WEB-spawn-cleanup.md",
+    "DRAFT-WEB2-evidence.md",
+    "INDEX.md"
+  ],
+  "note": "Comparison only; external concurrent runtime changes are not reverted or attributed without evidence."
+}

@@ -2,6 +2,10 @@
 
 不连外网：通知成功/失败都打到 127.0.0.1 上的临时假服务器（端口随机、用完即关）。
 """
+
+from offline_guard import ensure_offline
+ensure_offline()
+
 import json
 import os
 import sys

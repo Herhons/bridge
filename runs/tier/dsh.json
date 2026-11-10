@@ -1,0 +1,18 @@
+{
+ "consumed": true,
+ "consumed_at": "2026-11-09T14:30:11.788325+00:00",
+ "created_at": "2026-11-09T14:30:09.132853+00:00",
+ "created_monotonic": 217259.562,
+ "dimension": "model",
+ "endpoint": "dsh",
+ "hwnd": 591964,
+ "monotonic_origin": 217259.562,
+ "pid": 25608,
+ "process_start_time": 134386184452527004,
+ "raw": "{\"after\": \"deepseek_v41_flash\", \"ok\": true, \"score\": 0.956, \"stage\": \"done\", \"verified\": true, \"want\": \"deepseek_v41_flash\"}",
+ "readback": "deepseek_v41_flash",
+ "schema_version": 1,
+ "tab": null,
+ "target": "deepseek_v41_flash",
+ "writer": null
+}

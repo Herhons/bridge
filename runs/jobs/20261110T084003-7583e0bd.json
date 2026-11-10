@@ -1,0 +1,77 @@
+{
+  "job_id": "20261110T084003-7583e0bd",
+  "request_id": "6aab036a-09e6-4e42-a82e-4cf3be2ec5a4",
+  "status": "done",
+  "purpose": "review",
+  "prompt": "你是资深软件架构评审。下面是一个真实系统的结构与量化统计（不贴源码）。请只基于这些信息给优化建议，不要泛泛而谈。\n\n【这是什么系统】\nBridge v0.0.9：用 Windows UI Automation 控件树、像素模板匹配和剪贴板，把 4 个网页端（ChatGPT、Gemini、Grok、DeepSeek）和 4 个桌面端（Codex、OpenCode、DeepSeek Harness、WorkBuddy）变成可编程调用的\"模型席位\"。本地 HTTP 后端收 /ask 后，按 endpoint 逐个驱动窗口：先选档（模型、推理强度、深度思考），读回确认后写一张\"档位回执\"，再发提问、收回答、落证据。目的是让多个异构模型对同一问题作答并可审计。\n\n【硬约束，请不要建议突破】\n· 前台只有一个焦点：choose 和 use 全程持一把跨进程文件锁 uilock，四个席位是串行的，endpoint_concurrency=1 是必然而不是偷懒。\n· 一个 job 最多 4 席（max_endpoints_per_job=4）。\n· 只能靠 UIA、像素模板、剪贴板，不能修改这些第三方客户端。\n· 不引入新依赖（现有 comtypes、opencv、numpy；测试只用标准库 unittest）。\n· 界面会动画、懒加载、抢焦点、出人机验证，所以\"读回确认\"比\"点击成功\"重要。\n\n【规模】\n代码行按 token 行统计，已剔除空行与注释。\nsrc/qi（内核）：37 个文件，16325 总行，11397 代码行。\nsrc/scripts（CLI）：20 个文件，13609 总行，9629 代码行。\ntools：32 个文件，2911 总行，2198 代码行。\ntests：98 个文件，23156 总行，18025 代码行。\nsrc/chrome-extension：4 个文件，1600 总行，207 代码行。\n测试共 98 个 test 文件、1452 个用例，全部离线运行（真机 UI 被守卫禁止）。\n内核 36 个模块，CLI 20 个模块。\n依赖边：内核内部 126 条，CLI 到内核 96 条，CLI 之间只有 1 条。\n\n【分层】\nChrome 扩展 → qi.server（调度、预算、quorum、证据落盘）→ src/scripts 的 choose 与 use 成对 CLI → qi 内核（锁、定位、闸门、会话）→ docs 下的档位表与服务配置、runs 下的运行日志。\n\n【依赖枢纽，括号内是全仓入度，即被多少模块 import】\nuilock（26）、tier_guard（19）、ui（17）、window（15）、console（14）、guard（12）、failure（11）、desk（11）、runlog（10）。\n另外发现 3 处互相 import：browser 与 screen、browser 与 ui、conversation 与 submissions。\n\n【重复代码，相似度为上界近似】\ndsh_choose 与 dsh_use：0.94，35 个同名函数。\ncodex_choose 与 codex_use：0.93，35 个同名函数。\nopencode_choose 与 opencode_use：0.91，42 个同名函数。\n其余三对（grok、gemini、deepseek）只有 0.23 到 0.33，因为它们的 use 复用共享流程 qi/flow.py，choose 只管选档。\n\n【测试覆盖的静态缺口】\n内核里有 3 个模块从未在测试源码中出现：desk_sites、lastreply、reject。\n\n【今天刚修的真实故障，用来判断是否存在系统性风险】\n第一，dsh 模型面板。面板里\"当前选中\"那一行是浅灰 244，而白块检测阈值是大于 250，于是同一块面板被切成上下两段；代码只取面积最大的单块，拿到的是下段，点击就落在模型行而不是搜索框；紧接着无条件按 Ctrl+A 选中整页，芯片变成白字蓝底，模板相似度从 0.956 掉到 0.348，系统于是误判\"档位没设上\"并拒发。修法是把同 x、同宽、竖直相邻的碎块合并成一个矩形，强制先折叠选中，Ctrl+A 只在搜索框确有残留时才发。\n第二，grok 输入框换成 ComboBoxControl 后，Ctrl+V 之后约 1.3 秒文本才进 UIA 的 Value；旧代码 0.35 秒就还原用户剪贴板，导致粘贴被打断，只写进前 3 个字。\n第三，chatgpt 新版把模型做成按会话隔离的，再点一次\"新聊天\"会把已设模型抹掉（强度是账号级的反而保留）；改为判断\"已经是空的新对话\"就跳过点击。\n第四，dsh 复制回答时，回答动作条还没渲染就点在旧坐标上，复制到的是提问本身；改为有界等待，条数一变就重试。\n\n【请回答】\n在不改运行模型（单前台、串行）、不加依赖的前提下，给出最多 5 条最有价值的优化，按收益与风险之比从高到低排序。每条必须写清四件事：针对哪个模块或文件；具体怎么改，要能落到函数级；风险是什么；如何验证，不能只写\"跑一遍看看\"，要能构造离线用例。\n另外单独回答一个问题：上面三对相似度 0.9 以上的 choose 与 use 副本，你认为应该合并还是保留，请给判据而不是口号。\n\n【输出格式】\n用中文，1200 字以内，每条以\"一、\"到\"五、\"开头。不要客套，不要复述我给你的统计数字。",
+  "created_at": "2026-11-10T00:40:03+00:00",
+  "started_at": "2026-11-10T00:40:03+00:00",
+  "finished_at": "2026-11-10T00:40:22+00:00",
+  "order": [
+    "deepseek"
+  ],
+  "endpoints": {
+    "deepseek": {
+      "status": "done",
+      "reply": "一、把\"等待\"统一成可注入的轮询原语，先修 grok 粘贴与 dsh 动作条两类竞态。针对 qi/ui.py 与 dsh_use 的复制函数、grok 的输入函数：新增 `wait_until(predicate, timeout, interval, clock, sleep)`，clock/sleep 可注入；粘贴后不以固定 0.35s 还原剪贴板，而是等 UIA Value 长度稳定或超时后再还原；复制回答时以\"回答块计数变化\"为 predicate 做有界重试。风险：超时设太小仍会截断，设太大拉长串行总时长。验证：离线用例注入假 clock 与假 sleep，构造\"Value 第 1.3s 才出现\"\"计数第 3 次轮询才变\"两种序列，断言最终文本完整、剪贴板被还原、总轮询次数有上界。\r\n\r\n二、为像素碎块合并与阈值判定抽出纯函数并补离线用例。针对 dsh 面板定位所在模块：把\"按同 x、同宽、竖直相邻合并矩形\"和\"最大块选择\"拆成接收矩形列表的纯函数 `merge_vertical_fragments(rects)`，把 244/250 阈值作为参数而非常量；点击前增加\"目标矩形包含搜索框特征\"的断言，Ctrl+A 改为条件触发。风险：合并规则过宽会把不同控件并成一块。验证：用构造的矩形列表覆盖\"上下两段\"\"三碎块\"\"相邻但 x 不同\"三类，断言合并结果与选中块，无需真机。\r\n\r\n三、给三个未覆盖模块补最小离线测试，优先 reject 与 lastreply。针对 qi/reject、qi/lastreply、qi/desk_sites：reject 用假回执构造\"档位未确认\"\"模板相似度低于阈值\"等输入，断言拒发理由与落盘字段；lastreply 用假控件树构造\"回答为空\"\"回答等于提问\"场景，断言不误取；desk_sites 只测配置解析与站点映射的纯数据部分。风险：测试固化当前行为，掩盖设计缺陷。验证：每个模块至少 3 个用例，跑 `python -m unittest` 全离线通过，且故意改坏一处断言能失败。\r\n\r\n四、拆掉三处互相 import，用依赖方向约束防回退。针对 browser 与 screen、browser 与 ui、conversation 与 submissions：把被双方共用的类型/常量下沉到独立小模块（如 `qi/types_ui.py`），browser 只单向依赖；conversation 与 submissions 把共享数据结构提到第三个模块。风险：下沉时易把行为也搬过去，改动面扩大。验证：加一个标准库 unittest 用例，静态扫描 import 图，断言不存在双向边，并把它作为 CI 门禁。\r\n\r\n五、用故障回放把四次真实故障固化为回归用例集。针对 tests 下新建 `test_incidents.py`：dsh 碎块、grok 延迟粘贴、chatgpt 空会话跳过、dsh 动作条未渲染，各构造一份离线输入（矩形列表、Value 时间序列、控件树快照、计数序列），断言修复后的判定。风险：快照与真实控件树漂移。验证：每个用例对应一条故障，删掉修复逻辑应失败。\r\n\r\n关于三对高相似 choose/use：判据不是相似度，而是\"差异是否只在该端点的控件定位与档位表，且共享部分已能抽成纯流程\"。若差异集中在选择器与档位映射，保留两份薄壳、把驱动流程抽到 qi/flow.py 并让两者调用同一流程，收益最大、风险最小；若差异涉及复制/提交时序等行为分支，则保留副本，只抽公共等待与定位原语。先做一次差异归类：同名函数中若超过八成仅参数不同，就合并；否则保留。",
+      "error": null,
+      "error_code": null,
+      "exit_code": 0,
+      "choose": {
+        "ok": true,
+        "dimension": "think",
+        "target": "on",
+        "readback": "on",
+        "targets": {
+          "think": "on"
+        },
+        "confirmed": true,
+        "exit_code": 0,
+        "timeout": false,
+        "elapsed": 2.344,
+        "error_code": null,
+        "error_message": null,
+        "stderr": ""
+      },
+      "use": {
+        "ok": true,
+        "stage": "answered",
+        "reply": "一、把\"等待\"统一成可注入的轮询原语，先修 grok 粘贴与 dsh 动作条两类竞态。针对 qi/ui.py 与 dsh_use 的复制函数、grok 的输入函数：新增 `wait_until(predicate, timeout, interval, clock, sleep)`，clock/sleep 可注入；粘贴后不以固定 0.35s 还原剪贴板，而是等 UIA Value 长度稳定或超时后再还原；复制回答时以\"回答块计数变化\"为 predicate 做有界重试。风险：超时设太小仍会截断，设太大拉长串行总时长。验证：离线用例注入假 clock 与假 sleep，构造\"Value 第 1.3s 才出现\"\"计数第 3 次轮询才变\"两种序列，断言最终文本完整、剪贴板被还原、总轮询次数有上界。\r\n\r\n二、为像素碎块合并与阈值判定抽出纯函数并补离线用例。针对 dsh 面板定位所在模块：把\"按同 x、同宽、竖直相邻合并矩形\"和\"最大块选择\"拆成接收矩形列表的纯函数 `merge_vertical_fragments(rects)`，把 244/250 阈值作为参数而非常量；点击前增加\"目标矩形包含搜索框特征\"的断言，Ctrl+A 改为条件触发。风险：合并规则过宽会把不同控件并成一块。验证：用构造的矩形列表覆盖\"上下两段\"\"三碎块\"\"相邻但 x 不同\"三类，断言合并结果与选中块，无需真机。\r\n\r\n三、给三个未覆盖模块补最小离线测试，优先 reject 与 lastreply。针对 qi/reject、qi/lastreply、qi/desk_sites：reject 用假回执构造\"档位未确认\"\"模板相似度低于阈值\"等输入，断言拒发理由与落盘字段；lastreply 用假控件树构造\"回答为空\"\"回答等于提问\"场景，断言不误取；desk_sites 只测配置解析与站点映射的纯数据部分。风险：测试固化当前行为，掩盖设计缺陷。验证：每个模块至少 3 个用例，跑 `python -m unittest` 全离线通过，且故意改坏一处断言能失败。\r\n\r\n四、拆掉三处互相 import，用依赖方向约束防回退。针对 browser 与 screen、browser 与 ui、conversation 与 submissions：把被双方共用的类型/常量下沉到独立小模块（如 `qi/types_ui.py`），browser 只单向依赖；conversation 与 submissions 把共享数据结构提到第三个模块。风险：下沉时易把行为也搬过去，改动面扩大。验证：加一个标准库 unittest 用例，静态扫描 import 图，断言不存在双向边，并把它作为 CI 门禁。\r\n\r\n五、用故障回放把四次真实故障固化为回归用例集。针对 tests 下新建 `test_incidents.py`：dsh 碎块、grok 延迟粘贴、chatgpt 空会话跳过、dsh 动作条未渲染，各构造一份离线输入（矩形列表、Value 时间序列、控件树快照、计数序列），断言修复后的判定。风险：快照与真实控件树漂移。验证：每个用例对应一条故障，删掉修复逻辑应失败。\r\n\r\n关于三对高相似 choose/use：判据不是相似度，而是\"差异是否只在该端点的控件定位与档位表，且共享部分已能抽成纯流程\"。若差异集中在选择器与档位映射，保留两份薄壳、把驱动流程抽到 qi/flow.py 并让两者调用同一流程，收益最大、风险最小；若差异涉及复制/提交时序等行为分支，则保留副本，只抽公共等待与定位原语。先做一次差异归类：同名函数中若超过八成仅参数不同，就合并；否则保留。",
+        "exit_code": 0,
+        "timeout": false,
+        "elapsed": 16.782,
+        "error_code": null,
+        "error_message": null,
+        "stderr": "",
+        "detail": {
+          "settle_basis": "text_stable",
+          "basis": "new_user_message_and_reply_control"
+        }
+      },
+      "started_at": "2026-11-10T00:40:03+00:00",
+      "finished_at": "2026-11-10T00:40:22+00:00",
+      "elapsed": 19.41,
+      "evidence_l1": {
+        "job_id": "20261110T084003-7583e0bd",
+        "request_id": "6aab036a-09e6-4e42-a82e-4cf3be2ec5a4",
+        "at": "2026-11-10T00:40:03+00:00",
+        "source": "server"
+      },
+      "progress": {
+        "schema_version": 1,
+        "job_id": "20261110T084003-7583e0bd",
+        "endpoint": "deepseek",
+        "pid": 17612,
+        "at": "2026-11-10T08:40:22+0800",
+        "stage": "finished",
+        "outcome": "answered"
+      }
+    }
+  },
+  "quorum": {
+    "required": 1,
+    "recovered": 1,
+    "met": true,
+    "clamped": true
+  }
+}

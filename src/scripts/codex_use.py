@@ -1,6 +1,6 @@
 """codex（Codex 桌面端 / ChatGPT.exe）：选模型 + 调强度 + 提问收回答。
 
-**单文件，只依赖 cv2 / numpy / ctypes，不 import 本项目的任何模块。**
+**定位主体使用 cv2/numpy/ctypes；运行入口共用 qi 的锁和自身输入标记。**
 
 用法：
     python codex_use.py "只回复两个字：收到"
@@ -286,9 +286,8 @@ class _LII(ctypes.Structure):
 
 
 def idle_seconds():
-    lii = _LII(ctypes.sizeof(_LII), 0)
-    user32.GetLastInputInfo(ctypes.byref(lii))
-    return (kernel32.GetTickCount() - lii.dwTime) / 1000.0
+    from qi.guard import idle_seconds as shared_idle
+    return shared_idle()
 
 
 def _pid_of(hwnd):
@@ -405,42 +404,21 @@ def place(hwnd, pos, size):
 
 
 def activate(hwnd, tries=3):
-    """把窗口提到前台。返回是否真的提到了。
+    # B15：并发下抢前台是共享资源。统一走 desk.ensure_foreground
+    # （进 section → SW_RESTORE → SetFg → Alt 解前台锁 → topmost 闪 → 重试）。
+    # 只改函数体：名字、签名、调用点都不动（`test_desktop_controls` 按名字打桩）。
+    from qi import desk as _desk
+    return _desk.ensure_foreground(hwnd, tries=max(3, int(tries)))
 
-    SetForegroundWindow 会被**前台锁**拒绝：只有"当前前台进程"或"刚收到用户输入
-    的进程"才能改前台。所以后台脚本直接调它经常无效。
-    可靠做法是 AttachThreadInput 把自己的线程附到当前前台线程上，这样系统就当成
-    同一个线程，SetForegroundWindow 才生效；调完立刻解除附加。
-
-    2026-10-29：实测在斗鱼客户端占着前台时，只用 SetForegroundWindow 提不上来，
-    附加线程后一次就成。
-    """
-    hwnd = int(hwnd)
-    if user32.GetForegroundWindow() == hwnd:
-        return True
-    for _ in range(tries):
-        fg = user32.GetForegroundWindow()
-        tid_fg = user32.GetWindowThreadProcessId(wintypes.HWND(fg), None)
-        tid_me = kernel32.GetCurrentThreadId()
-        attached = False
-        if tid_fg and tid_fg != tid_me:
-            attached = bool(user32.AttachThreadInput(tid_me, tid_fg, True))
-        try:
-            user32.BringWindowToTop(wintypes.HWND(hwnd))
-            user32.SetForegroundWindow(wintypes.HWND(hwnd))
-            user32.SetFocus(wintypes.HWND(hwnd))
-        finally:
-            if attached:
-                user32.AttachThreadInput(tid_me, tid_fg, False)
-        time.sleep(0.2)
-        if user32.GetForegroundWindow() == hwnd:
-            return True
-    return False
 
 
 # ============================================================ 操作器
 
 class Desk:
+    def _mark_input(self):
+        from qi.guard import mark_synthetic
+        mark_synthetic("desk")
+
     def __init__(self, hwnd):
         self.hwnd = int(hwnd)
         self._clicks = []
@@ -581,6 +559,7 @@ class Desk:
         time.sleep(0.05)
         user32.mouse_event(0x0004, 0, 0, 0, 0)
         self._clicks.append(time.time())
+        self._mark_input()
         self._invalidate()
 
     def press(self, key, times=1):
@@ -591,6 +570,7 @@ class Desk:
             time.sleep(0.02)
             user32.keybd_event(vk, 0, 2, 0)
             time.sleep(0.05)
+        self._mark_input()
         self._invalidate()
 
     def hotkey(self, *keys):
@@ -602,6 +582,7 @@ class Desk:
         for c in reversed(codes):
             user32.keybd_event(c, 0, 2, 0)
             time.sleep(0.02)
+        self._mark_input()
         self._invalidate()
 
     def type_text(self, text, interval=0.004):
@@ -641,6 +622,7 @@ class Desk:
                     inp = _IN(type=1, u=_U(ki=_K(0, code, flags, 0, 0)))
                     user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(_IN))
                     time.sleep(interval)
+        self._mark_input()
         self._invalidate()
 
     def set_clipboard(self, text):
@@ -1575,7 +1557,9 @@ def ask(d, win, prompt, timeout=180.0, purpose=None):
     screen = Screen(verbose=False)
     screen.bind(d.hwnd)
     result = send_and_receive(Conversation(screen, "codex"), prompt, timeout,
-                              pre_send=door if purpose is not None else None)
+                              pre_send=door if purpose is not None else None,
+                              # T2-1 接线：不传 purpose 就不记账，失去重复发送护栏。
+                              purpose=purpose)
     result.setdefault("elapsed", round(time.monotonic() - started, 1))
     # 超时分型由 conversation.ask 算，这里只保证字段一定在（见 runlog.with_timeout_kind）
     return runlog.with_timeout_kind(result)
@@ -1961,4 +1945,7 @@ if __name__ == "__main__":
             except Exception:                          # noqa: BLE001
                 pass
     # UI 前台锁（CARD-09a 第 6 条）：和服务端抢同一把 runs\ui.lock
-    raise SystemExit(_lock.run("codex_use", main) if _lock else main())
+    if _lock is None:
+        print(json.dumps({"ok": False, "stage": "ui_busy", "reason": "lock_runtime_unavailable"}))
+        raise SystemExit(8)
+    raise SystemExit(_lock.entry("codex_use", main))

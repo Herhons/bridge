@@ -1,0 +1,209 @@
+{
+  "job_id": "20261108T213213-e4dd03dc",
+  "request_id": "d2adcaa9-95c6-4998-ac8f-20f05c2c6287",
+  "status": "failed",
+  "purpose": "test",
+  "prompt": "只回复下面这一行，不要任何解释、不要加标点：BRIDGE-W15f-4c8b6d12",
+  "created_at": "2026-11-08T13:32:13+00:00",
+  "started_at": "2026-11-08T13:32:13+00:00",
+  "finished_at": "2026-11-08T13:32:53+00:00",
+  "order": [
+    "chatgpt",
+    "gemini",
+    "grok",
+    "deepseek"
+  ],
+  "endpoints": {
+    "chatgpt": {
+      "status": "failed",
+      "reply": null,
+      "error": {
+        "code": "choose_failed",
+        "message": "读不出当前是聊天还是工作，先用 --writer 定一下（只能在新聊天页做）",
+        "step": "choose",
+        "exit_code": 1
+      },
+      "error_code": "choose_failed",
+      "exit_code": 1,
+      "choose": {
+        "ok": false,
+        "dimension": "model",
+        "target": "gpt56_luna",
+        "readback": null,
+        "targets": {
+          "model": "gpt56_luna",
+          "effort": "low"
+        },
+        "confirmed": false,
+        "exit_code": 1,
+        "timeout": false,
+        "elapsed": 8.422,
+        "error_code": "choose_failed",
+        "error_message": "读不出当前是聊天还是工作，先用 --writer 定一下（只能在新聊天页做）",
+        "stderr": ""
+      },
+      "use": null,
+      "started_at": "2026-11-08T13:32:13+00:00",
+      "finished_at": "2026-11-08T13:32:42+00:00",
+      "elapsed": 28.44,
+      "evidence_l1": {
+        "job_id": "20261108T213213-e4dd03dc",
+        "request_id": "d2adcaa9-95c6-4998-ac8f-20f05c2c6287",
+        "at": "2026-11-08T13:32:13+00:00",
+        "source": "server"
+      }
+    },
+    "gemini": {
+      "status": "done",
+      "reply": "BRIDGE-W15f-4c8b6d12",
+      "error": null,
+      "error_code": null,
+      "exit_code": 0,
+      "choose": {
+        "ok": true,
+        "dimension": "model",
+        "target": "flash_lite",
+        "readback": "flash_lite",
+        "targets": {
+          "model": "flash_lite"
+        },
+        "confirmed": true,
+        "exit_code": 0,
+        "timeout": false,
+        "elapsed": 5.594,
+        "error_code": null,
+        "error_message": null,
+        "stderr": ""
+      },
+      "use": {
+        "ok": true,
+        "stage": "answered",
+        "reply": "BRIDGE-W15f-4c8b6d12",
+        "exit_code": 0,
+        "timeout": false,
+        "elapsed": 33.922,
+        "error_code": null,
+        "error_message": null,
+        "stderr": ""
+      },
+      "started_at": "2026-11-08T13:32:13+00:00",
+      "finished_at": "2026-11-08T13:32:53+00:00",
+      "elapsed": 39.73,
+      "evidence_l1": {
+        "job_id": "20261108T213213-e4dd03dc",
+        "request_id": "d2adcaa9-95c6-4998-ac8f-20f05c2c6287",
+        "at": "2026-11-08T13:32:13+00:00",
+        "source": "server"
+      },
+      "progress": {
+        "schema_version": 1,
+        "job_id": "20261108T213213-e4dd03dc",
+        "endpoint": "gemini",
+        "pid": 28424,
+        "at": "2026-11-08T21:32:53+0800",
+        "stage": "finished",
+        "busy": false,
+        "copies": 1
+      }
+    },
+    "grok": {
+      "status": "failed",
+      "reply": null,
+      "error": {
+        "code": "choose_failed",
+        "message": "点不开菜单：确认页面在前台、芯片位置没变（换主题/缩放要重截模板）",
+        "step": "choose",
+        "exit_code": 1
+      },
+      "error_code": "choose_failed",
+      "exit_code": 1,
+      "choose": {
+        "ok": false,
+        "dimension": "model",
+        "target": "fast",
+        "readback": null,
+        "targets": {
+          "model": "fast"
+        },
+        "confirmed": false,
+        "exit_code": 1,
+        "timeout": false,
+        "elapsed": 10.86,
+        "error_code": "choose_failed",
+        "error_message": "点不开菜单：确认页面在前台、芯片位置没变（换主题/缩放要重截模板）",
+        "stderr": ""
+      },
+      "use": null,
+      "started_at": "2026-11-08T13:32:13+00:00",
+      "finished_at": "2026-11-08T13:32:24+00:00",
+      "elapsed": 10.98,
+      "evidence_l1": {
+        "job_id": "20261108T213213-e4dd03dc",
+        "request_id": "d2adcaa9-95c6-4998-ac8f-20f05c2c6287",
+        "at": "2026-11-08T13:32:13+00:00",
+        "source": "server"
+      }
+    },
+    "deepseek": {
+      "status": "done",
+      "reply": "BRIDGE-W15f-4c8b6d12",
+      "error": null,
+      "error_code": null,
+      "exit_code": 0,
+      "choose": {
+        "ok": true,
+        "dimension": "think",
+        "target": "off",
+        "readback": "off",
+        "targets": {
+          "think": "off"
+        },
+        "confirmed": true,
+        "exit_code": 0,
+        "timeout": false,
+        "elapsed": 3.078,
+        "error_code": null,
+        "error_message": null,
+        "stderr": ""
+      },
+      "use": {
+        "ok": true,
+        "stage": "answered",
+        "reply": "BRIDGE-W15f-4c8b6d12",
+        "exit_code": 0,
+        "timeout": false,
+        "elapsed": 26.141,
+        "error_code": null,
+        "error_message": null,
+        "stderr": "",
+        "detail": {
+          "settle_basis": "text_stable"
+        }
+      },
+      "started_at": "2026-11-08T13:32:13+00:00",
+      "finished_at": "2026-11-08T13:32:43+00:00",
+      "elapsed": 29.45,
+      "evidence_l1": {
+        "job_id": "20261108T213213-e4dd03dc",
+        "request_id": "d2adcaa9-95c6-4998-ac8f-20f05c2c6287",
+        "at": "2026-11-08T13:32:13+00:00",
+        "source": "server"
+      },
+      "progress": {
+        "schema_version": 1,
+        "job_id": "20261108T213213-e4dd03dc",
+        "endpoint": "deepseek",
+        "pid": 32012,
+        "at": "2026-11-08T21:32:42+0800",
+        "stage": "finished",
+        "outcome": "answered"
+      }
+    }
+  },
+  "quorum": {
+    "required": 3,
+    "recovered": 2,
+    "met": false,
+    "clamped": false
+  }
+}

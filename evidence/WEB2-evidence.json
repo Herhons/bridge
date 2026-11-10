@@ -1,0 +1,154 @@
+{
+  "card": "WEB2-evidence",
+  "offline_work_status": "complete",
+  "live_evidence_status": "pending",
+  "original_recheck_verdict": "FAIL",
+  "new_ui_actions": 0,
+  "missing": [
+    "Grok fast choose/readback bound to the same new-chat token/send/read round"
+  ],
+  "events": [
+    {
+      "kind": "raw_record",
+      "endpoint": "grok",
+      "action": "send_new",
+      "round_id": "cardweb2_20261101",
+      "exit": 0,
+      "token": "OK-WEB2",
+      "model": null
+    },
+    {
+      "kind": "raw_record",
+      "endpoint": "grok",
+      "action": "read",
+      "round_id": "cardweb2_20261101",
+      "exit": 0,
+      "token": "OK-WEB2",
+      "model": null
+    }
+  ],
+  "references": [
+    {
+      "source": "F:\\Bridge\\v0.0.9\\evidence\\cardweb2_live.txt",
+      "sha256": "d39437135feaabe6e77240e804189be91300834aba7fb41b14201db6c2483022",
+      "lines": [
+        19,
+        20,
+        21,
+        24,
+        30,
+        31,
+        32,
+        34
+      ],
+      "role": "send/read same historical token; model not established",
+      "excerpts": [
+        {
+          "line": 19,
+          "text": "$ python src/scripts/grok_use.py 只回复 OK-WEB2 --new --timeout 150 --idle 0"
+        },
+        {
+          "line": 20,
+          "text": "# grok --new：新对话 + 发送 + 等回复"
+        },
+        {
+          "line": 21,
+          "text": "# start 12:30:41  exit=0"
+        },
+        {
+          "line": 24,
+          "text": "{\"ok\": true, \"submission\": \"accepted\", \"sent\": true, \"stage\": \"answered\", \"reply\": \"OK-WEB2\", \"basis\": \"tree_reply_bar_and_stable_text\", \"submit\": \"uia\", \"elapsed\": 8.5, \"mode\": \"new\"}"
+        },
+        {
+          "line": 30,
+          "text": "$ python src/scripts/grok_use.py --read --tab 2 --idle 0"
+        },
+        {
+          "line": 31,
+          "text": "# grok --read（--tab 2）：只读最后一条回复，不发送"
+        },
+        {
+          "line": 32,
+          "text": "# start 12:30:50  exit=0"
+        },
+        {
+          "line": 34,
+          "text": "{\"ok\": true, \"stage\": \"read\", \"submission\": null, \"sent\": null, \"reply\": \"OK-WEB2\", \"replies\": 1, \"url\": \"https://grok.com/c/04973b87-40ff-4833-b59e-0c0ae5d51bd2?rid=1356c711-1f4f-4a50-872e-97760f3641b7\"}"
+        }
+      ]
+    },
+    {
+      "source": "F:\\Bridge\\v0.0.9\\evidence\\card06b_live.txt",
+      "sha256": "8310cf3572775b5244b10d6e80ee208dc492465a2cf54921ebaca9e839bde4a0",
+      "lines": [
+        313,
+        314,
+        315
+      ],
+      "role": "explicitly states fast switch not run",
+      "excerpts": [
+        {
+          "line": 313,
+          "text": "8. **`grok_choose --model fast`（真的要从 expert 切走）没有真机跑过**："
+        },
+        {
+          "line": 314,
+          "text": "   本轮只跑了 already 路径；切换路径的 item 模板在本机失配（historically 0.56），"
+        },
+        {
+          "line": 315,
+          "text": "   属 06c 的模板适配。receipt 的写入/消费路径已由 already 路径和单测覆盖。"
+        }
+      ]
+    },
+    {
+      "source": "F:\\Bridge\\v0.0.9\\evidence\\card07_live.txt",
+      "sha256": "6db3d188c33aaf7e60aaacc0d23dccbad20e40b168270d3780927e05c9f7a172",
+      "lines": [
+        46,
+        47,
+        50,
+        51,
+        52,
+        53
+      ],
+      "role": "Gemini lowest chain already supported; not Grok proof",
+      "excerpts": [
+        {
+          "line": 46,
+          "text": "  {\"ok\": true, \"stage\": \"already\", \"before\": \"flash_lite\", \"after\": \"flash_lite\"}"
+        },
+        {
+          "line": 47,
+          "text": "  EXIT=0"
+        },
+        {
+          "line": 50,
+          "text": "  {\"ok\": true, \"submission\": \"accepted\", \"sent\": true, \"stage\": \"answered\","
+        },
+        {
+          "line": 51,
+          "text": "   \"reply\": \"GEM-07-LIVE-OK\", \"basis\": \"tree_reply_bar_and_stable_text\","
+        },
+        {
+          "line": 52,
+          "text": "   \"criteria\": \"reply_bar+text_stable_3s\", \"elapsed\": 8.8, \"mode\": \"new\"}"
+        },
+        {
+          "line": 53,
+          "text": "  EXIT=0"
+        }
+      ]
+    }
+  ],
+  "search": {
+    "pattern": "grok_choose.*fast|fast.*--new|model.{0,8}fast",
+    "exit": 0,
+    "matching_files": [
+      "F:\\Bridge\\v0.0.9\\evidence\\card06b_live.txt",
+      "F:\\Bridge\\v0.0.9\\evidence\\codex_recheck_20261106\\CARD-WEB2.txt",
+      "F:\\Bridge\\v0.0.9\\evidence\\codex_recheck_20261106\\SUMMARY.txt"
+    ],
+    "note": "review claims, dispatch prompts and unittest transcripts are not live proof"
+  }
+}

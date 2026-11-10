@@ -9,4 +9,4 @@ from qi.workbuddy import main  # noqa: E402
 if __name__ == "__main__":
     console.setup()
     # UI 前台锁（CARD-09a 第 6 条）：和服务端抢同一把 runs\ui.lock
-    raise SystemExit(uilock.run("workbuddy_use", lambda: main(sending=True)))
+    raise SystemExit(uilock.entry("workbuddy_use", lambda: main(sending=True)))

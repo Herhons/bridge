@@ -404,27 +404,51 @@ def _unique(s: Screen, name: str, *, threshold: float, region) -> dict:
                          scales=zoom_mod.SCALES)
 
 
+#: 最近一次 `open_menu` 的分步证据。B16：grok 的 `menu_not_open` 以前只有一个
+#: 布尔值，anchor 找不着和菜单开了但一行都匹不上完全分不清。
+#: 仍然**只返 bool**（`choose()` 与测试桩按这个契约打桩），诊断走这个旁路。
+_LAST_OPEN: dict = {}
+
+
 def open_menu(s: Screen, cfg: Chooser) -> bool:
+    global _LAST_OPEN
+    win = _win(s, cfg)
+    info: dict = {"anchor": None, "items": {}, "why": "unknown",
+                  "win": list(win) if win else None}
+    _LAST_OPEN = info
     if cfg.open_by_chip:
         opened = False
         for key in cfg.has_chip:
-            got = _unique(s, _chip(cfg, key), threshold=0.90, region=_win(s, cfg))
+            got = _unique(s, _chip(cfg, key), threshold=0.90, region=win)
+            info[f"chip_{key}"] = {"best": got.get("best"),
+                                   "hit": got["match"] is not None}
             if got["match"] is not None:
                 s.click(got["match"])
                 time.sleep(0.8)
                 opened = True
                 break
         if not opened:
+            info["why"] = "chip_not_found"
             return False
     else:
-        a = s.find(cfg.anchor, threshold=0.85, region=_win(s, cfg))
+        a = s.find(cfg.anchor, threshold=0.85, region=win)
+        info["anchor"] = {"hit": a is not None,
+                          "best": getattr(s, "last_best", None),
+                          "threshold": 0.85, "offset": list(cfg.open_offset)}
         if a is None:
+            info["why"] = "anchor_not_found"
             return False
         s.click(a, offset=cfg.open_offset)
         time.sleep(0.7)
     for key in cfg.options:
-        if _unique(s, _item(cfg, key), threshold=0.88, region=_win(s, cfg))["match"] is not None:
+        got = _unique(s, _item(cfg, key), threshold=0.88, region=win)
+        info["items"][key] = {"best": got.get("best"),
+                              "hit": got["match"] is not None,
+                              "ambiguous": bool(got.get("ambiguous"))}
+        if got["match"] is not None:
+            info["why"] = "opened"
             return True
+    info["why"] = "menu_empty"
     return False
 
 
@@ -439,9 +463,19 @@ def choose(s: Screen, cfg: Chooser, key: str) -> dict:
                 "chip_score": before.get("score"), "scale": before.get("scale"),
                 "template": before.get("template")}
     if not open_menu(s, cfg):
-        return {"ok": False, "stage": "menu_not_open", "before": before["state"],
+        # `globals().get` 是刻意的：`choose` 会被测试按函数名抠出来 exec，
+        # 那份命名空间里没有 `_LAST_OPEN`，不能因为加诊断就把它们打红。
+        detail = dict(globals().get("_LAST_OPEN") or {})
+        why = detail.get("why") or "unknown"
+        return {"ok": False, "stage": "menu_not_open", "why": why,
+                "before": before["state"],
                 "template": before.get("template"), "score": before.get("score"),
-                "hint": "点不开菜单：确认页面在前台、芯片位置没变（换主题/缩放要重截模板）"}
+                "probe": detail,
+                "hint": ("点不开菜单（" + why + "）：" +
+                         {"anchor_not_found": "输入框锚点模板没匹上，重截 grok_composer",
+                          "menu_empty": "菜单开了但没有一行 item 模板匹上，重截 grok_item_*",
+                          "chip_not_found": "当前档位芯片没匹上，重截 grok_chip_*"}.get(
+                              why, "确认页面在前台、缩放 100%（换主题/缩放要重截模板）"))}
     got = _unique(s, _item(cfg, key), threshold=0.88, region=_win(s, cfg))
     hit = got["match"]
     if hit is None:
@@ -499,6 +533,7 @@ def cli(cfg: Chooser, argv: list[str]) -> int:
     if not s.focus():
         print("窗口提不到前台")
         return 1
+    s.tab_site = cfg.name
     time.sleep(1.2)
     try:
         # 页面缩放预检（CARD-06b 第 6 条）：非 100% 先按 Ctrl+0，仍不是就退出。

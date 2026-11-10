@@ -1,0 +1,34 @@
+Bridge v0.0.9 · Codex 独立只读复验 · 2026-11-06（北京时间）
+工作目录：F:\Bridge\v0.0.9
+共同回归命令：py -3.10 -X utf8 -B -m unittest discover -s tests -v
+Python 3.10.11；最终隔离复跑 Ran 731 tests in 24.369s；OK；EXIT=0；无跳过。
+正式日志 unittest_isolated.txt；首轮731/23.319s原日志unittest.txt保留。两轮使用同一src/tests，第二轮只在运行期重定向写盘并拦截越界写入/真实输入。
+执行偏差：首轮测试漏隔离导致目录外日志/合成输入标记/失败截图写盘，详 READONLY_INCIDENT.txt；不把首轮冒称完全只读。最终隔离复跑目录外变更为0。
+保护对象 src/tests/cards/PLAN.md/progress.json 共402个既有文件SHA256不变；未新增受保护文件，详integrity_final.json。
+独立反例：independent_probes.py/.txt/_result.json；补充 independent_additional.py/.txt/_result.json，共15项，不计入731单测。
+判定口径：PASS仅针对本卡；FAIL区分实现缺陷与证据不足。未主动运行真机choose/use发送入口或外部通知，不重放旧提问。
+后续卡明确改变的行为按后续要求评估，不把合法后续变更算成旧卡回归。
+
+VERDICT PASS
+卡片：cards/CARD-GEM-fix-reply-detect.md:10-15。
+
+逐条核对
+1. 控件树完成判据（回复自带答得好/复制动作条、文本稳定3秒）：PASS。
+   src/qi/gemini.py:147-198 parse、239-246 Scan.done、688-730 等待与 SETTLE 复核；停止生成时不交卷，发送模板不再是主要完成判据。
+   tests/test_cardgem.py:126、180、187 分别验证动作条归属、生成中不完成、动作条任一完成按钮可用；test_cardweb2.GeminiWait 验完成时限与最后一读。
+   CARD-07 后续明确增加“无动作条、停止键消失且两轮稳定”兜底；该合法扩展不算违反本卡。
+2. 本次提问在树中出现即 accepted：PASS。
+   gemini.py:645-656；Scan.prompt_at 支持折叠前缀，tests/test_cardgem.py:80-107 核验真实树中的折叠与长提问。
+3. --read 只读最后一条回复：PASS。
+   gemini.py:799-818、cli；gemini_use.py:70-104 对 --read 跳过模板检查和发送准备。
+   test_cardgem.ReadOnly / UseScript 覆盖读到、无回复、禁止带prompt、跳过模板、发送仍检查资源。
+4. 真实 gemini_bug_1215_uia.txt 夹具读 VERDICT：PASS。
+   tests/test_cardgem.py:66-130 读取真实夹具，而非 mock 最终判据；109-117 明确断言 VERDICT:REVISE 与正文空格。
+5. 单测全过：PASS。本卡模块25项，相关 WEB2/07 回归同时全绿；全量731 OK。
+6. 真机 token 收发与原11:4x会审 --read：已有原始证据成立。
+   evidence/cardgem_live.txt:7-12 读原会审含 VERDICT:REVISE，14-24 token accepted/answered 及再次 --read 均 EXIT=0。
+   该旧文件未单独记录模型档位；最低档的直接原始补证可用 evidence/card07_live.txt:45-53：choose flash_lite 后 --new --purpose test 返回 GEM-07-LIVE-OK，EXIT=0，basis=tree_reply_bar_and_stable_text。不是靠旧验收者的 PASS 代替证明。
+7. 备份/施工记录：对应 CARD-GEM 变更与原始证据存在；本轮不重做通知或发送。
+
+范围说明：此 PASS 证明本卡检测/读取修复，未宣称当前全项目完工，也不抵销 06a/06b/09f 的独立缺口。没有本轮新增真机验证。
+建议返工卡：本卡无独立必返工项。

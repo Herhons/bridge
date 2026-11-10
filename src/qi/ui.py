@@ -26,6 +26,7 @@ Coordinates come only from the currently bound control. No image/position fallba
 from __future__ import annotations
 
 import ctypes
+import os
 import time
 from ctypes import wintypes
 from dataclasses import dataclass, field
@@ -36,6 +37,7 @@ import uiautomation as auto
 from uiautomation.uiautomation import _AutomationClient
 
 from . import exit_codes as ec
+from . import uilock
 
 user32 = ctypes.windll.user32
 
@@ -405,8 +407,18 @@ def _recover(hwnd) -> dict:
     return facts
 
 
+def wake_enabled() -> bool:
+    """并发模式下不许抢前台（`BRIDGE_UI_WAKE=0`）。
+
+    为什么：`_recover` 会 `activate()` + 动鼠标。4 个端同时跑时会互相把对方
+    挤到后台 —— A 抢回来、B 变后台、B 再抢回来……每秒都在切前台，还白烧 8 秒。
+    `wake` 只在"读到 0 个文档"时才起作用，默认开着，单跑行为不变。
+    """
+    return os.environ.get("BRIDGE_UI_WAKE", "1") != "0"
+
+
 def candidates(hwnd, attempts: int = MAX_ROUNDS, *, site: str | None = None,
-               read=None, sleep=None, clock=None) -> list:
+               read=None, sleep=None, clock=None, wake=None) -> list:
     """带唤醒循环的文档读取（CARD-06a (b)）。
 
     顺序：
@@ -467,6 +479,11 @@ def candidates(hwnd, attempts: int = MAX_ROUNDS, *, site: str | None = None,
                                 "reason": "total_limit",
                                 "elapsed": round(clock() - started, 2)})
                 break
+        if wake is None:
+            wake = wake_enabled()
+        if not wake:
+            records.append({"round": index, "kind": "skipped", "reason": "wake_off"})
+            break
         facts = _recover(hwnd)
         found = one_read(index, "wake", facts)
         if found:
@@ -516,7 +533,23 @@ HOSTS = {"chatgpt": "chatgpt.com", "deepseek": "chat.deepseek.com",
          "gemini": "gemini.google.com", "grok": "grok.com"}
 
 
-def document(hwnd, site):
+def document(hwnd, site, *, wake=None):
+    """绑定本站点的文档控件，返回 (控件, URL)。
+
+    **tabs 模式下这一整段要进锁**：切标签和读文档必须是原子的，
+    否则"切过去 → 别人又切走 → 读到别人的页面"（2026-11-08 真机：
+    gemini 的 `open_new_chat` 就栽在这上面，报"读到 1 个文档 url=chat.deepseek.com"）。
+    单跑 / per_site 模式不加锁，行为与今天逐字节一致。
+    """
+    from . import browser, uilock as _uilock
+
+    if browser.window_mode() != "tabs":
+        return _document_plain(hwnd, site, wake=wake)
+    with _uilock.section(f"doc:{site}", timeout=_uilock.SECTION_TIMEOUT):
+        browser.acquire_tab(site, hwnd)
+        return _document_plain(hwnd, site, wake=wake)
+
+def _document_plain(hwnd, site, *, wake=None):
     """绑定本站点的文档控件，返回 (控件, URL)。URL 空串表示"读不到但确实绑上了"。
 
     失败时的报错要能直接看出发生了什么：窗口在不在前台、最小化没有、
@@ -525,7 +558,7 @@ def document(hwnd, site):
     **一个文档都读不到**（已唤醒重试 3 轮）→ 抛 `UiDocsLost`（退出码 6）：
     不杀进程、不重启客户端，只如实报告试了几轮、每轮看到了什么。
     """
-    docs = candidates(hwnd, site=site)
+    docs = candidates(hwnd, site=site, wake=wake)
     picked = _pick(site, docs)
     if picked is not None:
         return picked
@@ -576,7 +609,18 @@ def unique(nodes, description):
 
 def click(screen, node):
     rect = node.control.BoundingRectangle
-    screen.click_xy((rect.left + rect.right) // 2, (rect.top + rect.bottom) // 2)
+    point = ((rect.left + rect.right) // 2, (rect.top + rect.bottom) // 2)
+    if uilock.sectioned():
+        # 并发时"前台"是共享资源。这里的点击大量发生在**S 段之外**（新建会话、
+        # 选模型…），所以每次点击自己拿一段短锁，并先把自己的窗口抢回前台；
+        # 否则别的席位一抢前台，这里就抛 ForegroundLost（真机 2026-11-08）。
+        # 单跑（未开分段）保持原样：用户抢走前台时仍然立即中止，不替他抢回来。
+        with uilock.section("ui:click", timeout=uilock.SECTION_TIMEOUT):
+            if getattr(screen, "target_hwnd", None):
+                screen.focus()
+            screen.click_xy(*point)
+        return
+    screen.click_xy(*point)
 
 
 def scroll_into_view(node) -> bool:

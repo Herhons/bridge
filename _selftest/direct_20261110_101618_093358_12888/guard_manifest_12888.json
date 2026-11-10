@@ -1,0 +1,16 @@
+{
+  "pid": 12888,
+  "root": "F:\\Bridge\\v0.0.9",
+  "run": "direct_20261110_101618_093358_12888",
+  "events": "F:\\Bridge\\v0.0.9\\_selftest\\direct_20261110_101618_093358_12888",
+  "write_roots": [
+    "F:\\Bridge\\v0.0.9\\_selftest\\direct_20261110_101618_093358_12888",
+    "F:\\Bridge\\v0.0.9\\_tmp"
+  ],
+  "runtime": "F:\\Bridge\\v0.0.9\\_selftest\\direct_20261110_101618_093358_12888\\runtime",
+  "capture": "synthetic_2x2_black",
+  "real_ui": "blocked",
+  "network": "only loopback ports bound by this test process",
+  "subprocess": "inherited Python, Node harness, tracked-child taskkill, temp-file icacls",
+  "unexpected_events_exit": 86
+}

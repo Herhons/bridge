@@ -1,0 +1,32 @@
+Bridge v0.0.9 · Codex 独立只读复验 · 2026-11-06（北京时间）
+工作目录：F:\Bridge\v0.0.9
+共同回归命令：py -3.10 -X utf8 -B -m unittest discover -s tests -v
+Python 3.10.11；最终隔离复跑 Ran 731 tests in 24.369s；OK；EXIT=0；无跳过。
+正式日志 unittest_isolated.txt；首轮731/23.319s原日志unittest.txt保留。两轮使用同一src/tests，第二轮只在运行期重定向写盘并拦截越界写入/真实输入。
+执行偏差：首轮测试漏隔离导致目录外日志/合成输入标记/失败截图写盘，详 READONLY_INCIDENT.txt；不把首轮冒称完全只读。最终隔离复跑目录外变更为0。
+保护对象 src/tests/cards/PLAN.md/progress.json 共402个既有文件SHA256不变；未新增受保护文件，详integrity_final.json。
+独立反例：independent_probes.py/.txt/_result.json；补充 independent_additional.py/.txt/_result.json，共15项，不计入731单测。
+判定口径：PASS仅针对本卡；FAIL区分实现缺陷与证据不足。未主动运行真机choose/use发送入口或外部通知，不重放旧提问。
+后续卡明确改变的行为按后续要求评估，不把合法后续变更算成旧卡回归。
+
+VERDICT FAIL
+缺口性质：当前计划正文自相矛盾；原修订的大部分内容已落地。
+卡片：cards/CARD-PLAN-r1.md:6-24、34-50。
+
+逐条核对
+A. 第 8 项 F1-F6 / 两轮会审补充：PASS。
+   PLAN.md:34-84 包含版本/路径/控制台、唯一 token 格式及逐字一致、120s/一次重试、F3 全端成功、F3b 部分失败隔离、独立 progress-test.json、反向刷新10s与持久化、四种异常10s一行 error、重载后重跑F2-F5、额度不足挂起。
+B. 7b 大纲：原始大纲内容 PASS，PLAN.md:86-91；20分钟、30分钟一次、三次停推、生成中标志均在。
+   但“本次不实现/卡未建”的当前状态已被 CARD-08 的实现及证据取代，表仍未更新。
+C. 额度只阻挡真实发送：PASS，PLAN.md:15。
+D. 状态表与决定记录一致：FAIL。
+   PLAN.md:26 仍称 CARD-05 未发、只有草稿；同文件:129 已写 CARD-05 验收 PASS/189 OK。
+   PLAN.md:27 仍称插件移植“待做，无卡，无证据”；实际 cards/CARD-09a-server.md、CARD-09b-extension.md、src/chrome-extension/ 和对应 evidence 均存在。
+   PLAN.md:20-21、86-91 仍把 7b 视为未实现；实际 CARD-08 已交付 autopush 代码、42 项测试及 dry-run 证据。
+   PLAN.md:25 仍标 04c 施工中、证据待出，与 progress.verdicts 及 card04c_list.txt 不符。
+   “本表按10-31 12:12填”的日期说明使它可作为历史快照，但没有另一张当前状态表承接后续决定，仍不满足本卡“状态表与决定记录对上”的要求。
+E. >=2 家不同厂商会审：PASS，PLAN.md:98-102；五分钟/30秒轮询决定在:125。后续简单修复卡免会审是:131/133 的明确新决定，不按旧规则误判。
+目标/分工/底线：对应段保留；后续人员/模型规则有带日期决定。备份 _backup_20261031/PLAN.md.bak-r1 存在。
+单测：文档卡不应要求凭空增加代码测试；共同全量731 OK，不能替代状态一致性审查。
+
+建议返工卡：PLAN-sync。保留历史记录，增加/更新当前状态表，逐行关联最新卡与原始证据；注明已交付与独立验收结论的区别。本轮未改 PLAN 或 progress。

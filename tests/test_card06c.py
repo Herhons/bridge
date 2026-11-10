@@ -13,6 +13,10 @@ Gemini 新对话 / GLM accept_lite / Grok 菜单模板）。
 """
 from __future__ import annotations
 
+from offline_guard import ensure_offline
+ensure_offline()
+
+
 import ast
 import json
 import re
@@ -237,6 +241,9 @@ class WriterReceiptTests(Base):
         kwargs.setdefault("readback", "high")
         kwargs.setdefault("dimension", "effort")
         kwargs.setdefault("now", tg.utc_now())
+        kwargs.setdefault("dimensions", {
+            "model": {"target": "gpt6", "readback": "gpt6"},
+            "effort": {"target": kwargs["target"], "readback": kwargs["readback"]}})
         return tg.write_receipt("chatgpt", **kwargs)
 
     def test_receipt_carries_writer(self):
@@ -283,7 +290,8 @@ class WriterReceiptTests(Base):
     def test_gate_reports_purpose_label(self):
         self.receipt(writer="chat", target="high", readback="high")
         got = tg.gate("chatgpt", "review", root=self.tmp, do_consume=False,
-                      require_readback=False,
+                      reread=lambda dim: {"writer": "chat", "dimensions": {
+                          "model": "gpt6", "effort": "high"}},
                       live={"hwnd": None, "pid": None, "process_start_time": None})
         self.assertEqual(got["purpose_label"], "REVIEW")
         self.assertEqual(got["receipt"]["writer"], "chat")

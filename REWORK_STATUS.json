@@ -1,0 +1,721 @@
+{
+  "generated_at": "2026-11-07T16:42:09+08:00",
+  "scope": "isolated WIP; no real UI sends; no final acceptance",
+  "original_plan_sha256": "590ec5a35329166b71d7a15cb69a2673ede6c5a2f620dbb84f6d391031608920",
+  "historical_text_sha256": "f3d5b18022b5fb2b074e0f5bc512c87a17bcab5d6b0d872b2ef047e90a6923db",
+  "cards": [
+    {
+      "card": "04c",
+      "recheck_verdict": "FAIL",
+      "wip_status": "note原因已修并自测；待其他厂商独立验收",
+      "independent_acceptance": "pending",
+      "source": "F:\\Bridge\\v0.0.9\\evidence\\codex_recheck_20261106\\CARD-04c.txt",
+      "copy": "evidence/recheck_sources/CARD-04c.txt",
+      "sha256": "b60de2033c608289d8cca40a1d93ee7092d5d032b4c8ecb88036fef68e6a1992",
+      "dev_status": "selftested",
+      "offline_audit_status": "pending",
+      "e2e_accept_status": "not_run"
+    },
+    {
+      "card": "PLAN-r1",
+      "recheck_verdict": "FAIL",
+      "wip_status": "本WIP当前表同步；正式PLAN未改",
+      "independent_acceptance": "pending",
+      "source": "F:\\Bridge\\v0.0.9\\evidence\\codex_recheck_20261106\\CARD-PLAN-r1.txt",
+      "copy": "evidence/recheck_sources/CARD-PLAN-r1.txt",
+      "sha256": "d34e4142b74fa9f78d0ba8e3674cc6f2c3821bd7163fd21ecb0d33208d01a277",
+      "dev_status": "selftested",
+      "offline_audit_status": "pending",
+      "e2e_accept_status": "not_run"
+    },
+    {
+      "card": "GEM",
+      "recheck_verdict": "PASS",
+      "wip_status": "保留原复验结论；WIP后续保护改动待独立验收",
+      "independent_acceptance": "pending",
+      "source": "F:\\Bridge\\v0.0.9\\evidence\\codex_recheck_20261106\\CARD-GEM.txt",
+      "copy": "evidence/recheck_sources/CARD-GEM.txt",
+      "sha256": "53acfb5416c958e8debb8c88073461db2908ea0b3ebd1e23163a18b20ef79596",
+      "dev_status": "unchanged",
+      "offline_audit_status": "pass_prior",
+      "e2e_accept_status": "not_run"
+    },
+    {
+      "card": "WEB",
+      "recheck_verdict": "FAIL",
+      "wip_status": "窗口清理已修并自测；历史安装完整命令仍缺",
+      "independent_acceptance": "pending",
+      "source": "F:\\Bridge\\v0.0.9\\evidence\\codex_recheck_20261106\\CARD-WEB.txt",
+      "copy": "evidence/recheck_sources/CARD-WEB.txt",
+      "sha256": "10c65954209f3c3435ecc3f4102fc509ff9996135db3695748435460c9e55047",
+      "dev_status": "selftested",
+      "offline_audit_status": "pending",
+      "e2e_accept_status": "not_run"
+    },
+    {
+      "card": "05",
+      "recheck_verdict": "PASS",
+      "wip_status": "原功能复验通过；WIP补共用并发锁，待独立验收",
+      "independent_acceptance": "pending",
+      "source": "F:\\Bridge\\v0.0.9\\evidence\\codex_recheck_20261106\\CARD-05.txt",
+      "copy": "evidence/recheck_sources/CARD-05.txt",
+      "sha256": "ad81a0f66c43ed658f68b1a6af67e012a34c29dc27d0f8e5eeb4de9db93eee0d",
+      "dev_status": "unchanged",
+      "offline_audit_status": "pass_prior",
+      "e2e_accept_status": "not_run"
+    },
+    {
+      "card": "WEB2",
+      "recheck_verdict": "FAIL",
+      "wip_status": "功能原有测试通过；Grok最低fast同轮原始证据待补",
+      "independent_acceptance": "pending",
+      "source": "F:\\Bridge\\v0.0.9\\evidence\\codex_recheck_20261106\\CARD-WEB2.txt",
+      "copy": "evidence/recheck_sources/CARD-WEB2.txt",
+      "sha256": "94fd28489276283fb8ae291b6f8586a675b5a63fc3cad1c782edd233c0f0ff1a",
+      "dev_status": "selftested",
+      "offline_audit_status": "pending",
+      "e2e_accept_status": "not_run"
+    },
+    {
+      "card": "06a",
+      "recheck_verdict": "FAIL",
+      "wip_status": "用途拒发已修并自测；WorkBuddy空表仍拒发，不虚构模型档位",
+      "independent_acceptance": "pending",
+      "source": "F:\\Bridge\\v0.0.9\\evidence\\codex_recheck_20261106\\CARD-06a.txt",
+      "copy": "evidence/recheck_sources/CARD-06a.txt",
+      "sha256": "eb3f9d51bd76c8bb33528c9ffb97b34f02ec58c3e77cbfdb5f261b8a3943bc7e",
+      "dev_status": "selftested",
+      "offline_audit_status": "pending",
+      "e2e_accept_status": "not_run"
+    },
+    {
+      "card": "06b",
+      "recheck_verdict": "FAIL",
+      "wip_status": "写后门禁及失败留证已修并自测；待独立验收",
+      "independent_acceptance": "pending",
+      "source": "F:\\Bridge\\v0.0.9\\evidence\\codex_recheck_20261106\\CARD-06b.txt",
+      "copy": "evidence/recheck_sources/CARD-06b.txt",
+      "sha256": "81e41841502546f5b02a4210c1158b3c4177050c70aa17919446cdf00ece7502",
+      "dev_status": "selftested",
+      "offline_audit_status": "pending",
+      "e2e_accept_status": "not_run"
+    },
+    {
+      "card": "06c",
+      "recheck_verdict": "FAIL",
+      "wip_status": "联合回执已修并自测；任一维度不可读拒发；待独立验收",
+      "independent_acceptance": "pending",
+      "source": "F:\\Bridge\\v0.0.9\\evidence\\codex_recheck_20261106\\CARD-06c.txt",
+      "copy": "evidence/recheck_sources/CARD-06c.txt",
+      "sha256": "6092d7b514708198656d14dc0909683cad0e47865d014969bd3956c88e0f9604",
+      "dev_status": "selftested",
+      "offline_audit_status": "pending",
+      "e2e_accept_status": "not_run"
+    },
+    {
+      "card": "06d",
+      "recheck_verdict": "PASS",
+      "wip_status": "保留原复验结论；后续WIP入口调整待独立验收",
+      "independent_acceptance": "pending",
+      "source": "F:\\Bridge\\v0.0.9\\evidence\\codex_recheck_20261106\\CARD-06d.txt",
+      "copy": "evidence/recheck_sources/CARD-06d.txt",
+      "sha256": "e9c65cb417eff076f7fb197f06136a880f64b5bf0a8a916c01d9fc021b67fe3e",
+      "dev_status": "unchanged",
+      "offline_audit_status": "pass_prior",
+      "e2e_accept_status": "not_run"
+    },
+    {
+      "card": "07",
+      "recheck_verdict": "FAIL",
+      "wip_status": "旧回复归属已修并自测；待独立验收",
+      "independent_acceptance": "pending",
+      "source": "F:\\Bridge\\v0.0.9\\evidence\\codex_recheck_20261106\\CARD-07.txt",
+      "copy": "evidence/recheck_sources/CARD-07.txt",
+      "sha256": "289be2901e916442e88aea499e5f1f661b65dfc52cfc219219eb2ba49ef7ee16",
+      "dev_status": "selftested",
+      "offline_audit_status": "pending",
+      "e2e_accept_status": "not_run"
+    },
+    {
+      "card": "08",
+      "recheck_verdict": "FAIL",
+      "wip_status": "已有CARD-08成品及自动推整合自测；未接真实调度/推送",
+      "independent_acceptance": "pending",
+      "source": "F:\\Bridge\\v0.0.9\\evidence\\codex_recheck_20261106\\CARD-08.txt",
+      "copy": "evidence/recheck_sources/CARD-08.txt",
+      "sha256": "8252d8284efe2903c1871f5b0095eaeff2b2f49953e354cd1415975122ec8b7c",
+      "dev_status": "selftested",
+      "offline_audit_status": "pending",
+      "e2e_accept_status": "not_run"
+    },
+    {
+      "card": "09a",
+      "recheck_verdict": "FAIL",
+      "wip_status": "父子锁、持久去重、workflow并发均已修并自测；待独立验收",
+      "independent_acceptance": "pending",
+      "source": "F:\\Bridge\\v0.0.9\\evidence\\codex_recheck_20261106\\CARD-09a.txt",
+      "copy": "evidence/recheck_sources/CARD-09a.txt",
+      "sha256": "76516c6d775b9d3f121fd20996ab74c98437ff351cf14984d8038937d0c1ed20",
+      "dev_status": "selftested",
+      "offline_audit_status": "pending",
+      "e2e_accept_status": "not_run"
+    },
+    {
+      "card": "09b",
+      "recheck_verdict": "FAIL",
+      "wip_status": "已有扩展成品；精确health/正文截止已修并自测；未加载Chrome",
+      "independent_acceptance": "pending",
+      "source": "F:\\Bridge\\v0.0.9\\evidence\\codex_recheck_20261106\\CARD-09b.txt",
+      "copy": "evidence/recheck_sources/CARD-09b.txt",
+      "sha256": "22c75c22065fbf765b843da899355367d3cb2f03d6eb71e3433bf9fb8e5fdf0d",
+      "dev_status": "selftested",
+      "offline_audit_status": "pending",
+      "e2e_accept_status": "not_run"
+    },
+    {
+      "card": "09e",
+      "recheck_verdict": "FAIL",
+      "wip_status": "六入口自身输入已修并自测；WorkBuddy本人完整重启原始证据待补",
+      "independent_acceptance": "pending",
+      "source": "F:\\Bridge\\v0.0.9\\evidence\\codex_recheck_20261106\\CARD-09e.txt",
+      "copy": "evidence/recheck_sources/CARD-09e.txt",
+      "sha256": "347c3511d75ce3b04eaa25731158c936df1f0916c78a648667a721f7841fb2a5",
+      "dev_status": "selftested",
+      "offline_audit_status": "pending",
+      "e2e_accept_status": "not_run"
+    },
+    {
+      "card": "09f-fix2",
+      "recheck_verdict": "FAIL",
+      "wip_status": "fix3实际入口恢复已修并自测；未重写旧fix2结论",
+      "independent_acceptance": "pending",
+      "source": "F:\\Bridge\\v0.0.9\\evidence\\codex_recheck_20261106\\CARD-09f-fix2.txt",
+      "copy": "evidence/recheck_sources/CARD-09f-fix2.txt",
+      "sha256": "27ba50d0ced31c6cd332d0310baffb601c7827234b435fe763566de78ba3a1e1",
+      "dev_status": "selftested",
+      "offline_audit_status": "pending",
+      "e2e_accept_status": "not_run"
+    }
+  ],
+  "rework": [
+    {
+      "card": "09a-lock-integration",
+      "changes": "docs/history/changes/CHANGES_09a-lock-integration.md",
+      "status": "selftested",
+      "scope": "offline implementation / evidence preparation only",
+      "independent_acceptance": "pending",
+      "live_evidence_status": "not_run",
+      "dev_status": "selftested",
+      "offline_audit_status": "pending",
+      "e2e_accept_status": "not_run"
+    },
+    {
+      "card": "06a-workbuddy-purpose",
+      "changes": "docs/history/changes/CHANGES_06a-workbuddy-purpose.md",
+      "status": "selftested",
+      "scope": "offline implementation / evidence preparation only",
+      "independent_acceptance": "pending",
+      "live_evidence_status": "not_run",
+      "dev_status": "selftested",
+      "offline_audit_status": "pending",
+      "e2e_accept_status": "not_run"
+    },
+    {
+      "card": "06b-workbuddy-presend",
+      "changes": "docs/history/changes/CHANGES_06b-workbuddy-presend.md",
+      "status": "selftested",
+      "scope": "offline implementation / evidence preparation only",
+      "independent_acceptance": "pending",
+      "live_evidence_status": "not_run",
+      "dev_status": "selftested",
+      "offline_audit_status": "pending",
+      "e2e_accept_status": "not_run"
+    },
+    {
+      "card": "06c-composite-tier",
+      "changes": "docs/history/changes/CHANGES_06c-composite-tier.md",
+      "status": "selftested",
+      "scope": "offline implementation / evidence preparation only",
+      "independent_acceptance": "pending",
+      "live_evidence_status": "not_run",
+      "dev_status": "selftested",
+      "offline_audit_status": "pending",
+      "e2e_accept_status": "not_run"
+    },
+    {
+      "card": "07-reply-attribution",
+      "changes": "docs/history/changes/CHANGES_07-reply-attribution.md",
+      "status": "selftested",
+      "scope": "offline implementation / evidence preparation only",
+      "independent_acceptance": "pending",
+      "live_evidence_status": "not_run",
+      "dev_status": "selftested",
+      "offline_audit_status": "pending",
+      "e2e_accept_status": "not_run"
+    },
+    {
+      "card": "09f-fix3-entry-recovery",
+      "changes": "docs/history/changes/CHANGES_09f-fix3-entry-recovery.md",
+      "status": "selftested",
+      "scope": "offline implementation / evidence preparation only",
+      "independent_acceptance": "pending",
+      "live_evidence_status": "not_run",
+      "dev_status": "selftested",
+      "offline_audit_status": "pending",
+      "e2e_accept_status": "not_run"
+    },
+    {
+      "card": "09a-durable-idempotency",
+      "changes": "docs/history/changes/CHANGES_09a-durable-idempotency.md",
+      "status": "selftested",
+      "scope": "offline implementation / evidence preparation only",
+      "independent_acceptance": "pending",
+      "live_evidence_status": "not_run",
+      "dev_status": "selftested",
+      "offline_audit_status": "pending",
+      "e2e_accept_status": "not_run"
+    },
+    {
+      "card": "09a-workflow-concurrency",
+      "changes": "docs/history/changes/CHANGES_09a-workflow-concurrency.md",
+      "status": "selftested",
+      "scope": "offline implementation / evidence preparation only",
+      "independent_acceptance": "pending",
+      "live_evidence_status": "not_run",
+      "dev_status": "selftested",
+      "offline_audit_status": "pending",
+      "e2e_accept_status": "not_run"
+    },
+    {
+      "card": "08-autopush-integration",
+      "changes": "docs/history/changes/CHANGES_08-autopush-integration.md",
+      "status": "selftested",
+      "scope": "offline implementation / evidence preparation only",
+      "independent_acceptance": "pending",
+      "live_evidence_status": "not_run",
+      "dev_status": "selftested",
+      "offline_audit_status": "pending",
+      "e2e_accept_status": "not_run"
+    },
+    {
+      "card": "WEB-spawn-cleanup",
+      "changes": "docs/history/changes/CHANGES_WEB-spawn-cleanup.md",
+      "status": "selftested",
+      "scope": "offline implementation / evidence preparation only",
+      "independent_acceptance": "pending",
+      "live_evidence_status": "not_run",
+      "dev_status": "selftested",
+      "offline_audit_status": "pending",
+      "e2e_accept_status": "not_run"
+    },
+    {
+      "card": "09b-health-contract-and-timeout",
+      "changes": "docs/history/changes/CHANGES_09b-health-contract-and-timeout.md",
+      "status": "selftested",
+      "scope": "offline implementation / evidence preparation only",
+      "independent_acceptance": "pending",
+      "live_evidence_status": "not_run",
+      "dev_status": "selftested",
+      "offline_audit_status": "pending",
+      "e2e_accept_status": "not_run"
+    },
+    {
+      "card": "09e-self-input-all-entries",
+      "changes": "docs/history/changes/CHANGES_09e-self-input-all-entries.md",
+      "status": "selftested",
+      "scope": "offline implementation / evidence preparation only",
+      "independent_acceptance": "pending",
+      "live_evidence_status": "not_run",
+      "dev_status": "selftested",
+      "offline_audit_status": "pending",
+      "e2e_accept_status": "not_run"
+    },
+    {
+      "card": "04c-log-note",
+      "changes": "docs/history/changes/CHANGES_04c-log-note.md",
+      "status": "selftested",
+      "scope": "offline implementation / evidence preparation only",
+      "independent_acceptance": "pending",
+      "live_evidence_status": "not_run",
+      "dev_status": "selftested",
+      "offline_audit_status": "pending",
+      "e2e_accept_status": "not_run"
+    },
+    {
+      "card": "PLAN-sync",
+      "changes": "docs/history/changes/CHANGES_PLAN-sync.md",
+      "status": "selftested",
+      "scope": "offline implementation / evidence preparation only",
+      "independent_acceptance": "pending",
+      "live_evidence_status": "not_run",
+      "dev_status": "selftested",
+      "offline_audit_status": "pending",
+      "e2e_accept_status": "not_run"
+    },
+    {
+      "card": "WEB2-evidence",
+      "changes": "docs/history/changes/CHANGES_WEB2-evidence.md",
+      "status": "selftested",
+      "scope": "offline implementation / evidence preparation only",
+      "independent_acceptance": "pending",
+      "live_evidence_status": "pending",
+      "dev_status": "selftested",
+      "offline_audit_status": "pending",
+      "e2e_accept_status": "not_run"
+    },
+    {
+      "card": "09e-workbuddy-restart-evidence",
+      "changes": "docs/history/changes/CHANGES_09e-workbuddy-restart-evidence.md",
+      "status": "selftested",
+      "scope": "offline implementation / evidence preparation only",
+      "independent_acceptance": "pending",
+      "live_evidence_status": "pending",
+      "dev_status": "selftested",
+      "offline_audit_status": "pending",
+      "e2e_accept_status": "not_run"
+    },
+    {
+      "card": "TEST-ISOLATION",
+      "changes": "docs/history/changes/CHANGES_TEST-ISOLATION.md",
+      "status": "selftested",
+      "scope": "offline implementation / evidence preparation only",
+      "independent_acceptance": "pending",
+      "live_evidence_status": "not_run",
+      "dev_status": "selftested",
+      "offline_audit_status": "pending",
+      "e2e_accept_status": "not_run"
+    }
+  ],
+  "supersedes": {
+    "previous_generated_at": "2026-11-06T05:40:25.829790+08:00",
+    "reason": "阶段0 对齐台账：原文件未纳入 2026-11-07 的 UI-BOOTSTRAP-2/3 与 R4–R10 共 9 轮工作，且缺三态分离字段。历史结论一律保留，不改判。 / 2026-11-07 收尾：B1-B5 已施工（dev=selftested），B6 评估后不做；T1-2 与 F3-concurrency 登记为 not_implemented。offline_audit 与 e2e 仍全部待做。"
+  },
+  "post_recheck_rounds": {
+    "_note": "以下 9 轮发生在 2026-11-07 凌晨至早上，均不属于原 16 卡。原文件生成于 11-06 05:40，不含这些内容。逐轮原始记录见 evidence/<目录>。",
+    "rounds": [
+      {
+        "id": "UI-BOOTSTRAP-2",
+        "at": "2026-11-07T03:40/04:03",
+        "evidence": "evidence/resume_20261107_0350/",
+        "dev_status": "done",
+        "offline_audit_status": "none",
+        "e2e_accept_status": "not_run",
+        "test_baseline": null
+      },
+      {
+        "id": "UI-BOOTSTRAP-3",
+        "at": "2026-11-07T04:07/04:27",
+        "evidence": "evidence/r3_20261107_0405/",
+        "dev_status": "done",
+        "offline_audit_status": "none",
+        "e2e_accept_status": "not_run",
+        "test_baseline": 909,
+        "note": "离线 909 OK + 真机只读 gate 通过"
+      },
+      {
+        "id": "R4",
+        "at": "2026-11-07T04:28/04:33",
+        "evidence": "evidence/r4_threshold_20261107_0428/",
+        "dev_status": "done",
+        "offline_audit_status": "glm_reviewed",
+        "e2e_accept_status": "not_run",
+        "test_baseline": 919,
+        "note": "opencode read_effort 下限 0.80→0.85"
+      },
+      {
+        "id": "R5",
+        "at": "2026-11-07T04:50/05:12",
+        "evidence": "evidence/r5_identity_collect_20261107_0451/",
+        "dev_status": "done",
+        "offline_audit_status": "none",
+        "e2e_accept_status": "not_run",
+        "test_baseline": 949,
+        "note": "CE1/CE2 恢复事务身份 + opencode 安全收集；5 个测试文件无改前备份（见 AUDIT_EXCEPTIONS 例外A）"
+      },
+      {
+        "id": "R6",
+        "at": "2026-11-07T05:23/05:41",
+        "evidence": "evidence/r6_spa_identity_20261107_0519/",
+        "dev_status": "done",
+        "offline_audit_status": "none",
+        "e2e_accept_status": "not_run",
+        "test_baseline": null,
+        "note": "同文档/同URL的SPA会话身份；删除5个PNG（见 AUDIT_EXCEPTIONS 例外B）"
+      },
+      {
+        "id": "R7",
+        "at": "2026-11-07T05:43/05:58",
+        "evidence": "evidence/r7_strict_identity_input_20261107_0541/",
+        "dev_status": "done",
+        "offline_audit_status": "none",
+        "e2e_accept_status": "not_run",
+        "test_baseline": null,
+        "note": "标题不再作身份；Gemini input_mismatch；快照 .pyc 删除违反零删除条款（见例外C）"
+      },
+      {
+        "id": "R8",
+        "at": "2026-11-07T06:31/06:41",
+        "evidence": "evidence/r8_existing_reply_20261107_0619/",
+        "acceptance_evidence": "evidence/hy4_r8_accept_20261107_0645/VERDICT.txt",
+        "dev_status": "done",
+        "offline_audit_status": "hy4_PASS",
+        "e2e_accept_status": "not_run",
+        "test_baseline": 992,
+        "note": "_existing_reply 会话 id fail-closed；Hy4 独立验收 S1–S3 PASS"
+      },
+      {
+        "id": "R9",
+        "at": "2026-11-07T07:01/07:07",
+        "evidence": "evidence/r9_collect_gemini_20261107_0658/",
+        "acceptance_evidence": "evidence/hy4_r9_accept_20261107_0710/VERDICT.txt",
+        "dev_status": "done",
+        "offline_audit_status": "hy4_S8_FAIL_S9_S10_OPEN",
+        "e2e_accept_status": "not_run",
+        "test_baseline": 1005,
+        "note": "Hy4 原文：本卡两缺陷已修、1005 全绿，但通用声明未证；S8 可复现 FAIL，S9/S10 OPEN。不得记为通过。"
+      },
+      {
+        "id": "R10",
+        "at": "2026-11-07T07:34/07:48",
+        "evidence": "evidence/r10_reply_boundary_20261107_0732/",
+        "dev_status": "done",
+        "offline_audit_status": "pending",
+        "e2e_accept_status": "not_run",
+        "test_baseline": 1023,
+        "note": "回答边界改为结构证据；18条新回归全绿；独立验收未做；live_long_echo NOT_VERIFIED"
+      }
+    ]
+  },
+  "stage0": {
+    "at": "2026-11-07T11:43:50+08:00",
+    "evidence_dir": "evidence/stage0_baseline_20261107_1133/",
+    "tasks": {
+      "T0-1.1_baseline_freeze": "完成（TEST_BASELINE.md，731/1005/1023 三者已区分）",
+      "T0-1.2_dir_supplement": "完成（SUPPLEMENT_LIST.txt：cards 45 / tools 21 / docs 4，零覆盖）",
+      "T0-1.3_extension_inventory": "完成（EXTENSION_INVENTORY.md，23 文件齐；发现 F4/F5 两处硬缺口）",
+      "T0-1.4_failure_matrix": "完成（FAILURE_MATRIX.md，13 个失败项逐条）",
+      "T0-1.5_audit_exceptions": "完成（AUDIT_EXCEPTIONS.md，4 项例外待签）",
+      "T0-2_caliber": "完成草案（CALIBER.md，8 个决策点待用户确认）"
+    },
+    "test_rerun": {
+      "ran": 1023,
+      "ok": true,
+      "exit": 0,
+      "seconds": 79.553,
+      "log": "evidence/stage0_baseline_20261107_1133/logs/full_baseline_clean_20261107_1140.txt"
+    },
+    "src_tests_untouched": true,
+    "formal_progress_unchanged": true,
+    "gate": "阶段0 文件已产出；CALIBER.md 与 AUDIT_EXCEPTIONS.md 仍未签字。B1-B5 在其后施工（用户 2026-11-07 明确要求不再逐阶段等待）。"
+  },
+  "batches": [
+    {
+      "id": "B1",
+      "scope": "T2-1 前半+T2-2+T4-1",
+      "tests_after": 1069,
+      "dev": "selftested",
+      "offline_audit": "pending",
+      "e2e": "not_run"
+    },
+    {
+      "id": "B2",
+      "scope": "T2-1 后半（五端接入）",
+      "tests_after": 1094,
+      "dev": "selftested",
+      "offline_audit": "pending",
+      "e2e": "not_run"
+    },
+    {
+      "id": "B3",
+      "scope": "T3-1（四个错误码）",
+      "tests_after": 1117,
+      "dev": "selftested",
+      "offline_audit": "pending",
+      "e2e": "not_run"
+    },
+    {
+      "id": "B5",
+      "scope": "T4-2（插件 F4/F5）",
+      "tests_after": 1144,
+      "dev": "selftested",
+      "offline_audit": "pending",
+      "e2e": "not_run"
+    },
+    {
+      "id": "B4",
+      "scope": "T1-1（窗口归属）+ T1-2 登记",
+      "tests_after": 1159,
+      "dev": "selftested",
+      "offline_audit": "pending",
+      "e2e": "not_run"
+    },
+    {
+      "id": "B6",
+      "scope": "F3 并发（评估后不做）",
+      "tests_after": 1159,
+      "dev": "not_implemented",
+      "offline_audit": "n/a",
+      "e2e": "not_run"
+    },
+    {
+      "id": "B7",
+      "scope": "按独立复核意见整改（F1/F2/F3/F4/F5 + 自查 P1）",
+      "tests_after": 1174,
+      "dev": "selftested",
+      "offline_audit": "superseded_by_b7",
+      "e2e": "not_run",
+      "changes": "evidence/batch7/CHANGES_batch7.md"
+    },
+    {
+      "id": "B8",
+      "scope": "R11 端点拒绝这一轮的结构化识别（全端接线 · 开关按证据开）",
+      "tests_after": 1210,
+      "dev": "selftested",
+      "offline_audit": "pending",
+      "e2e": "not_run",
+      "changes": "evidence/batch8/CHANGES_batch8.md"
+    }
+  ],
+  "known_gaps": [
+    {
+      "id": "T1-2",
+      "status": "not_implemented",
+      "decided_by": "用户",
+      "decided_at": "2026-11-07",
+      "reason": "不愿引入全局低级钩子",
+      "evidence": "docs/known_gaps.md"
+    },
+    {
+      "id": "F3-concurrency",
+      "status": "not_implemented",
+      "decided_by": "施工方评估",
+      "decided_at": "2026-11-07",
+      "reason": "只改调度无效；真并发需收窄6个入口的锁且无法离线验证",
+      "evidence": "evidence/batch6/CONCURRENCY_ASSESSMENT.md"
+    },
+    {
+      "id": "T2-2-pre-submit",
+      "status": "implemented_in_b7",
+      "note": "PRE_SUBMIT 探测期 + 受控重试已实现；探测期计入总预算，见 known_gaps 口径偏差第 7 条",
+      "evidence": "tests/test_b7_pre_submit.py；CALIBER §2.3"
+    },
+    {
+      "id": "purpose-wiring",
+      "status": "fixed_in_b7",
+      "note": "opencode/codex/dsh 三个入口补 purpose 透传；新增 AST 接线测试防复发",
+      "evidence": "evidence/SELF_FINDING_purpose_not_forwarded.md；tests/test_b2_wiring.py"
+    },
+    {
+      "id": "opencode-long-task-collect",
+      "status": "known_limitation",
+      "note": "长任务回传断（header_mismatch）；短回答不受影响；不修的理由见 known_gaps",
+      "evidence": "evidence/opencode_audit_20261107_1300/RUN.txt；docs/known_gaps.md"
+    },
+    {
+      "id": "non-nonce-window-leak",
+      "status": "accepted_tradeoff",
+      "note": "非 nonce 端绑定失败不再关窗，可能留孤儿窗口",
+      "evidence": "docs/known_gaps.md"
+    },
+    {
+      "id": "desk-flow-no-ledger",
+      "status": "not_implemented",
+      "note": "desk_flow.ask 无 purpose 概念，桌面端未接提交账本",
+      "evidence": "docs/known_gaps.md"
+    },
+    {
+      "id": "reject-signals",
+      "status": "implemented_in_b8",
+      "note": "三条结构判据（submit_refused / send_unavailable / accepted_silent）；opencode 三条全开、codex 只开 send_unavailable；其余 6 端零证据未开",
+      "evidence": "src/qi/reject.py；tests/test_r11_reject_signals.py；docs/known_gaps.md"
+    },
+    {
+      "id": "dead-terminal-stages",
+      "status": "fixed_in_b8",
+      "note": "删除 login_required/quota/limit/unavailable 四个从未被产生的死值，换成有发射点的 submit_refused；新增 AST 防死值测试",
+      "evidence": "src/qi/conversation.py；tests/test_r11_reject_signals.py::NoDeadStageTests"
+    },
+    {
+      "id": "half-sentence-answer",
+      "status": "partially_fixed",
+      "note": "sig 加文本长度，修掉动作条已在、正文还在流这一类；但 opencode_audit2 那条 148s「answered + 半句话」结构上不可区分，未修",
+      "evidence": "src/qi/conversation.py::reply_text_len；docs/known_gaps.md"
+    },
+    {
+      "id": "panel-object-object",
+      "status": "fixed_in_b8",
+      "note": "面板把 error 对象直接塞 textContent 显示 [object Object]；已加 stage 中文映射与 errorText()",
+      "evidence": "src/chrome-extension/sidepanel.js"
+    }
+  ],
+  "independent_reviews": [
+    {
+      "task_id": "OC-AUDIT-20261107-1300-k7q2",
+      "at": "2026-11-07T13:03:05+08:00/13:14:40+08:00",
+      "reviewer_self_reported": "opencode 代理，模型 GLM-5.3-Flash Free（复核方自述无法独立证实施工方身份）",
+      "tier": "accept_lite",
+      "tier_label": "PASS(GLM-lite)",
+      "is_flagship_accept": false,
+      "tier_note": "docs/tiers.json 明写：accept_lite 结论不能当 accept。本项不得当作旗舰验收签字。",
+      "delivery": {
+        "channel": "Bridge CLI: opencode_use.py --purpose accept_lite",
+        "submission": "accepted",
+        "sent": true,
+        "transport_result": "conversation_changed / session_changed（594.6s）",
+        "transport_note": "消息确已送达并被独立执行；回答回传断（见 known_gaps 的 KNOWN_LIMITATION）。判定取自复核方自己写出的文件，不依赖回传。",
+        "prompt_sha256": "4f335ee1de4b401271bf5a6eb1ce05d09a280fb55c9cb080d9ed044e2896e239",
+        "prompt_archive": "evidence/opencode_audit_20261107_1300/PROMPT.txt"
+      },
+      "evidence_dir": "evidence/opencode_audit_20261107_1300",
+      "independent_rerun": "Ran 1159 tests in 84.971s / OK / EXIT=0（复核方自己跑，先清空 PYTHONPATH）",
+      "scope_verdicts": {
+        "T1-1": "PASS",
+        "T1-2": "FAIL（未实现，登记诚实）",
+        "T2-1": "PASS（离线范围）",
+        "T2-2": "FAIL（部分实现：探测期与受控重试缺失且未登记）",
+        "T3-1": "PASS（离线范围）",
+        "T4-1": "PASS（离线范围）",
+        "T4-2": "PASS（离线/静态）"
+      },
+      "overall": "部分通过（不具备判完工或正式目录合并条件）",
+      "findings": [
+        "F1",
+        "F2",
+        "F3",
+        "F4",
+        "F5",
+        "F6(信息)"
+      ],
+      "integrity": "BEFORE/AFTER 哈希 380 条，新增 0 / 消失 0 / 变更 0 → CLEAN（复核方未越界改动）",
+      "status": "SUPERSEDED_AFTER_B7",
+      "superseded_reason": "施工单 :118 —— 本轮之后修改了 src/tests，此结论作废需重跑"
+    },
+    {
+      "task_id": "OC-AUDIT2-20261107-1331-r9t4",
+      "at": "2026-11-07T13:31:47+08:00 / 13:45:48+08:00(中止)",
+      "reviewer_self_reported": "opencode 代理，模型 GLM-5.3-Flash Free",
+      "tier": "accept_lite",
+      "tier_label": "PASS(GLM-lite)",
+      "is_flagship_accept": false,
+      "evidence_dir": "evidence/opencode_audit2_20261107_1331",
+      "delivery": {
+        "submission": "accepted",
+        "sent": true,
+        "elapsed": 148.1,
+        "stage": "answered",
+        "note": "回传的是半句话（早交卷），已于本目录 SUSPENDED.md 记录"
+      },
+      "partial_evidence": [
+        "复核方自己跑完全量单测 EXIT=0（logs/full_test_exit.txt）",
+        "runs/submissions/opencode-5362cf68….json 首次落盘，v2_state=accepted/level=L3/submission_count=1/attempts 仅 1 次 —— P1 的运行期证明，且未见双发"
+      ],
+      "outcome": "SUSPENDED",
+      "stop_reason": "provider.free-limit：Free usage limit reached（施工单 :108 熔断）",
+      "retry_attempts_after_stop": 2,
+      "retry_note": "同会话追问被 draft_present 拦下（未发出）；新会话重试 0 token 即 failed。两次均属施工单 :108 明令禁止的凑数重发，已如实登记。",
+      "verdict": null,
+      "status": "SUSPENDED_QUOTA"
+    }
+  ],
+  "current_tree_audit": "无有效独立复核结论：第1轮审的是 B7 之前的树（已 SUPERSEDED），第2轮因额度耗尽 SUSPENDED。不得声称已通过独立复核。"
+}

@@ -27,19 +27,17 @@ def with_timeout_kind(result: dict) -> dict:
 
 
 def failure_note(result: dict) -> str | None:
-    """失败那一行的 error：先 hint、再 error，都没有就按 stage 说一句（CARD-04c）。
-
-    为什么要兜最后那句：`codex_use --list` 失败时，"打不开卡片"只写在**打印出去**
-    的那个 JSON 里，交给 runlog 的只有 ok/stage/elapsed，落盘 error 就成了 null——
-    已有的错误信息被丢掉，看日志的人只能猜。这里用结果里现成的字段补一句
-    `stage=xxx`，是实话不是编原因；成功的结果照旧不写 error。
-    """
-    note = result.get("hint") or result.get("error")
-    if note:
-        return str(note)
+    """Failure cause priority: hint > error > note > stage. Success stays null."""
     if result.get("ok"):
         return None
-    return f"stage={result.get('stage') or 'unknown'} (no hint)"
+    for key in ("hint", "error", "note"):
+        value = result.get(key)
+        if isinstance(value, str):
+            if value.strip():
+                return value                  # preserve the original wording
+        elif value:
+            return str(value)
+    return f"stage={result.get('stage') or 'unknown'} (no hint/error/note)"
 
 
 def record(endpoint: str, result: dict, *, root: Path | None = None) -> None:

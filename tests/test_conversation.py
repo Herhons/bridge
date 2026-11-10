@@ -1,4 +1,8 @@
 """Business-level turn tests with UI snapshots, never real input."""
+
+from offline_guard import ensure_offline
+ensure_offline()
+
 import sys
 import unittest
 from pathlib import Path
@@ -132,12 +136,21 @@ class ConversationTests(unittest.TestCase):
         self.assertEqual(result["reply"], "new answer")
         self.assertEqual(conv.copied, [(30,)])
 
-    def test_url_change_only_rebaselines_existing_replies(self):
-        """地址变了只把已有回复划成旧回复，不中止也不复制它们。"""
+    def test_url_change_after_accept_is_refused_not_rebaselined(self):
+        """接受之后地址变了 = 换到别的会话：直接拒（不复制、也不再等）。
+
+        2026-11-07 R5 收紧：以前这里只是"把已有回复划成旧回复"然后继续等，
+        等于承认"同一页换地址"还能继续收集。可是地址变了就是另一个会话——
+        它里面恰好有同样的提问和旧回答时，继续等就可能把别人的答案当本轮结果。
+        现在只有"刚接受、还没有任何回复"的首轮换路由才允许重新锚定一次；
+        这一例已经有旧回复，所以必须拒。`conv.copied == []` 的底线不变。
+        """
         result, conv = self.run_turn(
             [view(), view(value=self.prompt)] + [view(prompt=True, old=True)] * 5
             + [view(prompt=True, old=True, reply=True, url="session:2", reply_key=31)])
-        self.assertEqual(result["stage"], "timeout")
+        self.assertEqual(result["stage"], "conversation_changed")
+        self.assertEqual(result.get("reason"), "document_changed")
+        self.assertEqual(result["submission"], "accepted")
         self.assertEqual(conv.copied, [])
 
     def test_runtime_id_churn_does_not_look_like_a_switch(self):

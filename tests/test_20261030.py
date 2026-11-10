@@ -1,4 +1,8 @@
 """2026-10-30 批准的第3-7项的离线测试。不碰真实窗口、剪贴板、键鼠。"""
+
+from offline_guard import ensure_offline
+ensure_offline()
+
 import json
 import sys
 import tempfile

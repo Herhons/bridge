@@ -1,0 +1,159 @@
+{
+  "job_id": "20261109T233430-ee66610d",
+  "request_id": "b4ad6a5d-4de9-4ab0-92ea-359c528e1f03",
+  "status": "running",
+  "purpose": "review",
+  "prompt": "你是资深软件架构评审。下面是一个真实系统的统计，请只基于它给优化建议。\n\n系统：用 Windows UIA 与像素模板驱动 4 个网页端和 4 个桌面端模型；本地后端按 endpoint 逐个执行：选档→读回确认→写档位回执→提问→收答→落证据。\n\n约束：前台只有一个焦点，四席串行（uilock 整轮持锁）；一个 job 最多 4 席；只能用 UIA、模板、剪贴板；不加依赖；界面有动画和抢占，所以读回确认比点击成功更重要。\n\n规模：内核 36 个模块、11397 代码行；CLI 20 个模块、9629 行；测试 1452 个用例，全部离线。依赖边：内核内部 126 条、CLI 到内核 96 条、CLI 之间只有 1 条。枢纽入度：uilock 26、tier_guard 19、ui 17、window 15。存在 3 处互相 import：browser 与 screen、browser 与 ui、conversation 与 submissions。重复代码：dsh、codex、opencode 三对 choose 与 use 相似度 0.91 到 0.94，各有 35 到 42 个同名函数。测试源码里从未出现的模块：desk_sites、lastreply、reject。\n\n近期四个真实故障：一是 dsh 面板的选中行是浅灰，白块检测把一块面板切成两段，代码取最大块导致点到模型行而不是搜索框，随后 Ctrl+A 选中整页，模板相似度从 0.956 掉到 0.348；二是 grok 粘贴后约 1.3 秒文本才进 UIA，旧代码过早还原剪贴板，只写进 3 个字；三是 chatgpt 的模型按会话隔离，再点新聊天会把模型重置；四是 dsh 复制回答时动作条还没渲染，复制到的是提问本身。\n\n请回答：在不改运行模型、不加依赖的前提下，给最多 5 条优化，按收益与风险之比排序。每条写清四件事：改哪个模块；落到函数级的改法；风险；可离线构造的验证。最后单独回答：那三对相似度 0.9 以上的 choose 与 use 副本，应该合并还是保留，请给判据。\n\n用中文，1200 字以内，用一、二、三编号。",
+  "created_at": "2026-11-09T15:34:30+00:00",
+  "started_at": "2026-11-09T15:34:31+00:00",
+  "finished_at": null,
+  "order": [
+    "chatgpt",
+    "gemini",
+    "grok",
+    "deepseek"
+  ],
+  "endpoints": {
+    "chatgpt": {
+      "status": "done",
+      "reply": "按收益／风险排序。函数名均为拟议接口；整轮持锁、四席上限不变。\n一、模块：ui、grok。\n粘贴完成以完整读回为准。\n改法：\n`paste_checked(text)\n`粘贴后轮询输入框，完整匹配才恢复剪贴板、放行发送；超时终止，不盲目重贴。\n风险：UIA 滞后增加等待，须设截止时间。\n离线验证：假时钟模拟先出现3字、1.3秒后完整出现，断言完整前不恢复、不发送，并覆盖超时清理。\n二、模块：conversation、tier_guard、chatgpt。\n先建立会话，再选档。\n改法：\n`prepare_turn()\n`完成建聊/切聊后，才选档、确认、写回执；会话变化使回执失效，\n`before_send()\n`复核当前上下文与档位。\n风险：遗漏切换入口会继续接受旧回执。\n离线验证：模拟新聊天重置模型，断言旧回执不能放行，重新确认后才能发送。\n三、模块：dsh use、lastreply。\n复制必须绑定本轮回答。\n改法：\n`copy_answer(target)\n`确认本轮回答区域及其动作条归属，等待就绪再复制；正文可读时核对复制内容，归属不明则失败。\n风险：动作条识别不稳会增加失败。\n离线验证：动作条延迟、误指提问、残留剪贴板、回答恰好复述提问。不能用“复制内容不同于提问”验真。\n四、模块：dsh choose/use、screen、ui。\n定位与焦点分别确认。\n改法：\n`locate_search()\n`结合面板边界、搜索框锚点筛选，白块只作候选，取消最大块判据；\n`focus_search()\n`读回输入框焦点后才允许 Ctrl+A。\n风险：动画或模板变化可能造成误拒绝，重试须有界。\n离线验证：合成浅灰行切块、模型区最大、焦点被抢场景，断言不会向整页发送 Ctrl+A。\n五、模块：三组互相 import 的模块。\n逐环消除反向取数依赖。\n改法：让\nscreen.capture(window)\n显式接收窗口，ui 同理；\n`submissions.send(context)\n`接收会话数据并返回结果，由 conversation 编排，逐组迁移。\n风险：仅凭统计无法确定全部职责边界；初始化、异常传播可能变化。\n离线验证：新进程分别导入，替身对比成功、超时、拒绝路径的调用及证据顺序。三个模块未被测试源码点名，不等于零覆盖，应先核实间接覆盖。\n副本判据：保留 choose/use 入口，暂不整文件合并，逐函数抽取公共实现。\n只有前置条件、状态转换、读回标准、异常、清理与证据语义一致，且同组离线场景能验证两者时才合并；若需要大量端别/模式分支，继续保留。0.91—0.94 的相似度只能发现候选，不能证明行为等价。",
+      "error": null,
+      "error_code": null,
+      "exit_code": 0,
+      "choose": {
+        "ok": true,
+        "dimension": "model",
+        "target": "gpt61_sol",
+        "readback": "gpt61_sol",
+        "targets": {
+          "model": "gpt61_sol",
+          "effort": "max"
+        },
+        "confirmed": true,
+        "exit_code": 0,
+        "timeout": false,
+        "elapsed": 22.64,
+        "error_code": null,
+        "error_message": null,
+        "stderr": ""
+      },
+      "use": {
+        "ok": true,
+        "stage": "answered",
+        "reply": "按收益／风险排序。函数名均为拟议接口；整轮持锁、四席上限不变。\n一、模块：ui、grok。\n粘贴完成以完整读回为准。\n改法：\n`paste_checked(text)\n`粘贴后轮询输入框，完整匹配才恢复剪贴板、放行发送；超时终止，不盲目重贴。\n风险：UIA 滞后增加等待，须设截止时间。\n离线验证：假时钟模拟先出现3字、1.3秒后完整出现，断言完整前不恢复、不发送，并覆盖超时清理。\n二、模块：conversation、tier_guard、chatgpt。\n先建立会话，再选档。\n改法：\n`prepare_turn()\n`完成建聊/切聊后，才选档、确认、写回执；会话变化使回执失效，\n`before_send()\n`复核当前上下文与档位。\n风险：遗漏切换入口会继续接受旧回执。\n离线验证：模拟新聊天重置模型，断言旧回执不能放行，重新确认后才能发送。\n三、模块：dsh use、lastreply。\n复制必须绑定本轮回答。\n改法：\n`copy_answer(target)\n`确认本轮回答区域及其动作条归属，等待就绪再复制；正文可读时核对复制内容，归属不明则失败。\n风险：动作条识别不稳会增加失败。\n离线验证：动作条延迟、误指提问、残留剪贴板、回答恰好复述提问。不能用“复制内容不同于提问”验真。\n四、模块：dsh choose/use、screen、ui。\n定位与焦点分别确认。\n改法：\n`locate_search()\n`结合面板边界、搜索框锚点筛选，白块只作候选，取消最大块判据；\n`focus_search()\n`读回输入框焦点后才允许 Ctrl+A。\n风险：动画或模板变化可能造成误拒绝，重试须有界。\n离线验证：合成浅灰行切块、模型区最大、焦点被抢场景，断言不会向整页发送 Ctrl+A。\n五、模块：三组互相 import 的模块。\n逐环消除反向取数依赖。\n改法：让\nscreen.capture(window)\n显式接收窗口，ui 同理；\n`submissions.send(context)\n`接收会话数据并返回结果，由 conversation 编排，逐组迁移。\n风险：仅凭统计无法确定全部职责边界；初始化、异常传播可能变化。\n离线验证：新进程分别导入，替身对比成功、超时、拒绝路径的调用及证据顺序。三个模块未被测试源码点名，不等于零覆盖，应先核实间接覆盖。\n副本判据：保留 choose/use 入口，暂不整文件合并，逐函数抽取公共实现。\n只有前置条件、状态转换、读回标准、异常、清理与证据语义一致，且同组离线场景能验证两者时才合并；若需要大量端别/模式分支，继续保留。0.91—0.94 的相似度只能发现候选，不能证明行为等价。",
+        "exit_code": 0,
+        "timeout": false,
+        "elapsed": 255.344,
+        "error_code": null,
+        "error_message": null,
+        "stderr": "",
+        "detail": {
+          "basis": "uia_last_reply_marker"
+        }
+      },
+      "started_at": "2026-11-09T15:34:31+00:00",
+      "finished_at": "2026-11-09T15:39:13+00:00",
+      "elapsed": 282.5,
+      "evidence_l1": {
+        "job_id": "20261109T233430-ee66610d",
+        "request_id": "b4ad6a5d-4de9-4ab0-92ea-359c528e1f03",
+        "at": "2026-11-09T15:34:30+00:00",
+        "source": "server"
+      },
+      "progress": {
+        "schema_version": 1,
+        "job_id": "20261109T233430-ee66610d",
+        "endpoint": "chatgpt",
+        "pid": 27896,
+        "at": "2026-11-09T23:39:13+0800",
+        "stage": "finished",
+        "outcome": "answered"
+      }
+    },
+    "gemini": {
+      "status": "running",
+      "reply": null,
+      "error": null,
+      "error_code": null,
+      "exit_code": null,
+      "choose": {
+        "ok": true,
+        "dimension": "model",
+        "target": "argon",
+        "readback": "argon",
+        "targets": {
+          "model": "argon"
+        },
+        "confirmed": true,
+        "exit_code": 0,
+        "timeout": false,
+        "elapsed": 6.312,
+        "error_code": null,
+        "error_message": null,
+        "stderr": ""
+      },
+      "use": null,
+      "started_at": "2026-11-09T15:39:13+00:00",
+      "finished_at": null,
+      "elapsed": null,
+      "evidence_l1": {
+        "job_id": "20261109T233430-ee66610d",
+        "request_id": "b4ad6a5d-4de9-4ab0-92ea-359c528e1f03",
+        "at": "2026-11-09T15:34:30+00:00",
+        "source": "server"
+      },
+      "progress": {
+        "schema_version": 1,
+        "job_id": "20261109T233430-ee66610d",
+        "endpoint": "gemini",
+        "pid": 4024,
+        "at": "2026-11-09T23:57:52+0800",
+        "stage": "waiting",
+        "busy": false,
+        "copies": 0
+      }
+    },
+    "grok": {
+      "status": "queued",
+      "reply": null,
+      "error": null,
+      "error_code": null,
+      "exit_code": null,
+      "choose": null,
+      "use": null,
+      "started_at": null,
+      "finished_at": null,
+      "elapsed": null,
+      "evidence_l1": {
+        "job_id": "20261109T233430-ee66610d",
+        "request_id": "b4ad6a5d-4de9-4ab0-92ea-359c528e1f03",
+        "at": "2026-11-09T15:34:30+00:00",
+        "source": "server"
+      }
+    },
+    "deepseek": {
+      "status": "queued",
+      "reply": null,
+      "error": null,
+      "error_code": null,
+      "exit_code": null,
+      "choose": null,
+      "use": null,
+      "started_at": null,
+      "finished_at": null,
+      "elapsed": null,
+      "evidence_l1": {
+        "job_id": "20261109T233430-ee66610d",
+        "request_id": "b4ad6a5d-4de9-4ab0-92ea-359c528e1f03",
+        "at": "2026-11-09T15:34:30+00:00",
+        "source": "server"
+      }
+    }
+  },
+  "quorum": {
+    "required": 3,
+    "recovered": 1,
+    "met": false,
+    "clamped": false
+  }
+}

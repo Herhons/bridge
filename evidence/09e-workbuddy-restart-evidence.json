@@ -1,0 +1,104 @@
+{
+  "card": "09e-workbuddy-restart-evidence",
+  "offline_work_status": "complete",
+  "live_evidence_status": "pending",
+  "original_recheck_verdict": "FAIL",
+  "new_ui_actions": 0,
+  "missing": [
+    "WorkBuddy itself: close request -> disappearance -> start -> window -> documents, one same round"
+  ],
+  "events": [
+    {
+      "kind": "raw_record",
+      "endpoint": "opencode",
+      "round_id": "card09e_opencode",
+      "action": "close_requested",
+      "docs": 0
+    },
+    {
+      "kind": "raw_record",
+      "endpoint": "opencode",
+      "round_id": "card09e_opencode",
+      "action": "closed",
+      "docs": 0
+    },
+    {
+      "kind": "raw_record",
+      "endpoint": "opencode",
+      "round_id": "card09e_opencode",
+      "action": "launched",
+      "docs": 0
+    },
+    {
+      "kind": "raw_record",
+      "endpoint": "opencode",
+      "round_id": "card09e_opencode",
+      "action": "window",
+      "docs": 0
+    },
+    {
+      "kind": "raw_record",
+      "endpoint": "opencode",
+      "round_id": "card09e_opencode",
+      "action": "docs_ready",
+      "docs": 1
+    },
+    {
+      "kind": "preflight",
+      "endpoint": "workbuddy",
+      "round_id": "card09e_rehearsal",
+      "action": "docs_ready",
+      "docs": 1,
+      "close_skipped": true
+    }
+  ],
+  "references": [
+    {
+      "source": "F:\\Bridge\\v0.0.9\\evidence\\card09e_live.txt",
+      "sha256": "6a8c900020a477e85265a561acd74ba992b5674748ce2c371b9e1a5792aefa76",
+      "first_line": 135,
+      "last_line": 163,
+      "role": "OpenCode full restart; WorkBuddy full close/start explicitly not performed",
+      "excerpt": "## 5) 第 2 条：重启链路 —— 真机跑通（App 用 OpenCode，代码同一份）\n\n**没在 WorkBuddy 上真关**：本会话就跑在 WorkBuddy 里，关掉它＝施工方自己消失，\n后面的证据/CHANGES/通知全都做不完。所以\"关闭→等待→启动→等文档就绪\"整条链在\n**OpenCode**（同一个 `qi\\restart.py`、同一个 `desk` 通道）上真机跑：\n\n```\n$ # 第一版：按 exe 全路径启动\n{\"ok\": false, \"steps\": [\"close_requested\", \"closed\", \"launched\", \"no_window\"],\n \"error\": \"no_window\", \"elapsed\": 41.9}\n   ← 关掉了、也拉了 exe，但 40 秒没窗口。改用 AppID 立刻起来（2 秒）。\n\n$ # 按上面这个发现改成\"AppID 优先、exe 兜底、没窗口换一种再试一次\"\n{\"ok\": true, \"steps\": [\"close_requested\", \"closed\", \"launched\", \"window\", \"docs_ready\"],\n \"hwnd\": 4656322, \"docs\": 1, \"launch_via\": \"appid\", \"elapsed\": 2.5}\n```\n\nWorkBuddy 专属的三件事在真机上单独验（`card09e_restart_workbuddy_rehearsal.txt`）：\n\n```\n{\"hwnd\": 15404216, \"exe\": \"D:\\\\WorkBuddy\\\\WorkBuddy.exe\",\n \"appid\": \"shell:AppsFolder\\\\WorkBuddy.WorkBuddy\", \"docs_ready\": 1}\n```\n（AppID 由 `Get-StartApps` 查得，已写进 `desk.APPS[\"workbuddy\"][\"launch\"]`；\n`restart._wait_docs` 在活着的 WorkBuddy 上读回 1 个文档。）\n`workbuddy_choose.py --list` 仍 EXIT=0、读出 `DeepSeek-V4.1-Flash`（重构 `main` 后回归）。\n\n**没验的那一步**：WorkBuddy 自己的 `WM_CLOSE → 消失 → 拉起`。理由同上；\n代码路径与 OpenCode 完全一致，唯一差别是 exe/AppID 两个常量（都已验证存在）。"
+    },
+    {
+      "source": "F:\\Bridge\\v0.0.9\\evidence\\card09e_live.txt",
+      "sha256": "6a8c900020a477e85265a561acd74ba992b5674748ce2c371b9e1a5792aefa76",
+      "first_line": 189,
+      "last_line": 192,
+      "role": "explicit pending WorkBuddy own restart",
+      "excerpt": "## 没做到 / 未验（如实记）\n\n- **WorkBuddy 自己的关闭-重启**没在真机做（会杀掉施工会话）。同一条代码路径在 OpenCode 上\n  真机跑通；WorkBuddy 的 AppID / exe / 文档就绪三项已单独验。"
+    },
+    {
+      "source": "F:\\Bridge\\v0.0.9\\evidence\\card09e_restart_workbuddy_rehearsal.txt",
+      "sha256": "5f686b28742d11ab591c342aaf46242e19528676104251b6a852b9f1f1c26f1e",
+      "first_line": 1,
+      "last_line": 1,
+      "role": "preflight only; close_skipped is explicit",
+      "excerpt": "{\"hwnd\": 15404216, \"exe\": \"D:\\\\WorkBuddy\\\\WorkBuddy.exe\", \"appid\": \"shell:AppsFolder\\\\WorkBuddy.WorkBuddy\", \"docs_ready\": 1, \"close_skipped\": \"本会话运行在 WorkBuddy 内，关闭会终止施工与证据落盘\", \"close_launch_proven_on\": \"opencode（同一份 restart.py 代码路径）\"}"
+    }
+  ],
+  "search": {
+    "pattern": "workbuddy.*restart|workbuddy.*重启|重启.*workbuddy|WM_CLOSE",
+    "exit": 0,
+    "matching_files": [
+      "F:\\Bridge\\v0.0.9\\evidence\\accept_09f_hy4_send.txt",
+      "F:\\Bridge\\v0.0.9\\evidence\\accept_09e_hy4.txt",
+      "F:\\Bridge\\v0.0.9\\evidence\\accept_09f_fix_hy4_send.txt",
+      "F:\\Bridge\\v0.0.9\\evidence\\card09b_review_prompt.txt",
+      "F:\\Bridge\\v0.0.9\\evidence\\card09b_review_prompt_gpt.txt",
+      "F:\\Bridge\\v0.0.9\\evidence\\card09e_live.txt",
+      "F:\\Bridge\\v0.0.9\\evidence\\card09e_probe_chatgpt.txt",
+      "F:\\Bridge\\v0.0.9\\evidence\\card09e_restart_workbuddy_rehearsal.txt",
+      "F:\\Bridge\\v0.0.9\\evidence\\codex_rework_dispatch_20261106\\prompt.txt",
+      "F:\\Bridge\\v0.0.9\\evidence\\codex_recheck_20261106\\CARD-09f-fix2.txt",
+      "F:\\Bridge\\v0.0.9\\evidence\\codex_recheck_20261106\\CARD-09e.txt",
+      "F:\\Bridge\\v0.0.9\\evidence\\codex_recheck_20261106\\unittest_isolated.txt",
+      "F:\\Bridge\\v0.0.9\\evidence\\codex_recheck_20261106\\READONLY_INCIDENT.txt",
+      "F:\\Bridge\\v0.0.9\\evidence\\codex_recheck_20261106\\unittest.txt",
+      "F:\\Bridge\\v0.0.9\\evidence\\codex_recheck_20261106\\SUMMARY.txt",
+      "F:\\Bridge\\v0.0.9\\evidence\\web_accept_glm_1010.txt"
+    ],
+    "note": "AppID/exe/docs preflight and another app's restart cannot satisfy this target"
+  }
+}

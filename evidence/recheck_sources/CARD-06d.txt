@@ -1,0 +1,30 @@
+Bridge v0.0.9 · Codex 独立只读复验 · 2026-11-06（北京时间）
+工作目录：F:\Bridge\v0.0.9
+共同回归命令：py -3.10 -X utf8 -B -m unittest discover -s tests -v
+Python 3.10.11；最终隔离复跑 Ran 731 tests in 24.369s；OK；EXIT=0；无跳过。
+正式日志 unittest_isolated.txt；首轮731/23.319s原日志unittest.txt保留。两轮使用同一src/tests，第二轮只在运行期重定向写盘并拦截越界写入/真实输入。
+执行偏差：首轮测试漏隔离导致目录外日志/合成输入标记/失败截图写盘，详 READONLY_INCIDENT.txt；不把首轮冒称完全只读。最终隔离复跑目录外变更为0。
+保护对象 src/tests/cards/PLAN.md/progress.json 共402个既有文件SHA256不变；未新增受保护文件，详integrity_final.json。
+独立反例：independent_probes.py/.txt/_result.json；补充 independent_additional.py/.txt/_result.json，共15项，不计入731单测。
+判定口径：PASS仅针对本卡；FAIL区分实现缺陷与证据不足。未主动运行真机choose/use发送入口或外部通知，不重放旧提问。
+后续卡明确改变的行为按后续要求评估，不把合法后续变更算成旧卡回归。
+
+VERDICT PASS
+卡片：cards/CARD-06d-wb-new-clipboard.md:5-11。
+
+逐条核对
+1. --new后按回执模型恢复并二次读回，不一致拒发5/model_reset_after_new：PASS。
+   src/qi/workbuddy.py:152-209 receipt_model/restore_after_new 校验回执后取目标，读当前、必要时select并再次current_model；不一致返回not_sent/code5。
+   _run:800-808 接在new_chat之后，失败时ask及门禁都不被调用；显式--model是卡面后续接线的明确输入。
+   test_card06d.RestoreAfterNewTests 验没变/重置成功/重选无效/重选抛错/无回执/读不到；EntryTests验真实入口的new/continue/list/显式model等分支。
+2. 复制后未更新回退UIA，并标read_via；都失败报错+runlog：PASS。
+   ReplyConversation.copy及reply_text使用复制异常/内容和序号判定后取本轮UIA正文；_run补read_via/copy_note并record。
+   CopyFallbackTests真实执行copy函数，只替换剪贴板读入口，覆盖剪贴板优先、未更新→UIA、两者失败、诊断不串上轮、保存提问；EntryTests验证都失败时exit1与日志原因。
+3. 必需离线分支：PASS。本卡35项，非仅检查有函数或mock最终结论；全量731 OK，超过412+新增门槛。
+4. 真机非默认模型→--new→一致且回复可读：已有直接原始证据 PASS。
+   evidence/card06d_live.txt:72-83：choose Hy3成功，use --new --purpose test 输出model_after_new.before=DeepSeek-V4.1-Flash、after=Hy3、reselect=true，回复BR9-06D-LIVE-OK，EXIT=0。
+   :95-121 的UIA回退验证是“真实树+复制失败桩”，不是一次真实剪贴板故障；:173-176也已明说未复现。卡面只要求该故障离线mock覆盖，本轮不擅自提升为必须真机故障。
+5. 备份/施工记录与progress历史存在；本轮不执行写progress或通知。
+
+边界：WorkBuddy用途表为空属于06a；写后门禁接线属于06b；回复旧轮误认属于07；不因这些其他卡问题把06d的具体恢复/复制分支重复判错。
+建议返工卡：本卡无独立必返工项。
