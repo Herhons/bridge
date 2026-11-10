@@ -1,0 +1,41 @@
+"""每次运行追加一行到 runs\\YYYYMMDD.jsonl（2026-10-30 第4项）。
+
+只记 端、结果、耗时、错误，不存提问和回复正文。写失败绝不影响主流程。
+"""
+from __future__ import annotations
+
+import json
+import time
+from pathlib import Path
+
+RUNS = Path(__file__).resolve().parents[2] / "runs"
+
+TIMEOUT_KINDS = ("still_generating", "no_reply")
+
+
+def with_timeout_kind(result: dict) -> dict:
+    """给 stage=timeout 的结果补上 timeout_kind（2026-10-31 任务卡04，只加不改）。
+
+    判据不在这里：`qi.conversation.ask` 已经按"发出去了、且最后还在生成或有未稳定的
+    回复"算好 still_generating / no_reply 放进结果。这个函数只给三个单文件脚本
+    （codex / dsh / opencode）兜个底——结果里没有这个字段时按 no_reply 记，
+    宁可说"没收到回复"，也不冒充"还在生成"。非超时结果原样返回，不改已有字段。
+    """
+    if result.get("stage") == "timeout" and result.get("timeout_kind") not in TIMEOUT_KINDS:
+        return {**result, "timeout_kind": "no_reply"}
+    return result
+
+
+def record(endpoint: str, result: dict, *, root: Path | None = None) -> None:
+    try:
+        folder = Path(root) if root else RUNS
+        folder.mkdir(parents=True, exist_ok=True)
+        line = {"time": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "endpoint": endpoint,
+                "ok": bool(result.get("ok")), "result": result.get("stage"),
+                "timeout_kind": result.get("timeout_kind"),
+                "submission": result.get("submission"), "elapsed": result.get("elapsed"),
+                "error": result.get("hint") or result.get("error")}
+        with open(folder / time.strftime("%Y%m%d.jsonl"), "a", encoding="utf-8") as f:
+            f.write(json.dumps(line, ensure_ascii=False) + "\n")
+    except Exception:                                 # noqa: BLE001
+        pass

@@ -10,9 +10,11 @@
     python codex_choose.py --model gpt6_sol --effort ultra   两个都调
     python codex_choose.py --probe                      只报每个模板命中在哪，不点击
 
-强度六档（2026-10-29 逐档实测，滑杆上那 5 个小灰点就是其余 5 档）：
-    light / medium / high / xhigh(Extra High) / max / ultra
-    low、mid 是 light、medium 的旧别名。
+强度档位（**档数随模型变，不能写死**；滑杆上的小圆点就是每个档的停靠点）：
+    2026-10-31 实测 Codex 26.1027（界面已是中文）：
+        GPT-6 Luna 只有 5 档 low(轻度) / medium(中) / high(高) / xhigh(极高) / max(Max)
+        —— 没有 ultra；档距 51px、轨道 230px，和 10-29 那版 6 档 41px 不是一套几何。
+    旧名字 light、mid 仍然是 low、medium 的别名。
 
 模型（列表一屏只能露 7 项，最后两项露不出来）：
     default / gpt61_sol / gpt6_astra / gpt61_terra / gpt6_sol / gpt6_luna
@@ -112,32 +114,53 @@ BOTTOM_H = 150
 # 提示一下，不硬跑。
 MIN_W = 1050
 
-SLIDER_ABOVE = 57          # 形态 A：模型行在**滑杆中心行**上方 57px（实测）
-ROW_ABOVE_PRESET = 40      # 形态 B：那一行在预设滑条中心行上方 40px（实测）
-# 两种形态卡片高度不同，偏移也跟着不同。这个差值是**卡片内部**的排版常量
-# （卡片贴着芯片长上去，尺寸固定），和"用窗口比例猜控件位置"是两回事。
-ROW_ABOVE = {"effort": SLIDER_ABOVE, "preset": ROW_ABOVE_PRESET}
+# 模型那一行的位置**不再用固定偏移**。
+# 旧写法 ROW_ABOVE={"effort":57,"preset":40} 是 10-29 那版卡片的实测值：模型行在
+# 滑杆中心行上方 57px。26.1027 版卡片变矮了，实测只剩 36px —— 按 57 点下去正好
+# 落在档位词「极高」上，模型列表根本点不开（--list 会一路走到"打不开模型列表"）。
+# 所以改成**在轨道上方找文字带**：强度卡从上到下是 [档位词][模型行][滑杆]，
+# 最下面那条带就是模型行，点它的中心。见 model_row()。
 ITEM_GAP = 31              # 模型列表行距
 CLICK_MAX, CLICK_GAP = 14, 0.4
 
-EFFORTS = ["light", "medium", "high", "xhigh", "max", "ultra"]
+EFFORTS = ["low", "medium", "high", "xhigh", "max", "ultra"]
 
-# 各档位在轨道上的相对位置（0=最左 1=最右），**实测值，不是等分猜测**。
-# 2026-10-29 定位了六个停靠点（滑杆上那 5 个小灰点 = 除当前档外的其余 5 档）：
-#   knob 950 / 992 / 1032 / 1073 / 1114 / 1155  ->  Light / Medium / High /
-#   Extra High / Max / Ultra（档位字是橙色，Ultra 时轨道变成紫渐变）
-# 用 (knob-left)/(right-left) 换算，left=923 right=1167。
-#
-# **原来这里只有 5 档是错的**：把 Extra High 和 Max 挤成了一档，
-# 于是 --effort max 永远到不了真正的 Max（停在 Extra High），Ultra 反而被叫成 max。
-EFFORT_FRAC = {"light": 0.111, "medium": 0.283, "high": 0.447,
-               "xhigh": 0.615, "max": 0.783, "ultra": 0.951}
-EFFORT_LABEL = {"light": "Light", "medium": "Medium", "high": "High",
-                "xhigh": "Extra High", "max": "Max", "ultra": "Ultra"}
+# 每个档位在**卡片顶部**的英文模板名。**CLI 里的键名和模板文件名不是一套**：
+# 10-29 那版把最低档叫 light（模板 cdx_r_light.png），而 app 内部的 id 是 low，
+# zh-CN 界面显示「轻度」。键名跟着 app 走（low），模板文件名保持原样，映射放这里。
+EFFORT_TPL = {"low": "light", "medium": "medium", "high": "high",
+              "xhigh": "xhigh", "max": "max", "ultra": "ultra"}
+# 界面上的档位词。2026-10-31 从 app.asar 的 zh-CN 词条核对过：
+#   {reasoning, select, none{无} minimal{最低} low{轻度} medium{中} high{高}
+#    xhigh{极高} max{Max} ultra{Ultra}}
+EFFORT_LABEL = {"low": "轻度", "medium": "中", "high": "高",
+                "xhigh": "极高", "max": "Max", "ultra": "Ultra"}
 
-# 老名字（low/mid）保留成别名，省得已经写好的调用方全改。
-EFFORT_ALIAS = {"low": "light", "mid": "medium", "med": "medium",
+# 老名字保留成别名，省得已经写好的调用方全改。
+EFFORT_ALIAS = {"light": "low", "mid": "medium", "med": "medium",
                 "extrahigh": "xhigh", "extra_high": "xhigh", "xhigh": "xhigh"}
+
+# **档数随模型变**，所以"第几档 = 哪个名字"不能写死成一张表。
+# 能确定的只有每种档数对应的档位集合（从 app 的全局档位序
+# none/minimal/low/medium/high/xhigh/max/ultra 里截取的连续片段）：
+#   5 档：low..max      —— 2026-10-31 实测 GPT-6 Luna 就是这套，
+#                          第 4 档（index 3）界面显示「极高」= xhigh，
+#                          最右档（index 4）实测显示 "Max"（挪一格截图核过，已复原）。
+#   6 档：low..ultra    —— 10-29 那版卡片的实测（旧几何）。
+# 表里没有的档数一律报 unknown：宁可说不知道，也不按相邻档位猜一个名字出来。
+STOP_SETS = {5: ["low", "medium", "high", "xhigh", "max"],
+             6: ["low", "medium", "high", "xhigh", "max", "ultra"]}
+
+# 各档位在轨道上的相对位置（0=最左 1=最右）。
+#
+# **这张表已经不用来读档位了**：它是 10-29 那版 6 档卡片的实测比例
+# （knob 950/992/1032/1073/1114/1155，轨道 923..1167）。26.1027 版卡片变窄、
+# 档距从 41px 变成 51px，同一比例算出来的是"档与档之间"，实测把「极高」(xhigh)
+# 算成 max（frac 0.738 落在 max 的 0.783 附近）。按比例换算本质上假设了档数不变，
+# 档数一变就整段骗人 —— 所以改读**刻度点**（见 tick_grid），档数靠数点数。
+# 这里只留作诊断输出，不参与判断。
+EFFORT_FRAC_OLD = {"low": 0.111, "medium": 0.283, "high": 0.447,
+                   "xhigh": 0.615, "max": 0.783, "ultra": 0.951}
 
 TEMPLATE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                             "..", "assets", "library")
@@ -275,14 +298,61 @@ def find_window():
     return best
 
 
-def rect_of(hwnd):
+def _win32_size_api():
+    """最小化相关入口：句柄必须声明成 HWND，否则 64 位句柄会 OverflowError。"""
+    if getattr(_win32_size_api, "ready", False):
+        return
+    user32.IsIconic.argtypes, user32.IsIconic.restype = [wintypes.HWND], wintypes.BOOL
+    user32.ShowWindow.argtypes = [wintypes.HWND, ctypes.c_int]
+    user32.ShowWindow.restype = wintypes.BOOL
+    user32.GetWindowRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
+    user32.GetWindowRect.restype = wintypes.BOOL
+    _win32_size_api.ready = True
+
+
+SENTINEL = -32000           # 最小化时 GetWindowRect 的哨兵坐标
+MIN_WIN_W, MIN_WIN_H = 200, 120
+
+
+def _raw_rect(hwnd):
     r = wintypes.RECT()
     if not user32.GetWindowRect(int(hwnd), ctypes.byref(r)):
         return None
-    if r.right - r.left <= 0:
-        return None
-    return (r.left, r.top, r.right - r.left, r.bottom - r.top)
+    return (int(r.left), int(r.top), int(r.right - r.left), int(r.bottom - r.top))
 
+
+def _usable_rect(rect):
+    """不是哨兵、宽高过阈值。只判 w>0 不够：最小化时是 160x28 这种"小但正"的尺寸。"""
+    if not rect:
+        return False
+    x, y, w, h = rect
+    return x > SENTINEL + 1 and y > SENTINEL + 1 and w >= MIN_WIN_W and h >= MIN_WIN_H
+
+
+def rect_of(hwnd):
+    """窗口矩形。最小化先恢复并**轮询确认**（CARD-06a (c) / 06b 第 7 条）。
+
+    **统一走 `qi.window.restore`**：网页端和四个桌面端同一份实现，判据只有
+    "IsIconic 变假 + 矩形脱离 -32000 + 宽高过阈值"。恢复不了就把原矩形还回去，
+    由调用方按退出码 7 处理。
+    """
+    if not hwnd:
+        return None
+    r = _raw_rect(hwnd)
+    if r is not None and _usable_rect(r):
+        return r
+    try:
+        from pathlib import Path
+        source = str(Path(__file__).resolve().parents[1])
+        if source not in sys.path:
+            sys.path.insert(0, source)
+        from qi import window as window_mod
+        facts = window_mod.restore(int(hwnd), timeout=5.0)
+        if facts["ok"]:
+            return tuple(facts["rect"])
+    except Exception:                       # noqa: BLE001 - 退回原判据，别让取矩形带崩
+        pass
+    return r
 
 def place(hwnd, pos, size):
     user32.SetWindowPos(int(hwnd), 0, int(pos[0]), int(pos[1]),
@@ -822,6 +892,136 @@ def find_slider(d, win, send=None):
     return (left, right, row_y, int(knob))
 
 
+def _bands(g, x0, x1, y0, y1, min_ink=3, min_h=5, min_gap=3):
+    """在 y0..y1 里找"有墨迹"的横带（= 文字行），返回 [(top, bottom)]（窗口内坐标）。
+
+    卡片是白底，文字和图标都是深色，所以一行文字就是一条连续带；
+    带与带之间至少 min_gap 行白底才算两行（实测档位词 2371..2384、
+    模型行 2394..2403，中间空 9 行）。
+    """
+    marks = []
+    height = g.shape[0]
+    for y in range(max(0, y0), min(height, y1)):
+        if int((g[y, x0:x1] < 200).sum()) >= min_ink:
+            marks.append(y)
+    out, start, prev = [], None, None
+    for y in marks:
+        if start is None:
+            start = prev = y
+        elif y - prev <= min_gap:
+            prev = y
+        else:
+            out.append((start, prev))
+            start = prev = y
+    if start is not None:
+        out.append((start, prev))
+    return [(a, b) for a, b in out if b - a + 1 >= min_h]
+
+
+def card_bands(d, win, sl):
+    """滑杆上方的文字带。强度卡从上到下是 [档位词][模型行][滑杆]。"""
+    left, right, row_y, _knob = sl
+    img = d.grab(win)
+    if img.size == 0:
+        return []
+    g = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    x0, x1 = max(0, left + 8), min(g.shape[1], right - 8)
+    y0, y1 = max(0, row_y - 100), max(0, row_y - 18)
+    if x1 - x0 < 40 or y1 - y0 < 20:
+        return []
+    return _bands(g, x0, x1, y0, y1)
+
+
+def model_row(d, win, sl):
+    """模型行（`GPT-6 Luna ›`）的中心 y，窗口内坐标；找不到返回 None。
+
+    取**最下面那条带**：强度卡里模型行永远紧挨着滑杆上方。
+    旧代码用的是固定偏移（轨道中心行上方 57px），26.1027 版卡片矮了 21px，
+    按老偏移点下去落在档位词「极高」上——点不开列表，还不会报错。
+    """
+    bands = card_bands(d, win, sl)
+    if not bands:
+        return None
+    top, bottom = bands[-1]
+    return (top + bottom) // 2
+
+
+def _profile(g, x0, x1, row_y, k=31, thr=10):
+    """轨道中心行上"和左右比不一样"的列：圆点、滑块、轨道两端都会亮。"""
+    band = g[max(0, row_y - 1):row_y + 2, x0:x1]
+    col = np.median(band, axis=0)
+    pad = np.pad(col, (k // 2, k // 2), mode="edge")
+    bg = np.array([np.median(pad[i:i + k]) for i in range(len(col))])
+    return np.abs(col - bg) >= thr
+
+
+def _extent(g, c, row_y):
+    """某一列在轨道高度内"和左右 7px 不一样"的行数。
+
+    圆点只有 4~10 行（个小圆），轨道两端、滑块是整条轨道那么高（24 行）。
+    用这个把"轨道左端的白色圆角"和真圆点分开——两者的灰度差一样大。
+    """
+    rows = 0
+    for y in range(max(0, row_y - 12), min(g.shape[0], row_y + 13)):
+        if (abs(int(g[y, c]) - int(g[y, c - 7])) >= 8
+                or abs(int(g[y, c]) - int(g[y, c + 7])) >= 8):
+            rows += 1
+    return rows
+
+
+def tick_grid(d, win, sl):
+    """滑杆上的档位刻度：返回 (格点列表, 档距) 或 None。
+
+    每个档位在轨道上都有一个小圆点当停靠点。**当前档那个被滑块盖住**，
+    所以先找看得见的点，再按档距把被盖住的位置补回来：
+      实测「极高」时点 828/879/930/1032（第 4 个被滑块盖住）→ 补出 981；
+      实测「Max」时点 828/879/930/981（第 5 个被盖住）→ 按档距补出 1032。
+    档数 = 点数，档距 = 相邻点间距，都是**量出来的**，不假设 6 档、也不按比例算。
+    """
+    left, right, row_y, knob = sl
+    img = d.grab(win)
+    if img.size == 0:
+        return None
+    g = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY).astype(np.int16)
+    x0, x1 = max(0, left + 6), min(g.shape[1], right - 4)
+    if x1 - x0 < 60:
+        return None
+    mask = _profile(g, x0, x1, row_y)
+    dots, i = [], 0
+    while i < len(mask):
+        if not mask[i]:
+            i += 1
+            continue
+        j = i
+        while j + 1 < len(mask) and mask[j + 1]:
+            j += 1
+        if 2 <= j - i + 1 <= 10:
+            c = x0 + (i + j) // 2
+            if 3 <= _extent(g, c, row_y) <= 12:
+                dots.append(c)
+        i = j + 1
+    if len(dots) < 2:
+        return None
+
+    step = float(np.median([b - a for a, b in zip(dots, dots[1:])]))
+    if step < 20:
+        return None
+    grid = [float(dots[0])]
+    for prev, cur in zip(dots, dots[1:]):
+        for k in range(1, max(1, int(round((cur - prev) / step)))):
+            grid.append(prev + k * step)
+        grid.append(float(cur))
+    # 滑块压在最左/最右那一点上时，那个点看不见，按档距补回来（最多补 2 个，防跑飞）
+    for _ in range(2):
+        if knob < grid[0] - step * 0.55:
+            grid.insert(0, grid[0] - step)
+        elif knob > grid[-1] + step * 0.55:
+            grid.append(grid[-1] + step)
+        else:
+            break
+    return [int(round(x)) for x in grid], step
+
+
 def items_visible(d, win):
     hit = 0
     for name in MODELS.values():
@@ -860,7 +1060,7 @@ def list_band(d, win):
 def enter_list(d, win):
     """进模型列表。三种状态分别处理：
        已经在列表层   -> 直接返回
-       在卡片层       -> 点「模型名 ›」那一行（两种形态行高不同，按形态取偏移）
+       在卡片层       -> 点「模型名 ›」那一行（位置由文字带定位，见 model_row）
        全关           -> 先点芯片开卡片，再点那一行
     """
     if items_visible(d, win):
@@ -872,13 +1072,15 @@ def enter_list(d, win):
         sl = find_slider(d, win, locate(d, win).get("send"))
         if sl is None:
             return False
-        left, right, row_y, _knob = sl
-        d.click(win[0] + (left + right) // 2,
-                win[1] + row_y - ROW_ABOVE.get(form, SLIDER_ABOVE))
+        left, right, _row_y, _knob = sl
+        y = model_row(d, win, sl)
+        if y is None:
+            return False
+        d.click(win[0] + (left + right) // 2, win[1] + y)
         time.sleep(1.3)
         if items_visible(d, win):
             return True
-        if attempt == 0 and _popup_state(d, win) == "closed":
+        if attempt == 0 and _popup_state(d, win) in ("closed", "unknown"):
             # 点空了/卡片被关掉，重新开一次再点，最多两轮
             form = _open_card(d, win)
             if form is None:
@@ -962,22 +1164,36 @@ def set_model(d, win, key):
 # ============================================================ 调强度
 
 def _popup_form(d, win):
-    """卡片形态：'effort'（有独立强度滑杆）/ 'preset'（预设滑条）/ None（没开）。
+    """卡片形态：'effort'（有独立强度滑杆）/ 'preset' / 'unknown' / None（没开）。
 
-    判据是芯片上的字（实测：开着 0.936 / 1.000，关着 None / 0.489）：
-        Select effort -> 具体模型，卡片里是档位词 + 模型行 + 强度滑杆
-        Select model  -> Default（自动），卡片里是「模型 强度 ›」+ 预设滑条
+    2026-10-31 修的就是这里。旧判据只看芯片上的**英文**模板：
+        Select effort -> effort 形态，Select model -> preset 形态
+    但 Codex 26.1027 的界面已经是中文，弹层开着时芯片显示「选择推理强度」，
+    两个模板的原始相似度掉到 0.33 / 0.44，**永远匹配不上**。
+    于是弹层明明开着，这里一直返回 None，_open_card 返回 None，
+    --list 打一行「打不开卡片」就退出（还会因为反复点芯片把弹层点开又点关）。
+
+    现在文字模板只当**快速路径**（英文界面仍然精确、也不用多抓图），
+    中文/换皮界面走结构判据：
+      1. 轨道在不在（find_slider）：关着时实测 None，开着时能定位到轨道+滑块；
+      2. 轨道上方有几条文字带：强度卡是 [档位词][模型行] 两条。
+         只有一条就不认成 effort，报 unknown —— Default（自动）模型的预设卡
+         里那条滑条是"模型+强度"的组合条，按强度去调它等于**换模型**，
+         宁可停在这里也不猜。
     """
     band = _band(win)
     if d.find(MENU_TPL, 0.82, band) is not None:
         return "effort"
     if d.find(MODEL_MENU_TPL, 0.85, band) is not None:
         return "preset"
-    return None
+    sl = find_slider(d, win, locate(d, win).get("send"))
+    if sl is None:
+        return None
+    return "effort" if len(card_bands(d, win, sl)) >= 2 else "unknown"
 
 
 def _popup_state(d, win):
-    """卡片现在停在哪一层：closed / effort（强度滑杆层）/ preset（预设滑条层）/ models。
+    """卡片现在停在哪一层：closed / effort / preset / unknown / models。
 
     先判 models：「列表里能同时看到 ≥2 个模型名」。
     列表层里芯片也显示「Select ...」，只看芯片会把列表层误当成卡片层，
@@ -989,7 +1205,7 @@ def _popup_state(d, win):
 
 
 def _open_card(d, win):
-    """把卡片打开，返回形态 'effort' / 'preset'，打不开返回 None。
+    """把卡片打开，返回形态 'effort' / 'preset' / 'unknown'，打不开返回 None。
 
     点芯片，一次只点一下，不反复开关。弹层是模态的：点它外面任何地方都会收起，
     所以调用方拿到打开后的形态，要一口气把要读的、要改的都做完，最后才收。
@@ -1023,10 +1239,11 @@ def _ensure_effort(d, win):
     """保证现在停在**强度滑杆层**，返回 True/False。
 
     三种入口状态都收敛到这里，且**不来回开关**：
-        effort -> 已经在这层，什么都不做
-        models -> 列表层，先按一次 Esc 退回去（退不回去就重新点开）
-        preset -> Default(自动) 模式，这里根本没有独立滑杆，返回 False
-        closed -> 点芯片打开
+        effort  -> 已经在这层，什么都不做
+        models  -> 列表层，先按一次 Esc 退回去（退不回去就重新点开）
+        preset  -> Default(自动) 模式，这里根本没有独立滑杆，返回 False
+        unknown -> 卡片开着但不是核对过的形态，也返回 False（不硬调）
+        closed  -> 点芯片打开
     """
     st = _popup_state(d, win)
     if st == "effort":
@@ -1055,7 +1272,7 @@ def _effort_text(d, win, sl):
     region = (win[0] + left + 20, win[1] + row_y - 95, w, 70)
     best, bs, second = None, 0.0, 0.0
     for k in EFFORTS:
-        m = d.find("cdx_r_" + k, 0.0, region)
+        m = d.find("cdx_r_" + EFFORT_TPL[k], 0.0, region)
         s = m[4] if m else 0.0
         if s > bs:
             second, bs, best = bs, s, k
@@ -1069,9 +1286,13 @@ def _effort_text(d, win, sl):
 def _effort_now(d, win, sl):
     """从**已经打开**的卡片读档位（不开关卡片）。
 
-    先读卡片顶部的档位词；读不到（比如卡片高度变了、词被裁掉）才退回
-    按滑块圆心算比例的老办法。比例用**滑块圆心**，不用填充右端——
-    填充右端是滑块左边缘，差一个半径（13px），200px 轨道上就是 6%。
+    顺序：先读卡片顶部的**英文**档位词（精确，但那套模板只对英文界面有效，
+    26.1027 是中文界面，实测一直返回 None）；读不到就数刻度点（见 tick_grid）：
+    档数 = 点数，当前档 = 滑块压在哪个点上。两条都失败就报 unknown，
+    并把 knob/track/frac 一起带出去，方便下次照着截图核对。
+
+    **不再按比例换算档位**：0.738 这种比例在 6 档几何里是 max、在 5 档几何里是
+    xhigh（实测就是 xhigh），比例法把档数当常量用，档数一变就报错档。
     """
     left, right, row_y, knob = sl
     frac = (knob - left) / max(1, right - left)
@@ -1080,15 +1301,28 @@ def _effort_now(d, win, sl):
     if guess is not None:
         out.update({"effort": guess, "label": EFFORT_LABEL[guess], "from": "text"})
     else:
-        best, bd = EFFORTS[0], 9.9
-        for k in EFFORTS:
-            d_ = abs(frac - EFFORT_FRAC[k])
-            if d_ < bd:
-                bd, best = d_, k
-        out.update({"effort": best, "label": EFFORT_LABEL[best], "from": "slider"})
-    if out["effort"] == "light":
+        grid = tick_grid(d, win, sl)
+        if grid is None:
+            out.update({"effort": "unknown",
+                        "hint": "读不到刻度点：卡片顶部不是英文模板，滑杆上也没数出圆点"})
+            return out
+        points, step = grid
+        idx = min(range(len(points)), key=lambda i: abs(points[i] - knob))
+        out.update({"stops": len(points), "index": idx, "step": int(round(step))})
+        if abs(points[idx] - knob) > step * 0.45:
+            out.update({"effort": "unknown", "hint": "滑块没停在任何一个刻度点上"})
+            return out
+        keys = STOP_SETS.get(len(points))
+        if not keys:
+            out.update({"effort": "unknown",
+                        "hint": f"卡片上是 {len(points)} 档，这个档数没核对过"
+                                f"（已知 {sorted(STOP_SETS)} 档），不敢按相邻位置猜名字"})
+            return out
+        out.update({"effort": keys[idx], "label": EFFORT_LABEL[keys[idx]],
+                    "from": "ticks"})
+    if out["effort"] == EFFORTS[0]:
         out["at_min"] = True
-    if out["effort"] == "ultra":
+    if out["effort"] == "ultra" or out.get("index") == out.get("stops", 1) - 1:
         out["at_max"] = True
     return out
 
@@ -1100,10 +1334,14 @@ def read_effort(d, win):
         return {"effort": "auto", "hint": "当前是 Default（自动）模型，"
                                           "卡片里只有「模型+强度」预设条，没有独立档位"}
     if not _ensure_effort(d, win):
-        if _popup_state(d, win) == "preset":
+        st = _popup_state(d, win)
+        if st == "preset":
             return {"effort": "auto", "form": "preset",
                     "hint": "Default（自动）模型：卡片里只有「模型+强度」预设条，"
                             "没有独立档位"}
+        if st == "unknown":
+            return {"effort": "unknown", "form": "unknown",
+                    "hint": "卡片开着，但轨道上方只有一条文字带，不是核对过的强度卡形态"}
         return {"effort": "unknown", "hint": "打不开强度卡片"}
     sl = find_slider(d, win, locate(d, win).get("send"))
     out = _effort_now(d, win, sl) if sl else {"effort": "unknown",
@@ -1143,11 +1381,16 @@ def set_effort(d, win, key):
     if not _ensure_effort(d, win):
         # 打不开时再看一眼形态：Default 下 _ensure_effort 会先把卡片点开、
         # 再因为形态不对返回 False，所以这里能拿到准确原因。
-        if _popup_state(d, win) == "preset":
+        st = _popup_state(d, win)
+        if st == "preset":
             return {"ok": False, "stage": "default_model",
                     "hint": "当前模型是 Default（自动），卡片里只有"
                             "「模型+强度」预设条，没有独立强度滑杆。"
                             "先用 --model 选一个具体模型再调强度"}
+        if st == "unknown":
+            return {"ok": False, "stage": "form_unknown",
+                    "hint": "卡片开着，但轨道上方只有一条文字带，不是核对过的强度卡形态，"
+                            "不动它（预设卡上那条滑条是「模型+强度」组合，调它等于换模型）"}
         return {"ok": False, "stage": "menu_not_open"}
 
     send = locate(d, win).get("send")
@@ -1155,6 +1398,20 @@ def set_effort(d, win, key):
     if sl is None:
         return {"ok": False, "stage": "no_slider"}
     before = _effort_now(d, win, sl)
+
+    # 目标档在**这张卡片自己的档位集合**里排第几：档数随模型变，
+    # 用全局 6 个名字去 index 会算错（5 档卡片上 ultra 会算出第 6 格，推到轨道外）。
+    keys = STOP_SETS.get(before.get("stops") or 0)
+    if not keys:
+        return {"ok": False, "stage": "stops_unknown",
+                "hint": f"读不出这张卡片有几档（读到的档数 {before.get('stops')}），"
+                        f"不知道 {key} 在第几格，不动滑杆",
+                "before": before}
+    if key not in keys:
+        return {"ok": False, "stage": "unsupported",
+                "hint": f"这张卡片只有 {len(keys)} 档（{' / '.join(keys)}），没有 {key}",
+                "before": before.get("effort"), "options": keys}
+    idx = keys.index(key)
 
     left, right, row_y, knob = sl
     d.click(win[0] + knob, win[1] + row_y)     # 点圆点，键盘才接管滑杆
@@ -1177,12 +1434,11 @@ def set_effort(d, win, key):
     p3 = (find_slider(d, win, send) or (0, 0, 0, p0))[3]
     step = (p3 - p0) / 3.0
     if step < 8:                                # 读抖动/没动：退回按轨道宽度估
-        step = max(8.0, (right - left) / 5.0)
+        step = max(8.0, (right - left) / max(1.0, len(keys) - 1))
     for _ in range(12):
         d.press("left")
         time.sleep(0.16)
 
-    idx = EFFORTS.index(key)
     target = p0 + idx * step
 
     for _ in range(10):                        # 往右逼近
@@ -1198,8 +1454,8 @@ def set_effort(d, win, key):
         d.press("left")
         time.sleep(0.26)
 
-    # **按文字读数闭环纠偏**：位置往前走完，再读卡片上那个档位词，
-    # 差几档就补几下。步长估算有误差（卡片宽度会变），但文字是直接读数，
+    # **按读数闭环纠偏**：位置往前走完，再读一次卡片上的档位词/刻度，
+    # 差几档就补几下。步长估算有误差（卡片宽度会变），但读数是直接的，
     # 用它当反馈就不怕步长不准。最多纠 3 轮，每轮最多挪 6 下。
     after = {"effort": "unknown"}
     for _ in range(3):
@@ -1232,6 +1488,25 @@ def set_effort(d, win, key):
 
 
 # ============================================================ CLI
+
+def _record_receipt(hwnd, dimension, target, readback, raw):
+    """写档位回执（CARD-06a (a)）。**失败一律不影响选择结果。**
+
+    本脚本刻意不 import 项目包（单文件契约），所以按需把 src 挂上 sys.path。
+    读不回档位时 readback 传 None：use 会因此拒发——那是实话，
+    "点了但没读回来"本来就不能当确认过。
+    """
+    try:
+        from pathlib import Path
+        source = str(Path(__file__).resolve().parents[1])
+        if source not in sys.path:
+            sys.path.insert(0, source)
+        from qi import tier_guard
+        tier_guard.record_choice("codex", target=target, readback=readback,
+                                 dimension=dimension, hwnd=hwnd, raw=raw)
+    except Exception:                                  # noqa: BLE001 - 回执不是主流程
+        pass
+
 
 def main():
     ap = argparse.ArgumentParser(add_help=True)
@@ -1304,6 +1579,13 @@ def main():
     if win is None:
         print(json.dumps({"ok": False, "stage": "no_rect"}, ensure_ascii=False))
         return 1
+    # 最小化且轮询 5s 也没恢复：rect_of 会把哨兵矩形(-32000,...)原样还回来。
+    # 这时绝不能拿它算点击位置 —— 退出码 7（CARD-06a (c)）。
+    if win[0] <= -31999 or win[1] <= -31999:
+        print(json.dumps({"ok": False, "stage": "window_minimized",
+                          "hint": "窗口最小化且没能恢复，先手动还原窗口再跑"},
+                         ensure_ascii=False))
+        return 7
     if win[2] < MIN_W and not a.probe:
         print(json.dumps({"ok": False, "stage": "window_too_narrow",
                           "size": [win[2], win[3]], "min_w": MIN_W,
@@ -1366,18 +1648,28 @@ def main():
                 out = {"model": "unknown", "effort": "unknown",
                        "hint": "打不开卡片"}
             else:
+                if form != "effort":
+                    out["form"] = form
                 sl = find_slider(d, win, locate(d, win).get("send"))
                 if form == "preset":
-                    out.update({"effort": "auto", "form": "preset",
+                    out.update({"effort": "auto",
                                 "hint": "Default（自动）模型：卡片里只有"
                                         "「模型+强度」预设条，没有独立档位"})
+                elif form == "unknown":
+                    out.update({"effort": "unknown",
+                                "hint": "卡片开着，但轨道上方只有一条文字带，"
+                                        "不是核对过的强度卡形态，档位不敢猜"})
                 elif sl is not None:
                     out.update(_effort_now(d, win, sl))
                 if sl is not None:
-                    left, right, row_y, _knob = sl
-                    d.click(win[0] + (left + right) // 2,
-                            win[1] + row_y - ROW_ABOVE.get(form, SLIDER_ABOVE))
-                    time.sleep(1.3)
+                    left, right, _row_y, _knob = sl
+                    y = model_row(d, win, sl)
+                    if y is None:
+                        out["model"] = "unknown"
+                        out["hint"] = "卡片里找不到模型行"
+                    else:
+                        d.click(win[0] + (left + right) // 2, win[1] + y)
+                        time.sleep(1.3)
                 if items_visible(d, win):
                     out.update(read_model(d, win))
                     if out.get("model") == "unknown":
@@ -1385,7 +1677,7 @@ def main():
                         dbg = os.path.join(DEBUG_DIR, "codex_list_fail.png")
                         cv2.imwrite(dbg, d.grab(win, fresh=True))
                         out["debug_shot"] = dbg
-                else:
+                elif out.get("model") != "unknown":
                     dbg = os.path.join(DEBUG_DIR, "codex_list_fail.png")
                     cv2.imwrite(dbg, d.grab(win, fresh=True))
                     out["model"] = "unknown"
@@ -1401,11 +1693,19 @@ def main():
             print(json.dumps(r, ensure_ascii=False))
             if not r.get("ok"):
                 return 1
+            rec = globals().get("_record_receipt")
+            if callable(rec):
+                rec(hwnd, "model", r.get("want") or a.model,
+                    None if r.get("after") in (None, "unknown") else r.get("after"), r)
         if a.effort:
             r = set_effort(d, win, a.effort)
             print(json.dumps(r, ensure_ascii=False))
             if not r.get("ok"):
                 return 1
+            rec = globals().get("_record_receipt")
+            if callable(rec):
+                rec(hwnd, "effort", r.get("want") or a.effort,
+                    None if r.get("after") in (None, "unknown") else r.get("after"), r)
     except RuntimeError as e:
         print(json.dumps({"ok": False, "stage": "aborted", "hint": str(e)},
                          ensure_ascii=False))
@@ -1414,4 +1714,22 @@ def main():
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    # 入口编码（CARD-08 第 1 条）：借 qi.console；装不上就自己 reconfigure，绝不挡住主流程
+    _lock = None
+    try:
+        _source = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        if _source not in sys.path:
+            sys.path.insert(0, _source)
+        from qi.console import setup as _setup_console
+        from qi import uilock as _uilock
+
+        _setup_console()
+        _lock = _uilock
+    except Exception:                                  # noqa: BLE001
+        for _stream in (sys.stdout, sys.stderr):
+            try:
+                _stream.reconfigure(encoding="utf-8", errors="replace")
+            except Exception:                          # noqa: BLE001
+                pass
+    # UI 前台锁（CARD-09f 第 1 条）：choose 也要和服务端/use 抢同一把 runs\ui.lock
+    raise SystemExit(_lock.run("codex_choose", main) if _lock else main())

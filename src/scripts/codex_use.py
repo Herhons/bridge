@@ -75,6 +75,19 @@
    选一个具体模型。
 3. 取回答还没接上：codex 的复制按钮要 hover 才出现，模板还没裁。
    现在 `"问题"` 会发出去、等生成结束，但取回会返回 need_copy_template。
+
+## 2026-11-02 CARD-07 第 3 条：新版 Codex 找不到 `cdx_composer`
+
+现象：新版把输入框和「+」的间距、圆角改了，`cdx_composer`（加号 + 上方 26px 空白）
+匹不上，于是 `controls_not_found` 直接退出——而且是在**置前之前**就退出，
+越找不到越不获焦。现在按卡面把顺序倒过来：
+
+    1  先恢复（最小化就 restore，恢复不了退 7）+ 置前；
+    2  模板找不到 composer 时，用 UIA 在**下半窗**找编辑框、**点它一下让它获焦**，
+       再找一次模板（输入框失焦/聚焦的画法不一样，先把这个变量消掉）；
+    3  模板仍然不认，就用 UIA 那个落点（`composer_basis=uia`，写进结果留证）。
+
+发送键还是只认模板：点错发送键比找不到更糟。
 """
 
 from __future__ import annotations
@@ -328,14 +341,63 @@ def find_window():
     return best
 
 
-def rect_of(hwnd):
+def _win32_size_api():
+    """最小化相关入口：句柄必须声明成 HWND，否则 64 位句柄会 OverflowError。"""
+    if getattr(_win32_size_api, "ready", False):
+        return
+    user32.IsIconic.argtypes, user32.IsIconic.restype = [wintypes.HWND], wintypes.BOOL
+    user32.ShowWindow.argtypes = [wintypes.HWND, ctypes.c_int]
+    user32.ShowWindow.restype = wintypes.BOOL
+    user32.GetWindowRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
+    user32.GetWindowRect.restype = wintypes.BOOL
+    _win32_size_api.ready = True
+
+
+_CURRENT_HWND = {"v": None}   # 失败留证用：当前操作的窗口
+SENTINEL = -32000           # 最小化时 GetWindowRect 的哨兵坐标
+MIN_WIN_W, MIN_WIN_H = 200, 120
+
+
+def _raw_rect(hwnd):
     r = wintypes.RECT()
     if not user32.GetWindowRect(int(hwnd), ctypes.byref(r)):
         return None
-    if r.right - r.left <= 0:
-        return None
-    return (r.left, r.top, r.right - r.left, r.bottom - r.top)
+    return (int(r.left), int(r.top), int(r.right - r.left), int(r.bottom - r.top))
 
+
+def _usable_rect(rect):
+    """不是哨兵、宽高过阈值。只判 w>0 不够：最小化时是 160x28 这种"小但正"的尺寸。"""
+    if not rect:
+        return False
+    x, y, w, h = rect
+    return x > SENTINEL + 1 and y > SENTINEL + 1 and w >= MIN_WIN_W and h >= MIN_WIN_H
+
+
+def rect_of(hwnd):
+    """窗口矩形。最小化先恢复并**轮询确认**（CARD-06a (c) / 06b 第 7 条）。
+
+    **统一走 `qi.window.restore`**：网页端和四个桌面端用的是同一份恢复实现，
+    判据只有一条——IsIconic 变假、矩形脱离 -32000 哨兵、宽高过阈值。
+    恢复不了就把原矩形（可能是哨兵）还回去，由调用方按退出码 7 处理，
+    不在"取矩形"这一步抛异常。
+    """
+    if not hwnd:
+        return None
+    r = _raw_rect(hwnd)
+    if r is not None and _usable_rect(r):
+        return r
+    try:
+        from pathlib import Path
+        source = str(Path(__file__).resolve().parents[1])
+        if source not in sys.path:
+            sys.path.insert(0, source)
+        from qi import window as window_mod
+        facts = window_mod.restore(int(hwnd), timeout=5.0)
+        if facts["ok"]:
+            return tuple(facts["rect"])
+    except Exception:                       # noqa: BLE001 - 退回原判据，别让取矩形带崩
+        pass
+    return r
 
 def place(hwnd, pos, size):
     user32.SetWindowPos(int(hwnd), 0, int(pos[0]), int(pos[1]),
@@ -694,6 +756,130 @@ def locate(d, win, *, need_composer=True):
     return out
 
 
+def _is_minimized(hwnd) -> bool:
+    """窗口是不是最小化。读不到就当没最小化（交给后面的 rect_of 判哨兵）。"""
+    try:
+        _win32_size_api()
+        return bool(user32.IsIconic(int(hwnd)))
+    except Exception:                       # noqa: BLE001
+        return False
+
+
+def _restore_window(hwnd) -> dict:
+    """恢复窗口。**统一走 `qi.window.restore`**（和四端同一份实现、同一批判据）。
+
+    取不到模块就返回 ok=False —— 调用方按退出码 7 收场，绝不带着哨兵坐标继续点。
+    """
+    try:
+        from pathlib import Path
+        source = str(Path(__file__).resolve().parents[1])
+        if source not in sys.path:
+            sys.path.insert(0, source)
+        from qi import window as window_mod
+        return window_mod.restore(int(hwnd), timeout=5.0)
+    except Exception as exc:                # noqa: BLE001 - 恢复不了就是恢复不了
+        return {"ok": False, "reason": f"{type(exc).__name__}: {exc}"}
+
+
+def _prepare_window(hwnd):
+    """最小化就恢复；恢复不了返回"该退出"的结果（调用方按 7 退出）。
+
+    没最小化、或者恢复成功都返回 None——"什么都不用做"和"做不了"必须分得开。
+    """
+    if not _is_minimized(hwnd):
+        return None
+    facts = _restore_window(hwnd)
+    if facts.get("ok"):
+        return None
+    return {"ok": False, "stage": "window_minimized", "reason": facts.get("reason"),
+            "hint": "窗口最小化且没能恢复，先手动还原窗口再跑"}
+
+
+def uia_edit_box(hwnd, win):
+    """UIA 兜底：窗口里的消息输入框，返回屏幕坐标 (x, y)；找不到返回 None。
+
+    **为什么需要它**：`cdx_composer` 是「加号 + 上方 26px 空白」裁出来的图，
+    新版 Codex 把输入框和加号的间距、圆角都改了，这张图匹不上（卡面第 3 条）。
+    这里换个不依赖像素的找法：控件树里**窗口下半部**可点、可见、够大的编辑框
+    （EditControl / DocumentControl），取面积最大的那个，命中矩形的中心就是落点。
+
+    只**读**，不点。找不到就返回 None——绝不拿"窗口正中间"这种坐标去猜。
+    """
+    try:
+        from pathlib import Path
+        source = str(Path(__file__).resolve().parents[1])
+        if source not in sys.path:
+            sys.path.insert(0, source)
+        from qi import ui
+    except Exception:                       # noqa: BLE001 - 没有 UIA 就只用模板
+        return None
+    try:
+        docs = ui.documents(int(hwnd))
+    except Exception:                       # noqa: BLE001
+        return None
+    best = None
+    for control, _url in docs:
+        try:
+            root = ui.tree(control)
+        except Exception:                   # noqa: BLE001
+            continue
+        for node in root.walk():
+            if node is root or node.kind not in ("EditControl", "DocumentControl",
+                                                 "ComboBoxControl"):
+                continue
+            try:
+                if node.control is None or not node.control.IsEnabled:
+                    continue
+                if node.control.IsOffscreen:
+                    continue
+                rect = node.control.BoundingRectangle
+            except Exception:               # noqa: BLE001 - 元素失效就跳过
+                continue
+            w, h = rect.right - rect.left, rect.bottom - rect.top
+            if w < 120 or h < 24:           # 行内小框、图标框
+                continue
+            if not (win[0] <= rect.left and rect.right <= win[0] + win[2]):
+                continue
+            cy = (rect.top + rect.bottom) // 2
+            if cy < win[1] + win[3] * 0.5:  # 只找下半窗：消息列表在上面
+                continue
+            area = w * h
+            if best is None or area > best[0]:
+                best = (area, (rect.left + rect.right) // 2, cy)
+    return None if best is None else (best[1], best[2])
+
+
+def focus_composer(d, hwnd, win, pm):
+    """模板找不到输入框时：先点它一下让它获焦，再找一次；仍不认就用 UIA 的落点。
+
+    顺序照着卡面来：**点击输入区域使其获焦 → 再找 "+"/composer → 模板失败回退 UIA**。
+    Codex 的输入框失焦时没有插入光标、占位行也淡，和裁模板那张图的差别正好在
+    这一点上——所以"先获焦再匹配"不是玄学，是把变量消掉。
+    返回的 dict 里多一个 `composer_basis`，说明这个落点是怎么来的（写进结果留证）。
+    """
+    box = uia_edit_box(hwnd, win)
+    if box is None:
+        return pm
+    d.click(*box)                       # 获焦（也会把残余弹层关掉）
+    time.sleep(0.5)
+    after = locate(d, win)
+    after.setdefault("composer_basis", "uia_focus+template")
+    if "composer" in after:
+        return after
+    # 模板还是不认：落点用 UIA 的，send 仍然要模板找到（点错发送键比找不到更糟）
+    after["composer"] = box
+    after["composer_basis"] = "uia"
+    after["missing"] = [m for m in after["missing"] if m != COMPOSER_TPL]
+    return after
+
+
+def locate_with_composer_fallback(d, hwnd, win, pm):
+    """只在 composer 模板失配时才走 UIA 回退；其它情况原样返回（不多点一下）。"""
+    if COMPOSER_TPL not in (pm.get("missing") or []):
+        return pm
+    return focus_composer(d, hwnd, win, pm)
+
+
 def chip_point(d, win):
     """芯片按钮的点击点（窗口内坐标），None = 没找到。
 
@@ -1014,23 +1200,100 @@ def set_model(d, win, key):
 
 # ============================================================ 调强度
 
-def _popup_form(d, win):
-    """卡片形态：'effort'（有独立强度滑杆）/ 'preset'（预设滑条）/ None（没开）。
+def _bands(g, x0, x1, y0, y1, min_ink=3, min_h=5, min_gap=3):
+    """在 y0..y1 里找"有墨迹"的横带（= 文字行），返回 [(top, bottom)]（窗口内坐标）。
 
-    判据是芯片上的字（实测：开着 0.936 / 1.000，关着 None / 0.489）：
+    卡片是白底，文字和图标都是深色，所以一行文字就是一条连续带；
+    带与带之间至少 min_gap 行白底才算两行（实测档位词 2371..2384、
+    模型行 2394..2403，中间空 9 行）。
+
+    2026-10-31 CARD-04b：从 codex_choose.py 搬过来（CARD-02 修好的那一套）。
+    """
+    marks = []
+    height = g.shape[0]
+    for y in range(max(0, y0), min(height, y1)):
+        if int((g[y, x0:x1] < 200).sum()) >= min_ink:
+            marks.append(y)
+    out, start, prev = [], None, None
+    for y in marks:
+        if start is None:
+            start = prev = y
+        elif y - prev <= min_gap:
+            prev = y
+        else:
+            out.append((start, prev))
+            start = prev = y
+    if start is not None:
+        out.append((start, prev))
+    return [(a, b) for a, b in out if b - a + 1 >= min_h]
+
+
+def card_bands(d, win, sl):
+    """滑杆上方的文字带。强度卡从上到下是 [档位词][模型行][滑杆]。
+
+    2026-10-31 CARD-04b：从 codex_choose.py 搬过来（CARD-02 修好的那一套）。
+    """
+    left, right, row_y, _knob = sl
+    img = d.grab(win)
+    if img.size == 0:
+        return []
+    g = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    x0, x1 = max(0, left + 8), min(g.shape[1], right - 8)
+    y0, y1 = max(0, row_y - 100), max(0, row_y - 18)
+    if x1 - x0 < 40 or y1 - y0 < 20:
+        return []
+    return _bands(g, x0, x1, y0, y1)
+
+
+def model_row(d, win, sl):
+    """模型行（`GPT-6 Luna ›`）的中心 y，窗口内坐标；找不到返回 None。
+
+    取**最下面那条带**：强度卡里模型行永远紧挨着滑杆上方。
+    旧代码用的是固定偏移（轨道中心行上方 57px），26.1027 版卡片矮了 21px，
+    按老偏移点下去落在档位词上——点不开列表，还不会报错。
+    （--list 走的就是这条：CARD-04b 之前 codex_use 一直用 ROW_ABOVE 的固定偏移。）
+
+    2026-10-31 CARD-04b：从 codex_choose.py 搬过来（CARD-02 修好的那一套）。
+    """
+    bands = card_bands(d, win, sl)
+    if not bands:
+        return None
+    top, bottom = bands[-1]
+    return (top + bottom) // 2
+
+
+def _popup_form(d, win):
+    """卡片形态：'effort'（独立强度滑杆）/ 'preset'（预设滑条）/ 'unknown' / None（没开）。
+
+    2026-10-31 CARD-04b：判据换成 codex_choose.py 里 CARD-02 修好的那一套。
+    旧判据只看芯片上的**英文**模板（实测开着 0.936 / 1.000，关着 None / 0.489）：
         Select effort -> 具体模型，卡片里是档位词 + 模型行 + 强度滑杆
         Select model  -> Default（自动），卡片里是「模型 强度 ›」+ 预设滑条
+    但界面换皮/换成中文时，两个模板的相似度会掉到 0.33 / 0.44，**永远匹配不上**：
+    弹层明明开着，这里一直返回 None，--list 打一行「打不开卡片」就退出
+    （还会因为反复点芯片把弹层点开又点关）。
+
+    现在文字模板只当**快速路径**（英文界面仍然精确、也不用多抓图），
+    中文/换皮界面走结构判据：
+      1. 轨道在不在（find_slider）：关着时实测 None，开着时能定位到轨道+滑块；
+      2. 轨道上方有几条文字带：强度卡是 [档位词][模型行] 两条。
+         只有一条就不认成 effort，报 unknown —— Default（自动）模型的预设卡
+         里那条滑条是"模型+强度"的组合条，按强度去调它等于**换模型**，
+         宁可停在这里也不猜。
     """
     band = _band(win)
     if d.find(MENU_TPL, 0.82, band) is not None:
         return "effort"
     if d.find(MODEL_MENU_TPL, 0.85, band) is not None:
         return "preset"
-    return None
+    sl = find_slider(d, win, locate(d, win).get("send"))
+    if sl is None:
+        return None
+    return "effort" if len(card_bands(d, win, sl)) >= 2 else "unknown"
 
 
 def _popup_state(d, win):
-    """卡片现在停在哪一层：closed / effort（强度滑杆层）/ preset（预设滑条层）/ models。
+    """卡片现在停在哪一层：closed / effort（强度滑杆层）/ preset（预设滑条层）/ unknown / models。
 
     先判 models：「列表里能同时看到 ≥2 个模型名」。
     列表层里芯片也显示「Select ...」，只看芯片会把列表层误当成卡片层，
@@ -1042,7 +1305,7 @@ def _popup_state(d, win):
 
 
 def _open_card(d, win):
-    """把卡片打开，返回形态 'effort' / 'preset'，打不开返回 None。
+    """把卡片打开，返回形态 'effort' / 'preset' / 'unknown'，打不开返回 None。
 
     点芯片，一次只点一下，不反复开关。弹层是模态的：点它外面任何地方都会收起，
     所以调用方拿到打开后的形态，要一口气把要读的、要改的都做完，最后才收。
@@ -1286,146 +1549,287 @@ def set_effort(d, win, key):
 
 # ============================================================ 提问
 
-def ask(d, win, prompt, timeout=180.0):
+def ask(d, win, prompt, timeout=180.0, purpose=None):
     from pathlib import Path
     source = str(Path(__file__).resolve().parents[1])
     if source not in sys.path:
         sys.path.insert(0, source)
+    from qi import runlog, tier_guard
     from qi.screen import Screen
     from qi.conversation import Conversation, ask as send_and_receive
+    started = time.monotonic()
+    # 第 6 条：高档（review/accept）等待上限下限 900s，不得 300s 就判超时
+    timeout = tier_guard.floor_timeout(purpose, timeout)
+
+    def door():
+        """CARD-06b 第 3 条：门放在**写入文本之后、点发送之前**。
+
+        Codex 没有只读档位通道（读档要开卡片点两下，不算只读，适配属 CARD-06c），
+        所以这里显式 `require_readback=False`：结果里带
+        `tier_readback="unsupported"`，不是静默放行。
+        """
+        tier_guard.gate("codex", purpose, reread=None, hwnd=d.hwnd,
+                        require_readback=False)
+        return {}
+
     screen = Screen(verbose=False)
     screen.bind(d.hwnd)
-    return send_and_receive(Conversation(screen, "codex"), prompt, timeout)
+    result = send_and_receive(Conversation(screen, "codex"), prompt, timeout,
+                              pre_send=door if purpose is not None else None)
+    result.setdefault("elapsed", round(time.monotonic() - started, 1))
+    # 超时分型由 conversation.ask 算，这里只保证字段一定在（见 runlog.with_timeout_kind）
+    return runlog.with_timeout_kind(result)
 
 
 # ============================================================ CLI
 
-def main():
-    ap = argparse.ArgumentParser(add_help=True)
-    ap.add_argument("prompt", nargs="?", default=None)
-    ap.add_argument("--new", action="store_true", help="先打开一个新对话")
-    ap.add_argument("--list", "-l", action="store_true")
-    ap.add_argument("--model", default=None)
-    ap.add_argument("--effort", default=None)
-    ap.add_argument("--probe", action="store_true",
-                    help="只打印每个模板的命中分数和窗口内坐标，不点击")
-    ap.add_argument("--size", default=None, help="WxH，默认 1380x1340")
-    ap.add_argument("--pos", default=None, help="X,Y，默认 -1440,-560")
-    ap.add_argument("--timeout", type=float, default=180.0)
-    ap.add_argument("--wait", type=float, default=120.0)
-    ap.add_argument("--idle", type=float, default=2.0)
-    ap.add_argument("--force", action="store_true")
-    a = ap.parse_args()
+# 运行日志（2026-10-31 任务卡04 / 04c）记在 main 里的 done()：
+#   * 正常结束都从 `return done(...)` 出去，漏不掉；
+#   * 异常分三段兜底——入口段（解析参数、等你空闲）、初始化段（04b）、动作段，
+#     三段合起来盖住从入口到出口的每一行；`logged` 是闸门，一次运行只落一行；
+#   * done() 自己吞掉所有异常，写日志失败不影响打印和退出码。
+def main(argv=None):
+    """入口：跑一次，结束时**正好**记一行运行日志，返回它的退出码。
 
-    size, pos = WIN_SIZE, WIN_POS
-    if a.size:
+    2026-10-31 任务卡04：每次运行结束（成功 / 超时 / 报错 / 参数错后的正常退出）
+    都走 `done()` 记一行；`--help` 由 argparse 直接 SystemExit(0)，不记。
+    任务卡04c：`idle_seconds()` 和等待循环原来在保护区外，一炸就一行日志都没有。
+    现在入口段也包进 try：任何一步抛异常都先记一行 stage=exception，再照原样抛出
+    （异常实例、类型、堆栈都不动）。
+    """
+    started = time.time()
+    logged = []
+
+    def done(result, code):
+        """记一行运行日志，再把退出码原样返回——写在 return 里就不会漏。
+
+        失败时把 hint / error 一起交出去（`runlog.failure_note` 兜底），
+        **不写提问和回复正文**。`logged` 是闸门：内层 except 已经记过的，出口
+        兜底不会再记第二行。写日志失败一律吞掉：连 import 失败都不能影响原来的
+        输出和退出码。
+        """
+        if logged:
+            return code
+        logged.append(True)
         try:
-            w, h = a.size.lower().split("x")
-            size = (int(w), int(h))
-        except ValueError:
-            print("--size 要写成 1380x1340")
-            return 2
-    if a.pos:
-        try:
-            x, y = a.pos.split(",")
-            pos = (int(x), int(y))
-        except ValueError:
-            print("--pos 要写成 -1440,-560")
-            return 2
+            import sys
+            from pathlib import Path
+            source = str(Path(__file__).resolve().parents[1])
+            if source not in sys.path:
+                sys.path.insert(0, source)
+            from qi import failure, runlog
+            result = dict(result)                      # 不就地改调用方的 dict
+            result.setdefault("elapsed", round(time.time() - started, 1))
+            # 失败留证（CARD-06b 第 9 条）：tier_*/zoom_*/human_check/input_mismatch
+            failure.record("codex", result, hwnd=_CURRENT_HWND.get("v"))
+            runlog.record("codex", runlog.with_timeout_kind(result))
+        except Exception:                              # noqa: BLE001
+            pass
+        return code
 
-    if not a.prompt and not a.list and not a.model and not a.effort and not a.probe:
-        print(__doc__)
-        print("可选模型：" + ", ".join(MODELS))
-        print("看不到的：" + ", ".join(UNREACHABLE))
-        print("可选强度：" + ", ".join(EFFORTS))
-        return 2
+    # 2026-10-31 任务卡04c：从解析参数到「等你空闲」这一整段原来都在异常保护区外，
+    # idle_seconds() 一抛异常就一行日志都不留。现在整段包进 try——异常先记一行，
+    # 再照原样抛出去；等待循环里 `return done(busy, 4)` 那条正常出口不受影响。
+    try:
+        ap = argparse.ArgumentParser(add_help=True)
+        ap.add_argument("prompt", nargs="?", default=None)
+        ap.add_argument("--new", action="store_true", help="先打开一个新对话")
+        ap.add_argument("--list", "-l", action="store_true")
+        ap.add_argument("--model", default=None)
+        ap.add_argument("--effort", default=None)
+        ap.add_argument("--probe", action="store_true",
+                        help="只打印每个模板的命中分数和窗口内坐标，不点击")
+        ap.add_argument("--size", default=None, help="WxH，默认 1380x1340")
+        ap.add_argument("--pos", default=None, help="X,Y，默认 -1440,-560")
+        ap.add_argument("--timeout", type=float, default=180.0)
+        ap.add_argument("--purpose", choices=["test", "review", "accept"], default=None,
+                        help="test=最低档，review/accept=最高档（发送必填，无默认）")
+        ap.add_argument("--wait", type=float, default=120.0)
+        ap.add_argument("--idle", type=float, default=2.0)
+        ap.add_argument("--force", action="store_true")
+        a = ap.parse_args(argv)                # SystemExit 交给入口段的 except SystemExit
 
-    if not a.force:
-        end = time.time() + a.wait
-        while time.time() < end:
-            if idle_seconds() >= a.idle:
-                break
-            time.sleep(0.2)
-        else:
-            print(json.dumps({"ok": False, "stage": "user_busy",
-                              "hint": f"{a.wait}s 内你一直在用电脑"}, ensure_ascii=False))
-            return 4
+        size, pos = WIN_SIZE, WIN_POS
+        if a.size:
+            try:
+                w, h = a.size.lower().split("x")
+                size = (int(w), int(h))
+            except ValueError:
+                print("--size 要写成 1380x1340")
+                return done({"ok": False, "stage": "bad_args",
+                             "hint": "--size 要写成 1380x1340"}, 2)
+        if a.pos:
+            try:
+                x, y = a.pos.split(",")
+                pos = (int(x), int(y))
+            except ValueError:
+                print("--pos 要写成 -1440,-560")
+                return done({"ok": False, "stage": "bad_args",
+                             "hint": "--pos 要写成 -1440,-560"}, 2)
 
-    hwnd = find_window()
-    if hwnd is None:
-        print("启动 codex …")
-        subprocess.Popen(["explorer.exe", LAUNCH])
-        end = time.time() + 30
-        while time.time() < end and hwnd is None:
-            time.sleep(1.0)
-            hwnd = find_window()
-    if hwnd is None:
-        print(json.dumps({"ok": False, "stage": "no_window"}, ensure_ascii=False))
-        return 1
+        if not a.prompt and not a.list and not a.model and not a.effort and not a.probe:
+            print(__doc__)
+            print("可选模型：" + ", ".join(MODELS))
+            print("看不到的：" + ", ".join(UNREACHABLE))
+            print("可选强度：" + ", ".join(EFFORTS))
+            return done({"ok": False, "stage": "bad_args", "hint": "没有给任何动作"}, 2)
 
-    # 默认**不动**窗口。定位靠模板匹配，所以窗口在哪、多大都不影响
-    # （实测 1380x1340 / 1150x1050 / 980x900 三档下发送键都命中 1.000）。
-    # 只有显式给了 --size / --pos 才去摆——那是"你想让它放在哪"，不是定位需要。
-    if a.size or a.pos:
-        place(hwnd, pos, size)
-        time.sleep(0.8)
+        # 「等你空闲」也在保护区里（04c）：idle_seconds 一炸就先记一行再抛出。
+        if not a.force:
+            end = time.time() + a.wait
+            while time.time() < end:
+                if idle_seconds() >= a.idle:
+                    break
+                time.sleep(0.2)
+            else:
+                busy = {"ok": False, "stage": "user_busy",
+                        "hint": f"{a.wait}s 内你一直在用电脑"}
+                print(json.dumps(busy, ensure_ascii=False))
+                return done(busy, 4)
 
-    win = rect_of(hwnd)
-    if win is None:
-        print(json.dumps({"ok": False, "stage": "no_rect"}, ensure_ascii=False))
-        return 1
-    if win[2] < MIN_W and not a.probe:
-        print(json.dumps({"ok": False, "stage": "window_too_narrow",
-                          "size": [win[2], win[3]], "min_w": MIN_W,
-                          "hint": "窗口太窄时 Codex 会挤压布局，芯片箭头模板会失准"
-                                  "（实测 980 宽时掉到 0.834）。拉宽到 1050 以上，"
-                                  "或 --size 1380x1340"},
-                         ensure_ascii=False))
-        return 1
+    except SystemExit as exc:                          # argparse：--help / 参数错
+        if not exc.code:
+            raise                                      # --help：不记
+        done({"ok": False, "stage": "bad_args", "hint": "参数解析失败"}, exc.code)
+        raise
+    except Exception as e:                             # noqa: BLE001 - 入口异常也要留痕
+        done({"ok": False, "stage": "exception",
+              "error": f"{type(e).__name__}: {e}"}, 0)   # 返回值用不上，记完原样抛
+        raise
 
-    d = Desk(hwnd)
-    pm = locate(d, win, need_composer=not a.probe)
+    # 初始化（找/开窗口、摆位、抓首帧、置前）原来在异常保护区外面：这一段抛异常时
+    # 一行日志都不会留（CARD-04b 打回的第 2 条）。现在整段包进 try，异常照原样往上
+    # 抛——退出方式和堆栈都不变，只是先记一次，带异常类型。
+    try:
+        hwnd = find_window()
+        if hwnd is None:
+            print("启动 codex …")
+            subprocess.Popen(["explorer.exe", LAUNCH])
+            end = time.time() + 30
+            while time.time() < end and hwnd is None:
+                time.sleep(1.0)
+                hwnd = find_window()
+        _CURRENT_HWND["v"] = hwnd            # 失败留证（第 9 条）要截这个窗口
+        if hwnd is None:
+            gone = {"ok": False, "stage": "no_window"}
+            print(json.dumps(gone, ensure_ascii=False))
+            return done(gone, 1)
 
-    if a.probe:
-        # 只读诊断：不需要前台，也不需要控件齐全
-        rows = probe(d, win)
-        print(json.dumps({
-            "window": list(win),
-            "target_threshold": TPL_THR,
-            "templates": [{"name": n,
-                           "score": None if v is None else v[0],
-                           "at_window": None if v is None else list(v[1]),
-                           "hit": (v is not None and v[0] >= TPL_THR)}
-                          for n, v in rows],
-            "missing": pm["missing"],
-        }, ensure_ascii=False, indent=2))
-        return 0
+        # 默认**不动**窗口。定位靠模板匹配，所以窗口在哪、多大都不影响
+        # （实测 1380x1340 / 1150x1050 / 980x900 三档下发送键都命中 1.000）。
+        # 只有显式给了 --size / --pos 才去摆——那是"你想让它放在哪"，不是定位需要。
+        if a.size or a.pos:
+            place(hwnd, pos, size)
+            time.sleep(0.8)
 
-    if pm["missing"]:
-        print(json.dumps({"ok": False, "stage": "controls_not_found",
-                          "missing": pm["missing"],
-                          "hint": "模板没命中。多半是窗口太窄 / 换了主题 / UI 改版。"
-                                  "先跑 --probe 看每个模板的实际分数"},
-                         ensure_ascii=False))
-        return 1
+        # CARD-07 第 3 条：**先恢复、再置前，然后才去找控件**。
+        # 最小化时 GetWindowRect 给的是 -32000 哨兵，拿它算出来的点击位置会飞到屏幕外；
+        # 恢复不了就按退出码 7 收场，绝不带着哨兵坐标继续（CARD-06a (c) 的老约定）。
+        #
+        # 用 globals().get 取：`test_desktop_controls` 会把 main 这一个函数从源码里抠出来
+        # exec（没有包上下文），取不到就跳过——和 qi/choose.py 的 tier_guard 同一招。
+        prepare = globals().get("_prepare_window")
+        if not a.probe and prepare is not None:
+            problem = prepare(hwnd)
+            if problem is not None:
+                print(json.dumps(problem, ensure_ascii=False))
+                return done(problem, 7)
 
-    # 下面要点击了，这时才必须前台
-    if not activate(hwnd):
-        # 提不到前台就**直接退出**，不要继续。系统前台锁（别的程序占着前台）时
-        # SetForegroundWindow 会被拒，这时继续操作等于闭着眼睛点。
-        print(json.dumps({"ok": False, "stage": "not_foreground",
-                          "hint": "窗口提不到前台（你可能正在用别的窗口），已退出，不硬点"},
-                         ensure_ascii=False))
-        return 4
-    time.sleep(0.8)
-    d.grab(fresh=True)                 # 置前后重新抓一帧
-    win = rect_of(hwnd)
-    pm = locate(d, win, need_composer=False)
-    if pm["missing"]:
-        print(json.dumps({"ok": False, "stage": "controls_not_found",
-                          "missing": pm["missing"]}, ensure_ascii=False))
-        return 1
+        win = rect_of(hwnd)
+        # 最小化且轮询 5s 也没恢复：rect_of 会把哨兵矩形(-32000,...)原样还回来。
+        # 这时绝不能拿它算点击位置 —— 退出码 7（CARD-06a (c)）。
+        if win and (win[0] <= -31999 or win[1] <= -31999):
+            mini = {"ok": False, "stage": "window_minimized",
+                    "hint": "窗口最小化且没能恢复，先手动还原窗口再跑"}
+            print(json.dumps(mini, ensure_ascii=False))
+            return done(mini, 7)
+        if win is None:
+            flat = {"ok": False, "stage": "no_rect"}
+            print(json.dumps(flat, ensure_ascii=False))
+            return done(flat, 1)
+        if win[2] < MIN_W and not a.probe:
+            narrow = {"ok": False, "stage": "window_too_narrow",
+                      "size": [win[2], win[3]], "min_w": MIN_W,
+                      "hint": "窗口太窄时 Codex 会挤压布局，芯片箭头模板会失准"
+                              "（实测 980 宽时掉到 0.834）。拉宽到 1050 以上，"
+                              "或 --size 1380x1340"}
+            print(json.dumps(narrow, ensure_ascii=False))
+            return done(narrow, 1)
 
+        d = Desk(hwnd)
+        # CARD-07 第 3 条：先置前（拿真焦点），再找控件。
+        # 原来置前放在第一次 locate 之后——找不到 composer 就直接报 controls_not_found，
+        # 根本没机会让窗口获得焦点；而 Codex 的输入框在失焦时和聚焦时画法不一样，
+        # 越找不到越不获焦，越不获焦越找不到。
+        if not a.probe and not activate(hwnd):
+            # 提不到前台就**直接退出**，不要继续。系统前台锁（别的程序占着前台）时
+            # SetForegroundWindow 会被拒，这时继续操作等于闭着眼睛点。
+            cold = {"ok": False, "stage": "not_foreground",
+                    "hint": "窗口提不到前台（你可能正在用别的窗口），已退出，不硬点"}
+            print(json.dumps(cold, ensure_ascii=False))
+            return done(cold, 4)
+        if not a.probe:
+            time.sleep(0.6)
+            d.grab(fresh=True)              # 置前后重新抓一帧
+            win = rect_of(hwnd) or win
+
+        pm = locate(d, win, need_composer=not a.probe)
+
+        if a.probe:
+            # 只读诊断：不需要前台，也不需要控件齐全
+            rows = probe(d, win)
+            print(json.dumps({
+                "window": list(win),
+                "target_threshold": TPL_THR,
+                "templates": [{"name": n,
+                               "score": None if v is None else v[0],
+                               "at_window": None if v is None else list(v[1]),
+                               "hit": (v is not None and v[0] >= TPL_THR)}
+                              for n, v in rows],
+                "missing": pm["missing"],
+            }, ensure_ascii=False, indent=2))
+            return done({"ok": True, "stage": "probe"}, 0)
+
+        # 第 3 条：composer 模板匹不上（新版 Codex 改了输入框的画法）时，
+        # 先用 UIA 找到输入框、点它一下让它获焦，再找一次模板；
+        # 模板仍然不认，就直接用 UIA 的落点，并把依据写进结果里。
+        # 同样走 globals()：抠出来 exec 的测试里取不到，就保持原样。
+        fallback = globals().get("locate_with_composer_fallback")
+        if fallback is not None and not a.probe:
+            pm = fallback(d, hwnd, win, pm)
+
+        if pm["missing"]:
+            lacked = {"ok": False, "stage": "controls_not_found",
+                      "missing": pm["missing"],
+                      "hint": "模板没命中（UIA 也没找到输入框）。多半是窗口太窄 / 换了主题 / "
+                              "UI 改版。先跑 --probe 看每个模板的实际分数"}
+            print(json.dumps(lacked, ensure_ascii=False))
+            return done(lacked, 1)
+
+        # 下面要点击了，这时才必须前台 —— 已经在上面置前过了，这里只复核一次：
+        # 万一被别人抢回前台，仍然按"不硬点"退出（CARD-06a(c) 的老约定）。
+        if not activate(hwnd):
+            cold = {"ok": False, "stage": "not_foreground",
+                    "hint": "窗口提不到前台（你可能正在用别的窗口），已退出，不硬点"}
+            print(json.dumps(cold, ensure_ascii=False))
+            return done(cold, 4)
+        time.sleep(0.4)
+        d.grab(fresh=True)                 # 置前后重新抓一帧
+        win = rect_of(hwnd) or win
+        basis = pm.get("composer_basis")   # 落点是怎么来的，重找一次也要带着
+        pm = locate(d, win, need_composer=False)
+        if basis:
+            pm["composer_basis"] = basis
+        if pm["missing"]:
+            lacked = {"ok": False, "stage": "controls_not_found", "missing": pm["missing"]}
+            print(json.dumps(lacked, ensure_ascii=False))
+            return done(lacked, 1)
+    except Exception as e:                             # noqa: BLE001 - 初始化异常也要留痕
+        done({"ok": False, "stage": "exception",
+              "error": f"{type(e).__name__}: {e}"}, 0)   # 返回值用不上，记完原样抛
+        raise
+
+    r = {"ok": True, "stage": "noop"}
     try:
         if a.new:
             from pathlib import Path
@@ -1450,13 +1854,24 @@ def main():
                     out.update({"effort": "auto", "form": "preset",
                                 "hint": "Default（自动）模型：卡片里只有"
                                         "「模型+强度」预设条，没有独立档位"})
+                elif form == "unknown":
+                    out.update({"form": "unknown", "effort": "unknown",
+                                "hint": "卡片开着，但轨道上方只有一条文字带，"
+                                        "不是核对过的强度卡形态，档位不敢猜"})
                 elif sl is not None:
                     out.update(_effort_now(d, win, sl))
                 if sl is not None:
-                    left, right, row_y, _knob = sl
-                    d.click(win[0] + (left + right) // 2,
-                            win[1] + row_y - ROW_ABOVE.get(form, SLIDER_ABOVE))
-                    time.sleep(1.3)
+                    # 模型那一行按**文字带**找（见 model_row），不再用固定偏移：
+                    # 26.1027 版卡片比 10-29 那版矮 21px，57px 的偏移点下去会落在
+                    # 档位词上，模型列表根本点不开。
+                    left, right, _row_y, _knob = sl
+                    y = model_row(d, win, sl)
+                    if y is None:
+                        out["model"] = "unknown"
+                        out["hint"] = "卡片里找不到模型行"
+                    else:
+                        d.click(win[0] + (left + right) // 2, win[1] + y)
+                        time.sleep(1.3)
                 if items_visible(d, win):
                     out.update(read_model(d, win))
                     if out.get("model") == "unknown":
@@ -1473,29 +1888,77 @@ def main():
                 d.press("esc")
                 time.sleep(0.4)
             print(json.dumps(out, ensure_ascii=False))
-            return 0 if out.get("model") not in (None, "unknown") else 1
+            code = 0 if out.get("model") not in (None, "unknown") else 1
+            # 2026-10-31 任务卡04c：失败时把**已经打印出去**的那句 hint 也交给日志。
+            # 原来只传 ok/stage，落盘 error 是 null，等于把「打不开卡片」丢了。
+            # 连 hint 都没有的那种（卡片和列表都开了，就是读不出模型）才按现场字段
+            # 补一句，免得 error 又变回 null。
+            row = {"ok": code == 0, "stage": "list"}
+            if code:
+                row["hint"] = (out.get("hint") or out.get("error")
+                               or f"列表读不出模型（model={out.get('model')}）")
+            return done(row, code)
 
         if a.model:
             r = set_model(d, win, a.model)
             print(json.dumps(r, ensure_ascii=False))
             if not r.get("ok"):
-                return 1
+                return done(r, 1)
         if a.effort:
             r = set_effort(d, win, a.effort)
             print(json.dumps(r, ensure_ascii=False))
             if not r.get("ok"):
-                return 1
+                return done(r, 1)
         if a.prompt:
-            r = ask(d, win, a.prompt, a.timeout)
+            # --purpose 必填（无默认）：发送前要拿 *_choose 写下的档位回执过闸
+            if not a.purpose:
+                # 不用 ap.error：那会直接 SystemExit(2)，绕过 done() 的运行日志
+                # （CARD-04 的契约是"每次运行正好一行"）。
+                bad = {"ok": False, "stage": "bad_args",
+                       "hint": "发送必须带 --purpose test|review|accept（无默认）"}
+                print(json.dumps(bad, ensure_ascii=False))
+                return done(bad, 2)
+            r = ask(d, win, a.prompt, a.timeout, a.purpose)
+            if pm.get("composer_basis"):
+                # 输入框落点怎么来的（template / uia_focus+template / uia），留证用
+                r = {**r, "composer_basis": pm["composer_basis"]}
             print(json.dumps(r, ensure_ascii=False))
             if not r.get("ok"):
-                return 1
+                # 档位没确认 = 5（与 docs/exit-codes.md 同一张表）
+                return done(r, 5 if r.get("stage") == "tier_unconfirmed" else 1)
     except RuntimeError as e:
-        print(json.dumps({"ok": False, "stage": "aborted", "hint": str(e)},
-                         ensure_ascii=False))
-        return 4
-    return 0
+        # 自带 stage/code 的异常（ui.UiDocsLost=6、window.WindowMinimized=7）按它自己的码走；
+        # 本脚本不 import 项目包，用鸭子类型认。
+        if hasattr(e, "as_result"):
+            print(json.dumps(e.as_result(), ensure_ascii=False))
+            return done(e.as_result(), getattr(e, "code", 6))
+        r = {"ok": False, "stage": "aborted", "hint": str(e)}
+        print(json.dumps(r, ensure_ascii=False))
+        return done(r, 4)
+    except Exception as e:                             # noqa: BLE001 - 意外异常也留痕
+        done({"ok": False, "stage": "exception",
+              "error": f"{type(e).__name__}: {e}"}, 0)   # 返回值用不上，记完原样抛
+        raise
+    return done(r, 0)
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    # 入口编码（CARD-08 第 1 条）：借 qi.console；装不上就自己 reconfigure，绝不挡住主流程
+    _lock = None
+    try:
+        _source = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        if _source not in sys.path:
+            sys.path.insert(0, _source)
+        from qi.console import setup as _setup_console
+        from qi import uilock as _uilock
+
+        _setup_console()
+        _lock = _uilock
+    except Exception:                                  # noqa: BLE001
+        for _stream in (sys.stdout, sys.stderr):
+            try:
+                _stream.reconfigure(encoding="utf-8", errors="replace")
+            except Exception:                          # noqa: BLE001
+                pass
+    # UI 前台锁（CARD-09a 第 6 条）：和服务端抢同一把 runs\ui.lock
+    raise SystemExit(_lock.run("codex_use", main) if _lock else main())

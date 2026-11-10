@@ -19,6 +19,7 @@ import ctypes
 import subprocess
 import time
 from ctypes import wintypes
+from pathlib import Path
 
 user32 = ctypes.windll.user32
 kernel32 = ctypes.windll.kernel32
@@ -27,6 +28,7 @@ psapi = ctypes.windll.psapi
 PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 SWP_NOACTIVATE = 0x0010
 SWP_SHOWWINDOW = 0x0040
+WM_CLOSE = 0x0010
 
 # 每端：进程可执行文件名 + 启动用的 shell 目标（已安装应用的 AppID）
 APPS: dict[str, dict] = {
@@ -48,7 +50,10 @@ APPS: dict[str, dict] = {
     "workbuddy": {
         "proc": "WorkBuddy.exe",
         "title_hint": "WorkBuddy",
-        "launch": None,          # 就是当前这个应用，通常已经开着
+        # 通常已经开着。CARD-09e 第 2 条要"重启一次"，所以这里必须能启动：
+        # AppID 来自 `Get-StartApps`（2026-11-02 查得 `WorkBuddy.WorkBuddy`），
+        # 和另外三端一样走 shell:AppsFolder；exe 全路径作兜底（restart.py 会用）。
+        "launch": r"shell:AppsFolder\WorkBuddy.WorkBuddy",
     },
 }
 
@@ -72,6 +77,35 @@ def _proc_name(pid: int) -> str:
         return buf.value.rsplit("\\", 1)[-1]
     finally:
         kernel32.CloseHandle(h)
+
+
+def _proc_path(pid: int) -> str:
+    """pid -> 可执行文件全路径。取不到返回空串。
+
+    CARD-09e 第 2 条要用它：WorkBuddy 没有 AppID 可走（`APPS["workbuddy"]["launch"]`
+    是 None），重启只能按"它自己现在这个 exe 的路径"再拉一次。
+    """
+    h = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid))
+    if not h:
+        return ""
+    try:
+        buf = ctypes.create_unicode_buffer(2048)
+        size = wintypes.DWORD(2048)
+        if not kernel32.QueryFullProcessImageNameW(h, 0, buf, ctypes.byref(size)):
+            return ""
+        return buf.value
+    finally:
+        kernel32.CloseHandle(h)
+
+
+def pid_of(hwnd: int) -> int:
+    """窗口句柄 -> 进程号。"""
+    return _pid_of(hwnd)
+
+
+def exe_path(hwnd: int) -> str:
+    """窗口所属进程的可执行文件全路径（重启时要用）。"""
+    return _proc_path(_pid_of(hwnd))
 
 
 def _visible_windows() -> list[tuple[int, str, tuple[int, int, int, int]]]:
@@ -102,17 +136,31 @@ def find_app(name: str, *, min_size: tuple[int, int] = (400, 300)) -> int | None
 
     桌面应用常带几个隐藏的辅助窗口（Electron 的 message window 之类），
     所以要求「可见 + 有尺寸 + 面积最大」。
+
+    2026-11-02 CARD-06a (c)：最小化时 GetWindowRect 给的是哨兵矩形
+    `(-32000,-32000,160,28)`，宽高过不了这里的门槛，于是整个应用被判成"没开"。
+    现在先用 `window.restored_rect()` 试一次——它会恢复最小化窗口并轮询确认；
+    恢复不了才跳过。**不拿 ShowWindow 的返回值当结果。**
     """
+    from . import window as window_mod
+
     spec = APPS.get(name)
     if spec is None:
         raise KeyError(f"未知的桌面端: {name}")
     want = spec["proc"].lower()
     best, area = None, 0
-    for hwnd, _title, (x, y, w, h) in _visible_windows():
-        if w < min_size[0] or h < min_size[1]:
-            continue
+    for hwnd, _title, rect in _visible_windows():
+        # 先认进程再动尺寸：恢复窗口是有副作用的动作，不能对**别的程序**的
+        # 最小化窗口来做（那会把用户自己的窗口弹出来）。
         if _proc_name(_pid_of(hwnd)).lower() != want:
             continue
+        w, h = rect[2], rect[3]
+        if w < min_size[0] or h < min_size[1]:
+            fixed = window_mod.restored_rect(hwnd, timeout=3.0, min_size=min_size)
+            if not fixed:
+                continue
+            rect = fixed
+            w, h = rect[2], rect[3]
         a = w * h
         if a > area:
             area, best = a, hwnd
@@ -130,6 +178,49 @@ def launch(name: str) -> bool:
         return False
     subprocess.Popen(["explorer.exe", spec["launch"]])
     return True
+
+
+def launch_exe(path: str) -> bool:
+    """按可执行文件全路径启动（给没有 AppID 的 WorkBuddy 用，CARD-09e 第 2 条）。"""
+    if not path:
+        return False
+    subprocess.Popen([path], cwd=str(Path(path).parent))
+    return True
+
+
+def close_window(hwnd: int) -> bool:
+    """请求"正常关闭"：往主窗口发 WM_CLOSE，返回是否发出去了。
+
+    不杀进程（`TerminateProcess` 会跳过应用的落盘/清理）；关不关得掉由
+    `wait_closed` 轮询确认——真正判据是窗口/进程有没有消失，不是这里的返回值。
+    """
+    user32.PostMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+    user32.PostMessageW.restype = wintypes.BOOL
+    try:
+        return bool(user32.PostMessageW(int(hwnd), WM_CLOSE, 0, 0))
+    except Exception:                       # noqa: BLE001 - 发不出去按"没关成"处理
+        return False
+
+
+def wait_closed(hwnd: int, *, timeout: float = 20.0, poll: float = 0.4) -> bool:
+    """等窗口真的关掉。进程还在但窗口没了也算关掉（托盘程序就是这样）。"""
+    end = time.time() + timeout
+    while time.time() < end:
+        if not user32.IsWindow(int(hwnd)):
+            return True
+        time.sleep(poll)
+    return not user32.IsWindow(int(hwnd))
+
+
+def wait_window(name: str, *, timeout: float = 30.0, poll: float = 1.0) -> int | None:
+    """等应用的可见主窗口出现。"""
+    end = time.time() + timeout
+    while time.time() < end:
+        hwnd = find_app(name)
+        if hwnd is not None:
+            return hwnd
+        time.sleep(poll)
+    return find_app(name)
 
 
 def ensure_app(name: str, *, wait: float = 25.0, verbose: bool = True) -> int | None:

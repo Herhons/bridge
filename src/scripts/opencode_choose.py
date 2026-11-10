@@ -5,9 +5,19 @@
 用法：
     python opencode_choose.py --list                      读当前模型和强度
     python opencode_choose.py --model "Claude Opus 5.5"   只切模型（名字给够精确）
+    python opencode_choose.py --model glm_53_flash_free   切到 GLM-5.3-Flash Free
     python opencode_choose.py --effort max                只调强度
     python opencode_choose.py --model deepseek_v41_flash_free --effort low
     python opencode_choose.py --probe                     只报模板命中，不点击
+
+## 可读回的模型（模板库只覆盖这三个）
+
+    glm_53_flash_free          GLM-5.3-Flash Free        （CARD-06c 第 6 条加的）
+    deepseek_v41_flash_free    DeepSeek V4.1 Flash Free
+    claude_opus_55             Claude Opus 5.5
+
+GLM 这一档只用于 `--purpose accept_lite`（验链路连通性），**不进 accept**：
+accept 仍是 Claude Opus 5.5 那一档，验收结论也要写 PASS(GLM-lite) 以示区分。
 
 ## 界面结构（2026-10-29 实测，窗口 1380x1340 / 也验过 1380x1196）
 
@@ -81,10 +91,12 @@ EFFORT_ALIAS = {"mid": "high", "medium": "high", "ultra": "max", "xhigh": "max"}
 # read_model 的模板库：key = 给调用方看的名字，value = 模板名
 # 模型选择只接受下列可读回验证的标识或完整显示名
 MODELS = {
+    "glm_53_flash_free": "oc_m_glm53free",
     "deepseek_v41_flash_free": "oc_m_deepseek41free",
     "claude_opus_55": "oc_m_claude_opus55",
 }
 MODEL_LABELS = {
+    "glm_53_flash_free": "GLM-5.3-Flash Free",
     "deepseek_v41_flash_free": "DeepSeek V4.1 Flash Free",
     "claude_opus_55": "Claude Opus 5.5",
 }
@@ -192,14 +204,61 @@ def find_window():
     return best
 
 
-def rect_of(hwnd):
-    if not hwnd:
-        return None
+def _win32_size_api():
+    """最小化相关入口：句柄必须声明成 HWND，否则 64 位句柄会 OverflowError。"""
+    if getattr(_win32_size_api, "ready", False):
+        return
+    user32.IsIconic.argtypes, user32.IsIconic.restype = [wintypes.HWND], wintypes.BOOL
+    user32.ShowWindow.argtypes = [wintypes.HWND, ctypes.c_int]
+    user32.ShowWindow.restype = wintypes.BOOL
+    user32.GetWindowRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
+    user32.GetWindowRect.restype = wintypes.BOOL
+    _win32_size_api.ready = True
+
+
+SENTINEL = -32000           # 最小化时 GetWindowRect 的哨兵坐标
+MIN_WIN_W, MIN_WIN_H = 200, 120
+
+
+def _raw_rect(hwnd):
     r = wintypes.RECT()
     if not user32.GetWindowRect(int(hwnd), ctypes.byref(r)):
         return None
     return (int(r.left), int(r.top), int(r.right - r.left), int(r.bottom - r.top))
 
+
+def _usable_rect(rect):
+    """不是哨兵、宽高过阈值。只判 w>0 不够：最小化时是 160x28 这种"小但正"的尺寸。"""
+    if not rect:
+        return False
+    x, y, w, h = rect
+    return x > SENTINEL + 1 and y > SENTINEL + 1 and w >= MIN_WIN_W and h >= MIN_WIN_H
+
+
+def rect_of(hwnd):
+    """窗口矩形。最小化先恢复并**轮询确认**（CARD-06a (c) / 06b 第 7 条）。
+
+    **统一走 `qi.window.restore`**：网页端和四个桌面端同一份实现，判据只有
+    "IsIconic 变假 + 矩形脱离 -32000 + 宽高过阈值"。恢复不了就把原矩形还回去，
+    由调用方按退出码 7 处理。
+    """
+    if not hwnd:
+        return None
+    r = _raw_rect(hwnd)
+    if r is not None and _usable_rect(r):
+        return r
+    try:
+        from pathlib import Path
+        source = str(Path(__file__).resolve().parents[1])
+        if source not in sys.path:
+            sys.path.insert(0, source)
+        from qi import window as window_mod
+        facts = window_mod.restore(int(hwnd), timeout=5.0)
+        if facts["ok"]:
+            return tuple(facts["rect"])
+    except Exception:                       # noqa: BLE001 - 退回原判据，别让取矩形带崩
+        pass
+    return r
 
 def place(hwnd, pos, size):
     user32.SetWindowPos(int(hwnd), 0, int(pos[0]), int(pos[1]), int(size[0]),
@@ -745,6 +804,25 @@ def probe(d, win):
             (pan[0] - win[0], pan[1] - win[1], pan[2], pan[3])}
 
 
+def _record_receipt(hwnd, dimension, target, readback, raw):
+    """写档位回执（CARD-06a (a)）。**失败一律不影响选择结果。**
+
+    本脚本刻意不 import 项目包（单文件契约），所以按需把 src 挂上 sys.path。
+    读不回档位时 readback 传 None：use 会因此拒发——"点了但没读回来"
+    本来就不能当确认过。
+    """
+    try:
+        from pathlib import Path
+        source = str(Path(__file__).resolve().parents[1])
+        if source not in sys.path:
+            sys.path.insert(0, source)
+        from qi import tier_guard
+        tier_guard.record_choice("opencode", target=target, readback=readback,
+                                 dimension=dimension, hwnd=hwnd, raw=raw)
+    except Exception:                                  # noqa: BLE001 - 回执不是主流程
+        pass
+
+
 def main():
     ap = argparse.ArgumentParser(add_help=True)
     ap.add_argument("--list", "-l", action="store_true")
@@ -785,6 +863,14 @@ def main():
         return 1
 
     win = rect_of(hwnd)
+    # 最小化且轮询 5s 也没恢复：rect_of 会把哨兵矩形(-32000,...)原样还回来。
+    # 这时绝不能拿它算点击位置 —— 退出码 7（CARD-06a (c)）。
+    if win and (win[0] <= -31999 or win[1] <= -31999):
+        print(json.dumps({"ok": False, "stage": "window_minimized",
+                          "hint": "窗口最小化且没能恢复，先手动还原窗口再跑"},
+                         ensure_ascii=False))
+        return 7
+
     d = Desk(hwnd)
 
     if a.probe:
@@ -813,11 +899,19 @@ def main():
             print(json.dumps(r, ensure_ascii=False))
             if not r.get("ok"):
                 return 1
+            rec = globals().get("_record_receipt")
+            if callable(rec):
+                rec(hwnd, "model", r.get("want") or a.model,
+                    None if r.get("after") in (None, "unknown") else r.get("after"), r)
         if a.effort:
             r = set_effort(d, win, a.effort)
             print(json.dumps(r, ensure_ascii=False))
             if not r.get("ok"):
                 return 1
+            rec = globals().get("_record_receipt")
+            if callable(rec):
+                rec(hwnd, "effort", r.get("want") or a.effort,
+                    None if r.get("after") in (None, "unknown") else r.get("after"), r)
     except RuntimeError as e:
         print(json.dumps({"ok": False, "stage": "aborted", "hint": str(e)},
                          ensure_ascii=False))
@@ -826,4 +920,22 @@ def main():
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    # 入口编码（CARD-08 第 1 条）：借 qi.console；装不上就自己 reconfigure，绝不挡住主流程
+    _lock = None
+    try:
+        _source = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        if _source not in sys.path:
+            sys.path.insert(0, _source)
+        from qi.console import setup as _setup_console
+        from qi import uilock as _uilock
+
+        _setup_console()
+        _lock = _uilock
+    except Exception:                                  # noqa: BLE001
+        for _stream in (sys.stdout, sys.stderr):
+            try:
+                _stream.reconfigure(encoding="utf-8", errors="replace")
+            except Exception:                          # noqa: BLE001
+                pass
+    # UI 前台锁（CARD-09f 第 1 条）：choose 也要和服务端/use 抢同一把 runs\ui.lock
+    raise SystemExit(_lock.run("opencode_choose", main) if _lock else main())

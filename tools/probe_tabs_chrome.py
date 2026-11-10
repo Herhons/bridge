@@ -15,7 +15,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from qi import Screen  # noqa: E402
+from qi import Screen, uilock  # noqa: E402
 
 user32 = ctypes.windll.user32
 
@@ -78,4 +78,5 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    # UI 前台锁（CARD-09f）：真机探针也要全程持有 runs\ui.lock
+    raise SystemExit(uilock.run("probe_tabs_chrome", main))

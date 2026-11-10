@@ -12,7 +12,7 @@ from ctypes import wintypes
 import cv2
 
 sys.path.insert(0, "src")
-from qi import Screen  # noqa: E402
+from qi import Screen, uilock  # noqa: E402
 
 u = ctypes.windll.user32
 SWP_NOACTIVATE = 0x0010
@@ -88,4 +88,5 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # UI 前台锁（CARD-09f）：真机探针也要全程持有 runs\ui.lock
+    sys.exit(uilock.run("probe_desktop", main))

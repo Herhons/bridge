@@ -18,7 +18,7 @@ _SRC = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _SRC not in sys.path:
     sys.path.insert(0, _SRC)
 
-from qi import Library  # noqa: E402
+from qi import Library, console, uilock  # noqa: E402
 from qi.choose import Chooser, cli  # noqa: E402
 
 CFG = Chooser(
@@ -49,4 +49,5 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    console.setup()          # 入口编码：GBK 控制台不再被 \u200b 打崩（CARD-08 第 1 条）
+    raise SystemExit(uilock.run("grok_choose", main))

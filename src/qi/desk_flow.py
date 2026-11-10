@@ -169,34 +169,43 @@ def ask(s: Screen, site: DeskSite, prompt: str, *, timeout: float = 180.0,
     return send_and_receive(Conversation(s, site.name), prompt, timeout)
 
 
+from . import runlog  # noqa: E402
+
+
 def cli(site: DeskSite, argv: list[str] | None = None) -> int:
     """`*_use.py` 的统一入口。"""
+    import argparse
     argv = list(sys.argv[1:] if argv is None else argv)
-    if not argv or argv[0] in ("-h", "--help"):
-        print(f"用法：python {site.name}_use.py \"问题\" [--timeout 180]")
-        return 2
-    prompt = argv[0]
-    timeout = 180.0
-    if "--timeout" in argv:
-        i = argv.index("--timeout")
-        if i + 1 < len(argv):
-            try:
-                timeout = float(argv[i + 1])
-            except ValueError:
-                pass
+    # 第7项：和网页端一样用 argparse，参数顺序随意，--timeout 写错直接报错
+    idle_need, idle_wait, force, rest = guard.parse_guard_args(argv)
+    parser = argparse.ArgumentParser(prog=f"{site.name}_use.py")
+    parser.add_argument("prompt", help="完整提问")
+    parser.add_argument("--timeout", type=float, default=180.0)
+    try:
+        args = parser.parse_args(rest)
+        if not args.prompt.strip() or args.timeout <= 0:
+            parser.error("提问不能为空，--timeout 必须大于 0")
+    except SystemExit as exc:
+        return 2 if exc.code else 0
+    prompt, timeout = args.prompt, args.timeout
     # 和网页端一致：默认等你空闲 2 秒才动手，最多等 120 秒
-    idle_need, idle_wait, force, rest = guard.parse_guard_args(argv[1:])
     if not guard.guard(idle_need, idle_wait, force):
         return 4
     s = open_bind(site.name)
     if s is None:
-        print(json.dumps({"ok": False, "stage": "no_window"}, ensure_ascii=False))
+        r = {"ok": False, "stage": "no_window"}
+        runlog.record(site.name, r)
+        print(json.dumps(r, ensure_ascii=False))
         return 1
+    started = time.monotonic()
     try:
         r = ask(s, site, prompt, timeout=timeout)
     except Exception as e:                       # noqa: BLE001
-        print(json.dumps({"ok": False, "stage": "exception", "error": str(e)},
-                         ensure_ascii=False))
+        r = {"ok": False, "stage": "exception", "error": str(e)}
+        runlog.record(site.name, r)
+        print(json.dumps(r, ensure_ascii=False))
         return 1
+    r.setdefault("elapsed", round(time.monotonic() - started, 1))
+    runlog.record(site.name, r)
     print(json.dumps(r, ensure_ascii=False))
     return 0 if r.get("ok") else 1

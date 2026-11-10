@@ -9,7 +9,9 @@ import sys
 from ctypes import wintypes
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src", "scripts"))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src"))
 import codex_use as C  # noqa: E402  # 复用 DPI 声明 / PrintWindow 截图 / 进程名
+from qi import uilock  # noqa: E402
 
 import cv2  # noqa: E402
 
@@ -68,4 +70,5 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    # UI 前台锁（CARD-09f）：真机探针也要全程持有 runs\ui.lock
+    uilock.run("probe_desks", main)

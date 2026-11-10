@@ -26,9 +26,10 @@ _SRC = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _SRC not in sys.path:
     sys.path.insert(0, _SRC)
 
-from qi import ForegroundLost, Library, Screen  # noqa: E402
+from qi import ForegroundLost, Library, Screen, console, uilock  # noqa: E402
 from qi.browser import ensure_site  # noqa: E402
-from qi import guard  # noqa: E402
+from qi import failure, guard  # noqa: E402
+from qi import zoom as zoom_mod  # noqa: E402
 
 # 每个开关一张定位图（截"关"的样子即可，两态都能定位到）
 TEMPLATES = {"think": "ds_think", "search": "ds_search"}
@@ -133,6 +134,23 @@ def usage(name: str) -> None:
     print("  （发提问请用 deepseek_use.py）")
 
 
+def _record_receipt(hwnd, dimension, target, readback, raw):
+    """写档位回执（CARD-06a (a)）。**失败一律不影响选择结果。**
+
+    本脚本刻意不 import 项目包（单文件契约），所以按需把 src 挂上 sys.path。
+    """
+    try:
+        from pathlib import Path
+        source = str(Path(__file__).resolve().parents[1])
+        if source not in sys.path:
+            sys.path.insert(0, source)
+        from qi import tier_guard
+        tier_guard.record_choice("deepseek", target=target, readback=readback,
+                                 dimension=dimension, hwnd=hwnd, raw=raw)
+    except Exception:                                  # noqa: BLE001 - 回执不是主流程
+        pass
+
+
 def main() -> int:
     name = os.path.basename(__file__)
     need, wait, force, rest = guard.parse_guard_args(list(sys.argv[1:]))
@@ -165,6 +183,8 @@ def main() -> int:
         return 1
     time.sleep(1.2)
     try:
+        # 页面缩放预检（CARD-06b 第 6 条）：非 100% 先 Ctrl+0，仍不是就退出
+        zoom_mod.ensure(s, verbose=True)
         if o["list"]:
             print(json.dumps(list_state(s), ensure_ascii=False))
             return 0
@@ -179,12 +199,27 @@ def main() -> int:
             print(json.dumps(r, ensure_ascii=False))
             if not r.get("ok"):
                 return 1
+            # 只有「深度思考」算档位（本端没有模型选择器）；搜索开关不进档位表。
+            # 回执失败不影响选择结果（CARD-06a (a)）。
+            if kind == "think":
+                try:
+                    rec = globals().get("_record_receipt")
+                    if callable(rec):
+                        rec(hwnd, "think", want, r.get("after"), r)
+                except Exception:                      # noqa: BLE001
+                    pass
         return rc
     except ForegroundLost as e:
         print("失败:", json.dumps({"ok": False, "stage": "user_took_over",
                                   "hint": str(e)}, ensure_ascii=False))
         return 4
+    except zoom_mod.ZoomNot100 as e:
+        result = {**e.as_result(), "ok": False}
+        failure.record("deepseek", result, screen=s, hwnd=hwnd)
+        print("失败:", json.dumps(result, ensure_ascii=False))
+        return e.code
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    console.setup()          # 入口编码：GBK 控制台不再被 \u200b 打崩（CARD-08 第 1 条）
+    raise SystemExit(uilock.run("deepseek_choose", main))

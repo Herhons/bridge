@@ -4,15 +4,16 @@
     python chatgpt_choose.py --list
     python chatgpt_choose.py --writer chat|work
     python chatgpt_choose.py --model gpt61_terra        （模型分模式，先定 --writer）
-    python chatgpt_choose.py --effort low|mid|high|xhigh|max
-    python chatgpt_choose.py --model gpt6_sol --effort max
+    python chatgpt_choose.py --effort low|mid|high|xhigh|max     （工作模式五档）
+    python chatgpt_choose.py --effort instant|mid|high           （聊天模式三档）
+    python chatgpt_choose.py --model gpt6 --effort high
 
 ## 弹层是**两层**，不是一层（2026-10-29 用户指出，实测确认）
 
-    点芯片 / Ctrl+Shift+M
-        └─> effort 层：一条滑杆 + 一行「当前模型名 ›」
-                点那行模型名
-                    └─> models 层：模型列表（9 项）
+    点芯片（`选择 ChatGPT 模型`）
+        └─> effort 层：一条滑杆 + 一项「选择模型」
+                点「选择模型」
+                    └─> models 层：模型列表（聊天 2 项 / 工作 9 项）
                 选完模型
                     └─> 自动退回 effort 层   ← 这里是调强度的位置
     拖滑杆调档位 -> Esc 关闭 -> 强度才生效（芯片这时才显示「GPT-6 Astra 高」）
@@ -20,11 +21,20 @@
 旧版把这两层当成一层：选完模型就按 Esc 把整个弹层收掉，等于把第二步吃掉了。
 表现就是「选完 default 之后老断」「调不了强度」。
 
+## CARD-06c 第 4 条：开弹层**点芯片**，不再按 Ctrl+Shift+M
+
+Ctrl+Shift+M 会被 Chrome 截成「个人资料菜单」，弹层根本没开，后面全链路都在
+错的前提上跑。现在改成：
+  · 从 UIA 控件树取 `选择 ChatGPT 模型` 按钮的**真实矩形**，点它的中心；
+  · 点前**唯一性校验**：0 个 -> 先点一下输入框再找（输入框空/未聚焦时芯片可能没渲染），
+    多于 1 个 -> 直接失败，不猜点哪一个；
+  · 点前**距离校验**：点击点不能落在相邻的听写/语音/发送按钮矩形里，
+    与右下角橙钮（麦克风/发送键同一个槽位）至少 60px；
+  · 点后**复核**：等一拍再判一次 `_layer()`，仍 `closed` 就是没开，判失败。
+点击预算/最小间隔/橙色像素三道闸仍然走 `safe_click`。
+
 ## 位置都是量出来的，不是猜的
 
-    · 打开弹层：点输入框空白聚焦 -> Ctrl+Shift+M（芯片 tooltip 上写的快捷键）。
-      **不点芯片**：芯片就在橙钮左边 44~110px，麦克风在 43px，偏移量算错一次就录音
-      （-40 / -44 各踩过一次）。
     · 滑杆：轨道 x=954..1239，滑块圆心 y = 橙钮 y + 94。
       滑块圆心 x = 橙色块右端 - 16，这条对最低档（橙色只有滑块本身）也成立。
     · 五档等分：981=轻度 1041=中 1102=高 1163=极高 1223=Max。
@@ -55,7 +65,8 @@ _SRC = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _SRC not in sys.path:
     sys.path.insert(0, _SRC)
 
-from qi import ForegroundLost, Library, Screen, guard  # noqa: E402
+from qi import ForegroundLost, Library, Screen, console, guard, uilock  # noqa: E402
+from qi import zoom as zoom_mod  # noqa: E402
 from qi.browser import ensure_site  # noqa: E402
 from qi.flow import Site, _open_new_chat  # noqa: E402
 
@@ -92,9 +103,166 @@ MODELS = {
 NO_READ = {"default"}
 
 CHECK = "gpt_check"                  # 列表里当前项左边/右边的勾
+
+# ---------------------------------------------------------------- UIA 只读档位（CARD-06b 第 10 条）
+# 2026-11-02 实测（125% 缩放、聊天模式）：
+#   芯片（关）：ButtonControl `选择 ChatGPT 模型` + 子 TextControl `高`
+#   强度弹层开：同按钮子文本变成 `思考强度`，另有一条
+#               `高，第 3 项，共 3 项。`（滑杆的可访问值，UIA 直接读数）
+#   模型列表开：RadioButtonControl `GPT-6` / `GPT-5.6 Sol`，SelectionItemPattern.IsSelected
+# 这些都比模板可靠：模板会随缩放/改版失配，名字和选中态不会。
+CHIP_BUTTON = "选择 ChatGPT 模型"
+
+# 档位词 -> key。长词在前，避免「极高」先命中「高」。
+# 中英都认（CARD-06c 第 1 条）；聊天模式的「即时」= instant，工作模式的「轻度」= low。
+_CHIP_EFFORT_WORDS = (
+    ("极高", "xhigh"), ("Extra High", "xhigh"), ("extra high", "xhigh"),
+    ("即时", "instant"), ("Instant", "instant"), ("instant", "instant"),
+    ("轻度", "low"), ("Light", "low"), ("light", "low"),
+    ("中", "mid"), ("Medium", "mid"), ("medium", "mid"),
+    ("高", "high"), ("High", "high"), ("high", "high"),
+    ("Max", "max"), ("max", "max"),
+)
+
+
+def _name_key(text: str) -> str:
+    """显示名归一：去掉括号注释与空白，用来把 UIA 名字对回内部 key。
+
+    `GPT-6（默认）` -> `gpt-6`，`GPT-6` -> `gpt-6`；
+    `默认（推荐模型集）` -> `默认`。
+    """
+    import re
+
+    raw = str(text or "").replace("（", "(").replace("）", ")")
+    raw = re.sub(r"\([^)]*\)", "", raw)
+    return "".join(raw.split()).lower()
+
+
+def _doc_root(s: Screen):
+    from qi import ui
+
+    control, _url = ui.document(s.target_hwnd, "chatgpt")
+    return ui.tree(control)
+
+
+def _chip_text(s: Screen, root=None) -> str:
+    """芯片上的文字（`高` / `GPT-6 Astra 高` / 弹层开着时的 `思考强度`）。读不到给空串。"""
+    root = root if root is not None else _doc_root(s)
+    for node in root.walk():
+        if node.kind != "ButtonControl" or (node.name or "").strip() != CHIP_BUTTON:
+            continue
+        parts = []
+        for child in node.walk():
+            if child is node:
+                continue
+            if child.kind == "TextControl" and child.name:
+                parts.append(child.name.strip())
+        return " ".join(parts)
+    return ""
+
+
+def _effort_of_text(text: str) -> str | None:
+    for word, key in _CHIP_EFFORT_WORDS:
+        if word in (text or ""):
+            return key
+    return None
+
+
+def read_chip_effort(s: Screen) -> dict:
+    """只读芯片，返回 {"effort","raw","source"}。不点任何东西。"""
+    text = _chip_text(s)
+    return {"effort": _effort_of_text(text), "raw": text,
+            "source": "uia_chip" if text else "none"}
+
+
+def _announce_effort(s: Screen, root=None) -> dict:
+    """弹层开着时读滑杆的可访问值：`高，第 3 项，共 3 项。` -> high。
+
+    这不是"从键盘位置推断"：它是 UIA 把滑杆当前值念出来的文本，属于本次读数。
+    """
+    root = root if root is not None else _doc_root(s)
+    for node in root.walk():
+        if node.kind != "TextControl":
+            continue
+        name = (node.name or "").strip()
+        if "项，共" not in name and "项,共" not in name:
+            continue
+        head = name.split("，", 1)[0].split(",", 1)[0].strip()
+        key = _effort_of_text(head)
+        if key:
+            return {"effort": key, "raw": name, "source": "uia_slider"}
+    return {"effort": None, "raw": "", "source": "none"}
+
+
+def _ui_model_rows(s: Screen) -> list:
+    """当前列表里的模型项（RadioButton），返回 [(key, name, rect)]。
+
+    不限 writer：聊天/工作的模型名合起来认，认不出名字的跳过。
+    """
+    keys = {}
+    for table in MODELS.values():
+        keys.update({_name_key(display): key for key, (display, _tpl) in table.items()})
+    out = []
+    try:
+        root = _doc_root(s)
+    except Exception:                                  # noqa: BLE001
+        return out
+    for node in root.walk():
+        if node.kind != "RadioButtonControl":
+            continue
+        key = keys.get(_name_key(node.name))
+        if key is None:
+            continue
+        try:
+            rect = node.control.BoundingRectangle
+            box = (rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top)
+        except Exception:                              # noqa: BLE001
+            box = None
+        out.append((key, node.name, box))
+    return out
+
+
+def read_model_uia(s: Screen, writer: str) -> dict:
+    """读模型列表里的选中项（RadioButton + IsSelected）。列表必须已经开着。"""
+    keys = {_name_key(display): key
+            for key, (display, _tpl) in MODELS.get(writer, {}).items()}
+    selected = []
+    try:
+        root = _doc_root(s)
+    except Exception as exc:                           # noqa: BLE001 - 读不到就说读不到
+        return {"model": "unknown", "reason": f"uia_error: {type(exc).__name__}", "source": "uia"}
+    for node in root.walk():
+        if node.kind != "RadioButtonControl":
+            continue
+        key = keys.get(_name_key(node.name))
+        if key is None:
+            continue
+        try:
+            is_on = bool(node.control.GetSelectionItemPattern().IsSelected)
+        except Exception:                              # noqa: BLE001 - 没这个模式就跳过
+            continue
+        if is_on:
+            selected.append((key, node.name))
+    if len(selected) == 1:
+        return {"model": selected[0][0], "name": selected[0][1], "source": "uia"}
+    if len(selected) > 1:
+        return {"model": "unknown", "reason": "multiple_selected",
+                "names": [n for _k, n in selected], "source": "uia"}
+    return {"model": "unknown", "reason": "no_selected_radio", "source": "uia"}
+
+
 COMPOSER = "gpt_composer"            # 输入框左下角那个「+」
 COMPOSER_DX, COMPOSER_DY = 250, -20  # 从「+」点到输入框空白处（只为了聚焦）
-CHIP_HOTKEY = ("ctrl", "shift", "m")  # 芯片 tooltip 上写的快捷键
+
+# CARD-06c 第 4 条：点芯片前要验的距离。
+# 芯片和「听写/语音/发送」是同一行相邻的按钮（实测芯片右边缘与听写按钮左边缘只差 1px），
+# 所以点之前必须确认落点在芯片自己里面、且不在任何一个相邻按钮的矩形里。
+CHIP_NEAR_NAMES = ("听写", "开始语音", "发送", "发送消息", "停止", "停止生成", "语音输入")
+CHIP_MIN_VOICE = 60                  # 与右下角橙钮（麦克风/发送键同槽位）的最小距离
+CHIP_BOX_LIMIT = (420, 90)           # 芯片矩形的合理范围（宽, 高），超出就是读错了控件
+
+# 最近一次「开弹层」失败的原因，给上层拼 stage/reason 用（不改 open_effort 的 bool 契约）
+OPEN_STATE: dict = {}
 
 # ---------------------------------------------------------------- 操作节流
 # 2026-10-29：为了"稳"加循环重试，同一个位置半分钟点了十几次，把工作额度打到剩 3%。
@@ -207,25 +375,47 @@ def page_kind(s: Screen) -> str:
 
     模式按钮只在新聊天页出现，输入框也在页面中间；
     会话页没有「聊天/工作」，输入框贴底。拿新页的坐标去会话页点，必然点空。
+
+    只在**页头那一条**里找（见 `TAB_BAND_DY`）：侧栏里也有「聊天」，
+    全窗口找会让会话页永远被认成新聊天页。
     """
-    win = _win(s)
-    if win is None:
+    region = _tab_region(s)
+    if region is None:
         return "session"
     for tpl in TAB_WORDS.values():
-        if s.find(tpl, threshold=0.75, region=win) is not None:
+        if s.find(tpl, threshold=0.75, region=region) is not None:
             return "new"
     return "session"
 
 
 # ---------------------------------------------------------------- 模式读写
-def _tab_boxes(s: Screen) -> dict:
-    """两个模式词各自的 bbox（屏幕坐标），各自独立匹配。"""
+# 模式词只在页头这一条横条里。**不能全窗口找**：侧栏第一个菜单项也叫「聊天」
+# （实测 y=347，而模式按钮在 y=295），全窗口找会在工作模式下把侧栏那一项当成
+# 未选中的聊天词，两个词墨色都是 13，直接读成 unknown。
+# 100% 缩放下实测：窗口内 y=+129..165 是模式按钮，侧栏从 +186 起。
+TAB_BAND_DY, TAB_BAND_H = 95, 85
+TAB_ROW_TOL = 14                      # 两个词必须同一行，否则视为没找到
+
+
+def _tab_region(s: Screen):
     win = _win(s)
+    if win is None:
+        return None
+    return (win[0], win[1] + TAB_BAND_DY, win[2], TAB_BAND_H)
+
+
+def _tab_boxes(s: Screen) -> dict:
+    """两个模式词各自的 bbox（屏幕坐标），各自独立匹配，且必须在同一行。"""
+    region = _tab_region(s)
+    if region is None:
+        return {}
     out = {}
     for key, tpl in TAB_WORDS.items():
-        m = s.find(tpl, threshold=0.75, region=win)
+        m = s.find(tpl, threshold=0.75, region=region)
         if m is not None:
             out[key] = m
+    if len(out) == 2 and abs(out["chat"].center[1] - out["work"].center[1]) > TAB_ROW_TOL:
+        return {}                      # 匹到了两条不同的横条：宁可不认
     return out
 
 
@@ -237,13 +427,7 @@ def _ink(s: Screen, box) -> int:
     return int(cv2.cvtColor(img, cv2.COLOR_BGR2GRAY).min())
 
 
-def read_writer(s: Screen) -> dict:
-    """读当前是聊天还是工作：比两个词**各自**的墨色。
-
-    选中那个是近黑（实测 13），未选是灰（实测 93），差 80，很干净。
-    之所以不用整组按钮的像素差：两态胶囊底色只差十几个灰阶（10~12），
-    淹没在噪声里；也不用固定框取样：按钮纵向会漂 22px，框会切到边框上。
-    """
+def _read_writer_once(s: Screen) -> dict:
     boxes = _tab_boxes(s)
     if len(boxes) < 2:
         miss = [k for k in TAB_WORDS if k not in boxes]
@@ -257,6 +441,71 @@ def read_writer(s: Screen) -> dict:
     if w <= TAB_INK_ON and c - w >= TAB_INK_GAP:
         return {"writer": "work", **info}
     return {"writer": "unknown", "hint": "两个词墨色一样，认不出哪个被选中", **info}
+
+
+# 模式按钮的可访问名。实测（2026-11-02）：两个都是 ButtonControl，且都带
+# TogglePattern——选中的那个 ToggleState=1、未选的是 0。这比"比墨色"稳得多：
+# 不受缩放影响，也不会被 Chrome 的标签页悬停预览卡片挡住（那张卡会盖住页面
+# 左上角，实测能让 work 模式的墨色判据整个读成 unknown）。
+WRITER_LABELS = {"chat": "聊天", "work": "工作"}
+
+
+def _toggle_state(node):
+    try:
+        return int(node.control.GetTogglePattern().ToggleState)
+    except Exception:                                  # noqa: BLE001 - 没这个模式
+        return None
+
+
+def read_writer_uia(s: Screen) -> dict:
+    """用 TogglePattern 读当前模式。读不准（不是恰好一开一关）就给 unknown。"""
+    try:
+        root = _doc_root(s)
+    except Exception as exc:                           # noqa: BLE001
+        return {"writer": "unknown", "hint": f"读不到控件树：{type(exc).__name__}"}
+    states: dict[str, int] = {}
+    for node in root.walk():
+        if node.kind != "ButtonControl":
+            continue
+        name = (node.name or "").strip()
+        key = next((k for k, label in WRITER_LABELS.items() if name == label), None)
+        if key is None or key in states:
+            continue
+        state = _toggle_state(node)
+        if state is not None:
+            states[key] = state
+    on = [k for k, v in states.items() if v == 1]
+    off = [k for k, v in states.items() if v == 0]
+    if len(on) == 1 and len(off) == 1:
+        return {"writer": on[0], "source": "uia_toggle", "toggle": states}
+    return {"writer": "unknown", "source": "uia_toggle", "toggle": states,
+            "hint": f"TogglePattern 不是一开一关（{states or '没读到'}）"}
+
+
+def read_writer(s: Screen) -> dict:
+    """读当前是聊天还是工作。
+
+    **UIA 的 TogglePattern 优先**（不受缩放/遮挡影响），读不到才回落到"比两个词
+    的墨色"：选中那个是近黑（实测 13），未选是灰（实测 93），差 80。
+    之所以不用整组按钮的像素差：两态胶囊底色只差十几个灰阶（10~12），淹没在噪声里。
+
+    **读不到要再等一拍**：刚切完模式/刚开完新对话时页面还在重排，第一下
+    常常读不成（实测切到 work 后立刻读会 unknown），直接返回 unknown 会让
+    紧跟其后的 `--model` 报 no_writer。最多试 3 次、间隔 0.6s。
+    """
+    last = {"writer": "unknown"}
+    for attempt in range(3):
+        uia = read_writer_uia(s)
+        if uia.get("writer") in ("chat", "work"):
+            return uia
+        last = _read_writer_once(s)
+        if last.get("writer") in ("chat", "work"):
+            last.setdefault("source", "ink")
+            return last
+        if attempt < 2:
+            time.sleep(0.6)
+    last.setdefault("uia", read_writer_uia(s))
+    return last
 
 
 def choose_writer(s: Screen, key: str) -> dict:
@@ -297,6 +546,8 @@ def _items_visible(s: Screen, writer: str) -> bool:
     不能只凭"某一项命中"：页面上别处也会出现「默认」这类词（实测误判成已开，
     后面全盘读空）。判据：找到勾，或至少两项模型标题同时命中。
     """
+    if _ui_model_rows(s):
+        return True          # UIA 已经能列出模型项：不再依赖模板/缩放
     win = _win(s)
     if win is None:
         return False
@@ -327,7 +578,7 @@ EFFORTS = {
         "max":   ("Max",  1211),
     },
     "chat": {
-        "low":  ("即时", 1013),
+        "instant": ("即时", 1013),
         "mid":  ("中", 1115),
         "high": ("高", 1217),
     },
@@ -525,11 +776,125 @@ def _layer(s: Screen, writer: str) -> str:
     return "closed"
 
 
+def _box(node) -> tuple[int, int, int, int]:
+    r = node.control.BoundingRectangle
+    return (int(r.left), int(r.top), int(r.right - r.left), int(r.bottom - r.top))
+
+
+def _inside(box, x: int, y: int, pad: int = 0) -> bool:
+    bx, by, bw, bh = box
+    return bx + pad <= x <= bx + bw - pad and by + pad <= y <= by + bh - pad
+
+
+def _open_fail(stage: str, hint: str = "", **detail) -> bool:
+    """记下这次失败的原因，返回 False（open_effort 的契约不变）。"""
+    OPEN_STATE.clear()
+    OPEN_STATE.update({"stage": stage, "reason": stage, "hint": hint, **detail})
+    return False
+
+
+def chip_nodes(s: Screen) -> list:
+    """页面上的 `选择 ChatGPT 模型` 按钮（0 个 / 1 个 / 多个都要能分辨）。"""
+    try:
+        root = _doc_root(s)
+    except Exception:                                  # noqa: BLE001 - 读不到当没有
+        return []
+    return [n for n in root.walk()
+            if n.kind == "ButtonControl" and (n.name or "").strip() == CHIP_BUTTON]
+
+
+def _near_boxes(s: Screen) -> list:
+    """同一行相邻的听写/语音/发送按钮的矩形（用来挡误点，不点它们）。"""
+    try:
+        root = _doc_root(s)
+    except Exception:                                  # noqa: BLE001
+        return []
+    out = []
+    for node in root.walk():
+        if node.kind != "ButtonControl":
+            continue
+        name = (node.name or "").strip()
+        if not any(w in name for w in CHIP_NEAR_NAMES):
+            continue
+        if name == CHIP_BUTTON:                        # 芯片自己不算相邻按钮
+            continue
+        try:
+            out.append((name, _box(node)))
+        except Exception:                              # noqa: BLE001 - 元素失效就跳过
+            continue
+    return out
+
+
+def open_chip_menu(s: Screen, writer: str) -> dict:
+    """点芯片打开强度层（CARD-06c 第 1/4 条）。返回 {"ok","stage","hint",...}。
+
+    **不按 Ctrl+Shift+M**：那个组合被 Chrome 截成个人资料菜单，弹层根本没开，
+    而脚本会以为开了、继续按错的前提往下跑。
+
+    四道检查，顺序从"便宜"到"贵"：
+      1. 唯一性：控件树里必须**正好一个**芯片按钮；0 个先点一下输入框再找
+         （输入框空/未聚焦时芯片可能还没渲染）；
+      2. 几何：芯片矩形要在合理范围内，点击点取矩形中心；
+      3. 相邻：落点不能落在听写/语音/发送按钮的矩形里（它们紧贴芯片）；
+      4. 距离：落点离橙钮（麦克风/发送键）≥60px；最后仍交给 `safe_click`。
+    点完必须复核：`_layer()` 还是 `closed` 就是没开。
+    """
+    OPEN_STATE.clear()
+    nodes = chip_nodes(s)
+    if not nodes:
+        # 卡面第 1 条：输入框空/未聚焦时先点输入框再定位芯片
+        if focus_composer(s):
+            time.sleep(0.6)
+            nodes = chip_nodes(s)
+    if not nodes:
+        return {"ok": False, "stage": "chip_not_found",
+                "hint": f"控件树里没有「{CHIP_BUTTON}」按钮（点过输入框再找也没有）；"
+                        "可能不在新聊天页，或页面还没渲染完"}
+    if len(nodes) > 1:
+        return {"ok": False, "stage": "chip_not_unique",
+                "boxes": [_box(n) for n in nodes],
+                "hint": f"找到 {len(nodes)} 个「{CHIP_BUTTON}」按钮，不猜点哪一个"}
+    box = _box(nodes[0])
+    if not (16 <= box[2] <= CHIP_BOX_LIMIT[0] and 16 <= box[3] <= CHIP_BOX_LIMIT[1]):
+        return {"ok": False, "stage": "chip_geometry", "chip": box,
+                "hint": f"芯片矩形 {box[2]}x{box[3]} 不像芯片（可能读到了整行容器）"}
+    cx, cy = box[0] + box[2] // 2, box[1] + box[3] // 2
+
+    near = _near_boxes(s)
+    for name, nb in near:
+        if _inside(nb, cx, cy):
+            return {"ok": False, "stage": "chip_overlaps_control", "chip": box,
+                    "near": {"name": name, "box": nb},
+                    "hint": f"芯片中心 ({cx},{cy}) 落在「{name}」按钮 {nb} 里，拒绝点击"}
+    voice = _voice_center(s)
+    distance = None
+    if voice is not None:
+        distance = max(abs(cx - int(voice[0])), abs(cy - int(voice[1])))
+        if distance < CHIP_MIN_VOICE:
+            return {"ok": False, "stage": "chip_too_close", "chip": box,
+                    "voice": list(voice), "distance": distance,
+                    "hint": f"芯片中心离橙钮只有 {distance}px（<{CHIP_MIN_VOICE}），"
+                            "可能压到麦克风/发送键，拒绝点击"}
+
+    ok, why = safe_click(s, (cx, cy), voice=voice)
+    if not ok:
+        return {"ok": False, "stage": "click_blocked", "chip": box,
+                "distance": distance, "hint": why}
+    time.sleep(1.1)
+    layer = _layer(s, writer)
+    if layer == "closed":
+        return {"ok": False, "stage": "menu_not_open", "chip": box,
+                "distance": distance,
+                "hint": "点了芯片但弹层没出现（可能被别的元素挡住或页面在切）"}
+    return {"ok": True, "stage": "opened", "layer": layer, "chip": box,
+            "distance": distance}
+
+
 def focus_composer(s: Screen) -> bool:
     """点一下输入框空白处，让它获得键盘焦点。
 
-    快捷键只在输入框聚焦时生效（实测：不聚焦按 Ctrl+Shift+M 毫无反应）。
     点的是「+」右边 250px、上 20px 的空白，离橙钮 400px 以上。
+    现在只用于"芯片还没渲染出来"时的兜底（卡面第 1 条），开弹层不再靠快捷键。
     """
     m = s.find(COMPOSER, threshold=0.85, region=_win(s))
     if m is None:
@@ -539,14 +904,10 @@ def focus_composer(s: Screen) -> bool:
 
 
 def open_effort(s: Screen, writer: str) -> bool:
-    """打开强度层（第一步）。
+    """打开强度层（第一步）。失败原因记在 `OPEN_STATE` 里。
 
-    链路：点输入框空白聚焦 -> Ctrl+Shift+M。
-    **不点芯片**：芯片就在橙钮左边 44~110px，麦克风在 43px，偏移量算错一次就录音
-    （2026-10-29 用 -40 / -44 各踩了一次）。快捷键是芯片 tooltip 上写的，等价且安全。
-
-    已经在 models 层时按一次 Esc 退回 effort 层，不重新走快捷键——
-    快捷键是 toggle，在弹层开着时按会把整层关掉（实测）。
+    已经在 models 层时按一次 Esc 退回 effort 层——不再重新点芯片：
+    芯片是 toggle，弹层开着再点一次会把整层关掉（实测）。
     """
     lay = _layer(s, writer)
     if lay == "effort":
@@ -557,30 +918,79 @@ def open_effort(s: Screen, writer: str) -> bool:
         if _slider(s) is not None:
             return True
     if page_kind(s) != "new":
-        return False                    # 会话页没有模式按钮，也没有这个弹层
-
-    if not focus_composer(s):
-        return False
-    time.sleep(0.5)
-    s.hotkey(*CHIP_HOTKEY)
-    time.sleep(1.3)
-    return _slider(s) is not None
-
-
-def enter_models(s: Screen, writer: str) -> bool:
-    """进模型列表（第二步）。已经开着就直接返回。"""
-    if _items_visible(s, writer):
+        return _open_fail("not_new_page",
+                          "模式按钮/模型芯片只在新聊天页出现（先开新对话）")
+    result = open_chip_menu(s, writer)
+    if result["ok"]:
+        OPEN_STATE.clear()
         return True
+    return _open_fail(result.get("stage", "menu_not_open"),
+                      result.get("hint", ""), **{k: v for k, v in result.items()
+                                                 if k not in ("ok", "stage", "hint")})
+
+
+def _model_entry(s: Screen):
+    """弹层里的「选择模型」入口（UIA MenuItemControl）。找不到返回 None。
+
+    UIA 优先：它可 Invoke，也比按像素找入口行稳——缩放/改版都不会让它消失。
+    """
+    try:
+        for node in _doc_root(s).walk():
+            if node.kind == "MenuItemControl" and (node.name or "").strip() == "选择模型":
+                return node
+    except Exception:                                  # noqa: BLE001 - 读不到就走老路
+        return None
+    return None
+
+
+def enter_models(s: Screen, writer: str) -> dict:
+    """进模型列表（第二步）。返回 {"ok","stage","hint",...}。
+
+    CARD-06c 第 3 条：强度层开着、但里面**没有「选择模型」入口**时，
+    返回 `stage=no_model_selector` 并 fail-closed——不沿用上次档位、不猜菜单、
+    也不假装"选好了"（工作模式实测就没有这个入口）。
+    """
+    if _items_visible(s, writer):
+        return {"ok": True, "stage": "already"}
     if not open_effort(s, writer):
-        return False
-    pos = _menu_entry_pos(s)
-    if pos is None:
-        return False
-    ok, _why = safe_click(s, pos)
-    if not ok:
-        return False
+        return {"ok": False, "stage": OPEN_STATE.get("stage") or "menu_not_open",
+                "reason": OPEN_STATE.get("reason") or "menu_not_open",
+                "hint": OPEN_STATE.get("hint", ""),
+                "detail": {k: v for k, v in OPEN_STATE.items()
+                           if k not in ("stage", "reason", "hint")}}
+
+    entry = _model_entry(s)
+    pos = None if entry is not None else _menu_entry_pos(s)
+    if entry is None and pos is None:
+        close_all(s, writer)
+        return {"ok": False, "stage": "no_model_selector", "writer": writer,
+                "reason": "model_entry_missing",
+                "hint": "强度弹层里没有「选择模型」入口：这个模式没有模型选择器，"
+                        "不沿用上一次的档位（fail-closed）"}
+    clicked = False
+    if entry is not None:
+        try:
+            entry.control.GetInvokePattern().Invoke()
+            clicked = True
+        except Exception:                              # noqa: BLE001 - 没有 Invoke 就点矩形
+            try:
+                r = entry.control.BoundingRectangle
+                clicked, _why = safe_click(s, ((r.left + r.right) // 2,
+                                               (r.top + r.bottom) // 2))
+            except Exception:                          # noqa: BLE001
+                clicked = False
+    if not clicked:
+        clicked, _why = safe_click(s, pos)
+    if not clicked:
+        close_all(s, writer)
+        return {"ok": False, "stage": "entry_not_clickable", "writer": writer,
+                "hint": "找到了「选择模型」入口，但点不动（被遮挡/在动画里）"}
     time.sleep(1.2)
-    return _items_visible(s, writer)
+    if not _items_visible(s, writer):
+        close_all(s, writer)
+        return {"ok": False, "stage": "model_list_not_open", "writer": writer,
+                "hint": "点了「选择模型」但列表没出现"}
+    return {"ok": True, "stage": "opened"}
 
 
 def close_all(s: Screen, writer: str) -> None:
@@ -600,12 +1010,28 @@ def close_all(s: Screen, writer: str) -> None:
 
 
 def read_effort(s: Screen, writer: str | None = None) -> dict:
-    """读当前强度。会开关一次弹层（Esc 不会改设置，只关）。"""
+    """读当前强度。**先读芯片（UIA，只读）**，读不到才开关一次弹层看滑杆。
+
+    2026-11-02（CARD-06b 第 10 条）：芯片的 UIA 文本就是当前档位词，开弹层
+    反而是多余的点击。弹层路径保留作兜底，但返回值标明 `source`，
+    看日志时能分清"UI 读数"和"滑杆位置推算"。
+    """
     w = writer or read_writer(s).get("writer")
     if w not in EFFORTS:
         return {"effort": "unknown", "hint": "读不出当前模式"}
+    chip = read_chip_effort(s)
+    if chip["effort"]:
+        if chip["effort"] not in EFFORTS[w]:
+            # 词表是跨模式共用的（即时/轻度都在里面）。读到不属于当前模式的档名，
+            # 说明模式读错了，按"没读到"处理，不硬套表。
+            return {"effort": "unknown", "reason": "effort_not_in_writer",
+                    "hint": f"芯片读到 {chip['effort']!r}，但它不属于 {w} 模式的档位表"}
+        return {"effort": chip["effort"], "label": EFFORTS[w][chip["effort"]][0],
+                "source": chip["source"], "raw": chip["raw"]}
     if not open_effort(s, w):
-        return {"effort": "unknown", "hint": "打不开强度弹层（只在新聊天页有）"}
+        return {"effort": "unknown", "stage": OPEN_STATE.get("stage") or "menu_not_open",
+                "reason": OPEN_STATE.get("reason") or "menu_not_open",
+                "hint": OPEN_STATE.get("hint") or "打不开强度弹层（只在新聊天页有）"}
     sl = _slider(s)
     close_all(s, w)
     if sl is None:
@@ -613,7 +1039,7 @@ def read_effort(s: Screen, writer: str | None = None) -> dict:
     key, d = _effort_of(sl["knob"], w)
     gap = _gap_limit(w)
     out = {"effort": key, "label": EFFORTS[w][key][0], "knob": sl["knob"], "off": d,
-           "tol": gap, "at_min": sl.get("at_min", False)}
+           "tol": gap, "at_min": sl.get("at_min", False), "source": "slider_geometry"}
     if d > gap:
         out["hint"] = (f"滑块停在 {sl['knob']}，离最近档位（{EFFORTS[w][key][0]}）"
                        f"差 {d}px，不在档上")
@@ -644,11 +1070,16 @@ def set_effort(s: Screen, key: str, writer: str | None = None) -> dict:
         return {"ok": False, "stage": "bad_arg", "writer": w, "want": key,
                 "options": {k: v[0] for k, v in table.items()}}
     if not open_effort(s, w):
-        return {"ok": False, "stage": "menu_not_open", "writer": w}
+        extra = {k: v for k, v in OPEN_STATE.items()
+                 if k not in ("stage", "reason", "hint")}
+        return {"ok": False, "stage": OPEN_STATE.get("stage") or "menu_not_open",
+                "reason": OPEN_STATE.get("reason") or "menu_not_open",
+                "writer": w, "hint": OPEN_STATE.get("hint", ""),
+                **({"detail": extra} if extra else {})}
 
     sl = _slider(s)
     if sl is None:
-        return {"ok": False, "stage": "no_slider"}
+        return {"ok": False, "stage": "no_slider", "writer": w}
     before, _bd = _effort_of(sl["knob"], w)
 
     # 点滑块拿焦点（点击会让它跳到点击处，无所谓——紧接着就归零）
@@ -673,16 +1104,31 @@ def set_effort(s: Screen, key: str, writer: str | None = None) -> dict:
     after_sl = _slider(s)
     after, ad = _effort_of(after_sl["knob"], w) if after_sl else (None, None)
     knob = after_sl["knob"] if after_sl else None
+    # 弹层还开着时先读一次 UIA 的滑杆读数（`高，第 3 项，共 3 项。`），
+    # 它和位置无关，是本次读数；位置只留作诊断。
+    announce = _announce_effort(s)
     close_all(s, w)                        # Esc 才会让强度生效
     time.sleep(0.5)
-    # 只要求"最近档 == 想要的"不够：滑块可能停在两档正中间，那时 UI 其实没定下来。
-    on_target = after == key and ad is not None and ad <= _gap_limit(w)
-    out = {"ok": on_target, "stage": "done" if on_target else "unverified",
-           "before": before, "after": after, "want": key, "knob": knob, "off": ad,
-           "by": "keyboard"}
-    if not on_target:
-        out["hint"] = (f"滑块停在 {knob}，离「{table[key][0]}」{ad}px，"
-                       f"超出容差 {_gap_limit(w)}")
+    # **判定只看芯片**：芯片是"用户看到的档位"。卡面第 10 条明确禁止
+    # 用滑杆键盘位置推断当读回——06b r1 那次 before=high/after=high、截图却是
+    # Medium，就是这么来的。芯片读不到 → ok=False（未读回）。
+    chip_after = read_chip_effort(s)
+    chip_ok = chip_after["effort"] == key
+    out = {"ok": chip_ok, "stage": "done" if chip_ok else "unverified",
+           "before": before, "after": chip_after["effort"], "want": key, "writer": w,
+           "read": "uia_chip" if chip_after["effort"] else "none",
+           "chip": chip_after["raw"], "announce": announce.get("effort"),
+           "slider_geometry": after, "knob": knob, "off": ad, "by": "keyboard"}
+    if not chip_ok:
+        if chip_after["effort"] is None:
+            out["reason"] = "effort_unreadable"
+            out["hint"] = ("芯片读不回强度（UIA 没读到档位词）；按第 10 条整体判失败，"
+                           "不用滑杆位置代替读数")
+        else:
+            out["reason"] = "readback_mismatch"
+            out["hint"] = (f"芯片显示 {chip_after['effort']!r}，要的是 {key!r}"
+                           f"（弹层里滑杆读数 {announce.get('effort')!r}，"
+                           f"位置推算 {after!r}）")
     return out
 
 
@@ -742,12 +1188,38 @@ def _scroll_list(s: Screen, writer: str, notches: int) -> bool:
     return True
 
 
-def _find_item(s: Screen, writer: str, tpl: str, scroll: bool = True):
-    """找模型项；找不到就往下滚再找（工作模式 9 项，一屏只放得下 8 项）。
+class _Row:
+    """UIA 读到的模型行：只要 `.center`，和 Match 的用法保持一致。"""
+
+    def __init__(self, name, box):
+        self.name = name
+        self.score = 1.0
+        self.scale = 1.0
+        self.x, self.y, self.w, self.h = box
+
+    @property
+    def center(self):
+        return self.x + self.w // 2, self.y + self.h // 2
+
+
+def _find_item_uia(s: Screen, key: str):
+    """按 UIA 名字找目标模型行（不受页面缩放/模板失配影响）。"""
+    for row_key, name, box in _ui_model_rows(s):
+        if row_key == key and box:
+            return _Row(name, box)
+    return None
+
+
+def _find_item(s: Screen, writer: str, tpl: str, scroll: bool = True, key: str | None = None):
+    """找模型项：**UIA 优先**，找不到再按模板 + 滚动（工作模式 9 项，一屏只放得下 8 项）。
 
     逐格滚而不是一次滚 4 格：列表只溢出 1 项，滚多了会把目标又推出去
     （虽然实测到底就停住，但不同窗口高度下不一定）。
     """
+    if key:
+        row = _find_item_uia(s, key)
+        if row is not None:
+            return row
     win = _win(s)
     band = _list_band(s, writer, win) or win
     m = s.find(tpl, threshold=0.85, region=band)
@@ -804,25 +1276,14 @@ def _scan_model(s: Screen, writer: str):
     return {"signed": signed, "cy": cy}
 
 
-def _pick_model(s: Screen, writer: str) -> dict:
-    """在**已经开着的**列表里读当前模型。不负责开关菜单。
+def _pick_model_templates(s: Screen, writer: str) -> dict:
+    """模板兜底：勾 + 每行标题的相对位置。**不做任何推断**（第 10 条）。
 
-    单独拆出来是因为一次切换要读两次（切之前、切之后），如果读一次就开关一遍菜单，
-    一次 --model 要开 3 遍菜单、点 7 下，直接把点击预算撞穿——超预算之后每一下都被
-    拒，表现为"第一个失败、后面全报打不开"（2026-10-29 实测）。
-
-    「默认（推荐模型集）」那一行是**两行文字**（下面还有"推荐模型集"小字），
-    比别的行高，它的模板只有 100x18，实测时灵时不灵。所以留一条兜底：
-    勾在所有可读项**上方**时，选中的就是列表第一行「默认」。
-
-    采信前要求**连续两次扫描结果一致**：列表淡入时读一次会得到
-    "勾和每行都错开 36px"的等差假结果（实测）。
+    旧版有一条"勾在所有可读项上方 → 选中的是第一行「默认」"的推断。06b r1
+    的假读数就是它：`gpt_model_gpt6` 模板没命中，勾的位置被推成 default，
+    最后仍然报 ok。现在推不出来就返回 unknown，让上层整体判失败。
     """
     snap, prev = None, None
-    # 三次机会：原位 -> 滚到顶 -> 滚到底。
-    # 勾可能落在视口外：列表默认停在顶部，选中项在底部时勾看不见（实测
-    # 选中 GPT-5.6 Luna 后复核读成 unknown，但芯片明明已经变成 GPT-5.6 Luna 高）；
-    # 反过来为了找靠下的模型把列表滚到底，顶部「默认」那一行的勾又会滚出去。
     for attempt in range(3):
         prev = None
         for _ in range(4):
@@ -841,26 +1302,53 @@ def _pick_model(s: Screen, writer: str) -> dict:
         elif attempt == 1:
             _scroll_list(s, writer, -8)
     if snap is None:
-        return {"model": "unknown", "hint": "列表里找不到勾，也匹不上任何模型名"}
-
+        return {"model": "unknown", "source": "template_template",
+                "reason": "no_check_mark", "hint": "列表里找不到勾，也匹不上任何模型名"}
     signed = snap["signed"]
     dists = {k: abs(v) for k, v in signed.items()}
     near = [k for k, d in dists.items() if d <= 20]
     if near:
         best = min(near, key=lambda k: dists[k])
-        return {"model": best, "dist": dists}
-    if all(v > 20 for v in signed.values()):
-        return {"model": "default", "dist": dists,
-                "inferred": "勾在所有可读项上方，选中的是第一行「默认」"}
-    return {"model": "unknown", "dist": dists, "hint": "勾落在两行之间，认不出"}
+        return {"model": best, "source": "template", "dist": dists}
+    return {"model": "unknown", "source": "template", "dist": dists,
+            "reason": "ambiguous_check", "hint": "勾落在两行之间，认不出（不再推断「默认」）"}
+
+
+def _pick_model(s: Screen, writer: str) -> dict:
+    """在**已经开着的**列表里读当前模型。不负责开关菜单。
+
+    读法优先级（第 10 条）：
+      1. **UIA**：模型项是 RadioButtonControl，`SelectionItemPattern.IsSelected`
+         直接给真假（2026-11-02 实测：`GPT-6` sel=True / `GPT-5.6 Sol` sel=False）；
+      2. 模板：勾 + 标题相对位置，但**不许推断**，认不出就是 unknown。
+
+    UIA 不依赖模板，也不受页面缩放影响；06b r1 的两个假读数（默认推断、
+    gpt_model_gpt6 不命中仍报 ok）都不会再出现。
+    """
+    uia = read_model_uia(s, writer)
+    if uia.get("model") not in (None, "unknown"):
+        return {**uia, "source": uia.get("source", "uia")}
+    tpl = _pick_model_templates(s, writer)
+    if tpl.get("model") not in (None, "unknown"):
+        return tpl
+    return {**tpl, "uia_reason": uia.get("reason")}
 
 
 def read_model(s: Screen, writer: str) -> dict:
-    """读当前模型。链路：开强度层 -> 进列表 -> 读勾 -> 全关。"""
+    """读当前模型。链路：开强度层 -> 进列表 -> 读勾 -> 全关。
+
+    打不开就带 `stage` 回去（`no_model_selector` / `menu_not_open` / `chip_*`），
+    不写 "unknown + 一句打不开" 了事——上层和真机证据都要能分清是哪一步。
+    """
     if not MODELS.get(writer):
         return {"model": None}
-    if not enter_models(s, writer):
-        return {"model": "unknown", "hint": "打不开模型列表"}
+    entered = enter_models(s, writer)
+    if not entered["ok"]:
+        out = {"model": "unknown", "stage": entered.get("stage", "menu_not_open"),
+               "writer": writer, "hint": entered.get("hint") or "打不开模型列表"}
+        if entered.get("detail"):
+            out["detail"] = entered["detail"]
+        return out
     out = _pick_model(s, writer)
     close_all(s, writer)
     return out
@@ -873,7 +1361,8 @@ def set_model(s: Screen, key: str) -> dict:
     不再像旧版那样在选完之后按 Esc 强行收弹层——那一层本来就是留给人调强度的，
     收掉它等于把第二步吃掉了，也是「选完 default 之后老断」的原因之一。
 
-    点击次数：聚焦 1 + 入口行 1 + 目标项 1 + 复核再进列表 1 = 4 下，预算 8 够用。
+    点击次数：芯片 1 + 入口 1 + 目标项 1 + 复核再进列表 1 = 4 下，预算 8 够用。
+    CARD-06c 第 3 条：找不到模型入口就 `stage=no_model_selector`，不沿用上次档位。
     """
     w = read_writer(s)["writer"]
     if w not in MODELS:
@@ -885,22 +1374,31 @@ def set_model(s: Screen, key: str) -> dict:
                 "options": list(models)}
 
     before_sig = chip_signature(s)
-    if not enter_models(s, w):
-        return {"ok": False, "stage": "menu_not_open", "writer": w}
+    entered = enter_models(s, w)
+    if not entered["ok"]:
+        return {"ok": False, "stage": entered.get("stage", "menu_not_open"),
+                "writer": w, "want": key, "before": None,
+                "reason": entered.get("reason"),
+                "hint": entered.get("hint") or "打不开模型列表",
+                **({"detail": entered["detail"]} if entered.get("detail") else {})}
 
-    cur = _pick_model(s, w)["model"]
+    picked = _pick_model(s, w)
+    cur = picked["model"]
     if cur == key:
         close_all(s, w)
-        return {"ok": True, "stage": "already", "before": cur, "after": cur}
+        return {"ok": True, "stage": "already", "before": cur, "after": cur,
+                "writer": w, "read": picked.get("source")}
 
-    m = _find_item(s, w, models[key][1])
+    m = _find_item(s, w, models[key][1], key=key)
     if m is None:
         close_all(s, w)
-        return {"ok": False, "stage": "item_not_found", "before": cur, "want": key}
+        return {"ok": False, "stage": "item_not_found", "before": cur, "want": key,
+                "writer": w}
     ok, why = safe_click(s, m.center)
     if not ok:
         close_all(s, w)
-        return {"ok": False, "stage": "click_blocked", "detail": why, "before": cur}
+        return {"ok": False, "stage": "click_blocked", "detail": why,
+                "before": cur, "writer": w}
     # 点完会**自动退回强度层**（这是正常行为，不是失败）
     time.sleep(1.4)
 
@@ -912,30 +1410,91 @@ def set_model(s: Screen, key: str) -> dict:
     time.sleep(0.4)
 
     if key in NO_READ:
-        # 「默认（推荐模型集）」停不住：点下去解析成某个具体模型，芯片写的是那个名字，
-        # 永远复核不上。只按"退回强度层 + 芯片变了"验证。
+        # 「默认（推荐模型集）」点下去会解析成某个具体模型，芯片写的是那个名字，
+        # 永远读不回原名。这里只记录"点完确实回到了强度层 + 芯片变了"这两个
+        # **观测**，但按第 10 条**不把它们当成读回**：ok=False，
+        # 让上层不要再报"切好了"（旧版就是在这里报 ok=True 的）。
         back_to_effort = _slider(s) is not None
         after_sig = chip_signature(s)
         changed = (before_sig is not None and after_sig is not None and
                    float(np.abs(before_sig.astype(int) - after_sig.astype(int)).mean()) > 2.0)
         close_all(s, w)
-        ok2 = back_to_effort and changed
-        return {"ok": ok2, "stage": "done_menu_closed" if ok2 else "unverified",
-                "before": cur, "after": "（推荐模型集→具体模型，不可读）",
+        return {"ok": False, "stage": "unverified", "reason": "readback_unavailable",
+                "before": cur, "after": None, "want": key, "writer": w,
                 "verified_by": "退回强度层+芯片变化",
-                "back_to_effort": back_to_effort, "chip_changed": changed}
+                "back_to_effort": back_to_effort, "chip_changed": changed,
+                "hint": "「默认（推荐模型集）」会解析成具体模型、读不回原名；"
+                        "按第 10 条不算读回，整体判失败（use 也会因为 readback 为空拒发）"}
 
-    # 复核：再进一次列表读勾（此时在强度层，进列表只要 1 下点击）
-    if not enter_models(s, w):
+    # 复核：再进一次列表读选中项（此时在强度层，进列表只要 1 下点击）
+    again = enter_models(s, w)
+    if not again["ok"]:
         close_all(s, w)
-        return {"ok": False, "stage": "reverify_failed", "before": cur}
-    after = _pick_model(s, w)["model"]
+        return {"ok": False, "stage": "reverify_failed", "before": cur,
+                "writer": w, "reason": again.get("stage")}
+    after_info = _pick_model(s, w)
+    after = after_info["model"]
     close_all(s, w)
-    return {"ok": after == key, "stage": "done" if after == key else "unverified",
-            "before": cur, "after": after}
+    ok2 = after == key
+    out = {"ok": ok2, "stage": "done" if ok2 else "unverified",
+           "before": cur, "after": after, "writer": w,
+           "read": after_info.get("source")}
+    if not ok2:
+        out["reason"] = after_info.get("reason") or "readback_mismatch"
+        out["hint"] = (f"重新打开列表读到的选中项是 {after!r}，不是 {key!r}；"
+                       "按第 10 条整体判失败，不沿用点击得到的结果")
+    return out
 
 
 # ---------------------------------------------------------------- CLI
+def _zoom_guard(s: Screen) -> None:
+    """页面缩放预检（第 6 条）。不满足就抛 `qi.zoom.ZoomNot100`。
+
+    策略集中在 `qi/zoom.py`：只对浏览器窗口发 Ctrl+0，读不到进程名不动，
+    发完必须重新检测。这里只负责调它。
+    """
+    zoom_mod.ensure(s, verbose=True)
+
+
+def _evidence(endpoint, screen, hwnd, result, dimension=None):
+    """失败留证（第 9 条）：只在 tier_*/zoom_*/human_check/input_mismatch 时留。"""
+    try:
+        from qi import failure
+    except Exception:                                  # noqa: BLE001 - 证据不是主流程
+        return
+    if dimension:
+        result.setdefault("dimension", dimension)
+        if not result.get("template"):
+            result["template"] = {"name": f"gpt_model_or_chip:{dimension}",
+                                  "score": result.get("chip_score"),
+                                  "threshold": None, "scale": None,
+                                  "hit": False}
+    failure.record(endpoint, result, screen=screen, hwnd=hwnd)
+
+
+def _record_receipt(hwnd, dimension, target, readback, raw, writer=None):
+    """写档位回执（CARD-06a (a)）。**失败一律不影响选择结果。**
+
+    本脚本刻意不 import 项目包（单文件契约），所以按需把 src 挂上 sys.path。
+    readback 传 None 的有两种情况：没读回来，以及"默认（推荐模型集）"这种
+    点了会变成别的模型、永远读不回原名的档位。两种都该让 use 拒发。
+
+    CARD-06c 第 2 条：带上 writer（chat/work）。ChatGPT 两个模式的模型表和
+    强度表完全不同，use 要按 writer 去取对应的白名单。
+    """
+    try:
+        from pathlib import Path
+        source = str(Path(__file__).resolve().parents[1])
+        if source not in sys.path:
+            sys.path.insert(0, source)
+        from qi import tier_guard
+        tier_guard.record_choice("chatgpt", target=target, readback=readback,
+                                 dimension=dimension, hwnd=hwnd, raw=raw,
+                                 writer=writer)
+    except Exception:                                  # noqa: BLE001 - 回执不是主流程
+        pass
+
+
 def main() -> int:
     idle_need, idle_wait, force, args = guard.parse_guard_args(list(sys.argv[1:]))
     parser = argparse.ArgumentParser(description="选择 ChatGPT 模式、模型和强度，不发送消息")
@@ -980,6 +1539,7 @@ def main() -> int:
         print("窗口提不到前台")
         return 1
     time.sleep(1.2)
+    done_dims = {}
     try:
         if options.new or want_writer is not None:
             # 模式按钮只在新对话页出现，所以切模式前先确保在新页
@@ -1006,8 +1566,14 @@ def main() -> int:
                 out["effort"] = eff.pop("effort")
                 out.update({f"effort_{k}": v for k, v in eff.items()})
             print(json.dumps(out, ensure_ascii=False))
-            return 0 if out.get("writer") not in (None, "unknown") else 1
+            # 模式/模型/强度任一读不出来都算失败：返回 0 会把"没读到"记成通过
+            bad = (out.get("writer") in (None, "unknown")
+                   or out.get("model") in (None, "unknown")
+                   or out.get("effort") in (None, "unknown"))
+            return 1 if bad else 0
 
+        # 页面缩放预检（第 6 条）：非 100% 先 Ctrl+0，仍不是就退出。只对浏览器窗口发。
+        _zoom_guard(s)
         if want_writer is not None:
             r = choose_writer(s, want_writer)
             print(json.dumps(r, ensure_ascii=False))
@@ -1015,25 +1581,57 @@ def main() -> int:
                 return 1
         if want_model is not None:
             r = set_model(s, want_model)
+            done_dims["model"] = r
             print(json.dumps(r, ensure_ascii=False))
+            rec = globals().get("_record_receipt")
             if not r["ok"]:
+                # 失败也要落一张回执（readback 为空）：否则上一次的成功回执
+                # 还留在 runs\tier\chatgpt.json 里，use 会拿着它当"现在也是这档"
+                # ——CARD-06c 第 3 条要求 fail-closed，不沿用上次档位。
+                if callable(rec):
+                    rec(hwnd, "model", want_model, None, r, r.get("writer"))
+                _evidence("chatgpt", s, hwnd, r, "model")
                 return 1
+            if callable(rec):
+                readback = None if r.get("verified_by") else r.get("after")
+                rec(hwnd, "model", want_model, readback, r, r.get("writer"))
 
         if want_effort is not None:
             # 顺序很重要：必须先选模型再调强度。
             # 因为选完模型会自动退回强度层，正好是调强度的位置；
             # 反过来先调强度再选模型，选完还得重开一次弹层。
             r = set_effort(s, want_effort)
+            done_dims["effort"] = r
             print(json.dumps(r, ensure_ascii=False))
+            rec = globals().get("_record_receipt")
             if not r["ok"]:
+                if callable(rec):                      # 同上：失败即作废旧回执
+                    rec(hwnd, "effort", want_effort, None, r, r.get("writer"))
+                _evidence("chatgpt", s, hwnd, r, "effort")
                 return 1
+            if callable(rec):
+                rec(hwnd, "effort", want_effort, r.get("after"), r, r.get("writer"))
     except ForegroundLost as e:
         # 目标窗口被切走/被盖住：立刻停，后面的点击一个都不发
         print(json.dumps({"ok": False, "stage": "user_took_over",
                           "hint": str(e)}, ensure_ascii=False))
         return 4
+    except zoom_mod.ZoomNot100 as e:
+        # 页面缩放不是 100% 且 Ctrl+0 也救不回来（CARD-06b 第 6 条）
+        result = {**e.as_result(), "ok": False}
+        _evidence("chatgpt", s, hwnd, result)
+        print(json.dumps(result, ensure_ascii=False))
+        return e.code
+    if done_dims:
+        # 整体结论（第 10 条）：任一维度没读回 → 整体 ok=false。
+        # 单看某一步的 ok 会被"这一步只读到了滑杆"骗过去，所以最后给一条总账。
+        print(json.dumps({"ok": all(x.get("ok") for x in done_dims.values()),
+                          "stage": "done", "dimensions": done_dims,
+                          "readback": {k: v.get("after") for k, v in done_dims.items()}},
+                         ensure_ascii=False))
     return 0
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    console.setup()          # 入口编码：GBK 控制台不再被 \u200b 打崩（CARD-08 第 1 条）
+    raise SystemExit(uilock.run("chatgpt_choose", main))

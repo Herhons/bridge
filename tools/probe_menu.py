@@ -9,7 +9,7 @@ import time
 import cv2
 
 sys.path.insert(0, "src")
-from qi import desk_flow  # noqa: E402
+from qi import desk_flow, uilock  # noqa: E402
 from qi.desk_sites import SITES  # noqa: E402
 
 
@@ -41,4 +41,5 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # UI 前台锁（CARD-09f）：真机探针也要全程持有 runs\ui.lock
+    sys.exit(uilock.run("probe_menu", main))

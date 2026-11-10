@@ -33,8 +33,12 @@ from urllib.parse import urlsplit
 
 from comtypes import COMError
 
-from . import ui
-from .screen import ForegroundLost
+from . import guard, human, sendgate, textcmp, tier_guard, ui
+from .screen import ForegroundLost, Screen
+
+
+class UserTookOver(ForegroundLost):
+    """发送前发现用户动了键鼠：没点发送就让位。（2026-10-30 第3项）"""
 
 
 SEND = {"发送", "发送消息", "发送提示", "提交", "Send", "Send message", "Send prompt"}
@@ -89,7 +93,40 @@ def is_reply_copy(node):
     return False
 
 
+MIN_EDITOR = 40     # 宽或高小于这个像素值的可见输入框，不当成消息输入框
+PREFIX_CHARS = 3    # CARD-09f 第 5 条：键入前几个字符激活编辑器，其余走粘贴
+
+
+def _area(node):
+    """控件面积；读不到矩形就返回 -1（多框时自然排在最后）。"""
+    try:
+        r = node.control.BoundingRectangle
+    except (COMError, AttributeError):
+        return -1
+    w, h = r.right - r.left, r.bottom - r.top
+    if w <= 0 or h <= 0:
+        return -1
+    return w * h
+
+
+def _big_enough(node):
+    try:
+        r = node.control.BoundingRectangle
+    except (COMError, AttributeError):
+        return False
+    return (r.right - r.left) >= MIN_EDITOR and (r.bottom - r.top) >= MIN_EDITOR
+
+
 def visible_editor(root, site):
+    """消息输入框。页面里有多个可见 EditControl 时按面积挑，不再直接报错。
+
+    2026-10-31 实测：WorkBuddy 页面上可见的 EditControl 有 **12 个**
+    （侧栏和列表里的行内重命名框都是 19px 高，还有一个 30x21 的空框），
+    真正的输入框是 740x64。`ui.unique` 撞上多框直接抛"找到 N 个控件"，
+    workbuddy_use 连读都读不到。
+    判据改成：先去掉宽或高 < 40px 的（行内小框、图标框），再取面积最大的那个；
+    只有过滤后一个都不剩才报错。**单框页面行为不变**，仍然原样返回。
+    """
     editors = [n for n in root.walk() if n.kind == "EditControl"
                and n.control.IsEnabled and not n.control.IsOffscreen]
     if site == "grok":
@@ -97,6 +134,12 @@ def visible_editor(root, site):
                     and n.name in ("向 Grok 提任何问题", "Ask Grok anything")]
     # Search boxes have their own names and are outside the message composer.
     editors = [n for n in editors if not any(s in n.name.lower() for s in ("搜索", "search"))]
+    if len(editors) > 1:
+        usable = [n for n in editors if _big_enough(n)]
+        if not usable:
+            raise RuntimeError(f"消息输入框: 找到 0 个控件"
+                               f"（另有 {len(editors)} 个可见输入框都小于 {MIN_EDITOR}px）")
+        return max(usable, key=_area)
     return ui.unique(editors, "消息输入框")
 
 
@@ -149,14 +192,82 @@ class Conversation:
         return View(url, root, editor, value, busy, copies)
 
     def write(self, view, prompt):
-        """点进输入框并打字。元素失效就重新读一版再试，最多三次。"""
+        """点进输入框，键入前几个字符激活编辑器，其余走剪贴板粘贴（CARD-09f 第 5 条）。
+
+        不再逐键键入整段提问：行首 `#`/`* `/`1. ` 会被编辑器当 Markdown 渲染掉标记，
+        粘贴走 paste 事件，只插文本节点、不做 Markdown 转换。元素失效就重读一版再试。
+        """
         error = None
         for _ in range(3):
             try:
                 ui.click(self.screen, view.editor)
-                self.screen.type_text(prompt)
+                prefix = prompt[:PREFIX_CHARS]
+                rest = prompt[PREFIX_CHARS:]
+                if prefix:
+                    self.screen.type_text(prefix)
+                if rest:
+                    self._paste_via_clipboard(rest)
+                # 打字/粘贴本身是 SendInput，也会刷新"最后输入时间"；记下打完那一刻，
+                # 发送前时间变了才算用户动过（直接用 user_active 会被自己的输入误触发）
+                time.sleep(0.15)
+                self._input_mark = guard.last_input_tick()
                 return
-            except COMError as exc:
+            except (RuntimeError, COMError) as exc:
+                error = exc
+                time.sleep(0.3)
+                view = self.read()
+        raise error
+
+    def _paste_via_clipboard(self, text):
+        """把 text 写入剪贴板（用序列号确认确实更新）再 Ctrl+V；结束恢复原剪贴板。
+
+        CARD-09f 第 5 条：粘贴前保存原剪贴板；写入后按剪贴板序列号确认内容真的
+        更新了再 Ctrl+V；无论成败都要恢复原剪贴板（恢复失败也尽力）。
+        序列号没变 = 剪贴板没更新 → 不粘贴、直接报错。
+        """
+        previous = self.screen.clipboard()
+        seq_before = self.screen.clipboard_seq()
+        try:
+            self.screen.set_clipboard(text)
+            seq_after = self.screen.clipboard_seq()
+            if (seq_before is not None and seq_after is not None
+                    and seq_after == seq_before):
+                raise RuntimeError("剪贴板序列号没变：剪贴板未更新，不粘贴")
+            self.screen.hotkey("ctrl", "v")
+            time.sleep(0.35)
+        finally:
+            try:
+                self.screen.set_clipboard(previous)
+            except Exception:                # noqa: BLE001 - 恢复失败也要尽力吞掉
+                pass
+
+    def clear(self, view):
+        """清空输入框：点进去 → Ctrl+A → Delete（CARD-09e 第 4/5 条复用）。"""
+        ui.click(self.screen, view.editor)
+        self.screen.hotkey("ctrl", "a")
+        self.screen.press("delete")
+        time.sleep(0.2)
+
+    def paste(self, view, prompt):
+        """点击输入框后用剪贴板贴**纯文本**（CARD-09e 第 5 条 / CARD-09f 第 5 条）。
+
+        为什么需要它：逐字 SendInput 在 ChatGPT / Grok 的编辑器里等于"手打"，
+        行首 `#`、`* `、`1. ` 会被 Markdown 自动格式化，标记当场被吃掉，
+        读回来就和提问对不上（`input_mismatch`）。粘贴走的是 paste 事件，
+        编辑器只插文本节点，不做 Markdown 转换。
+
+        剪贴板用完要还原：这是用户的剪贴板，不是我们的。序列号确认 + 恢复
+        都收在 `_paste_via_clipboard` 里。
+        """
+        error = None
+        for _ in range(3):
+            try:
+                ui.click(self.screen, view.editor)
+                self._paste_via_clipboard(prompt)
+                time.sleep(0.15)
+                self._input_mark = guard.last_input_tick()
+                return
+            except (RuntimeError, COMError) as exc:
                 error = exc
                 time.sleep(0.3)
                 view = self.read()
@@ -175,6 +286,8 @@ class Conversation:
         raise error
 
     def _submit(self, view):
+        if guard.user_moved_since(getattr(self, "_input_mark", None)):
+            raise UserTookOver("发送前检测到键鼠输入，已让位，未点发送")
         if self.site == "deepseek":
             target = self.screen.find("ds_send_on", threshold=0.92, region=self.screen.window_rect())
             if target is None:
@@ -263,13 +376,14 @@ def image_reply(screen, images, prompts):
 
 
 def prompt_nodes(view, prompt):
-    wanted = ui.canonical(prompt)
+    # 比对走归一（去行首列表标记），否则「1. xxx」被页面吃掉标记后永远认领不到
+    wanted = textcmp.normalize(prompt)
     found = []
 
     def visit(node):
         if node.kind in ("EditControl", "ComboBoxControl", "ButtonControl", "MenuControl"):
             return
-        if ui.canonical(ui.text_of(node)) == wanted:
+        if textcmp.normalize(ui.text_of(node)) == wanted:
             found.append(node)
             return
         for child in node.children:
@@ -315,8 +429,73 @@ def composer_empty(view) -> bool:
     return False
 
 
-def ask(conversation, prompt, timeout=180.0):
-    """Timeout is a single budget. A submitted/unknown turn is never retried."""
+def _rewrite_plain(conversation, prompt):
+    """清空后改用粘贴再写一次；任何异常都当作"没成"（返回 None）。
+
+    只在"打字版本核对不上"时才走这条路——正常一轮不多花一次剪贴板往返。
+    """
+    try:
+        view = conversation.read()
+        conversation.clear(view)
+        conversation.paste(view, prompt)
+        time.sleep(0.2)
+        return conversation.read()
+    except (RuntimeError, COMError):
+        return None
+
+
+def _existing_reply(conversation, view, prompt):
+    """对话里已有「本提问」且它之后有回复时，只读返回该回复正文；否则 None。
+
+    CARD-09f 第 6 条：中断后重跑、页面其实已答完时，绝不能重发。
+    判据：认领到本提问（`prompt_nodes`），并且它后面有回复复制键（`view.copies`）。
+    从最新一条往回试，复制到「提问本身」就跳过——宁可读不到也不冒充回答。
+    """
+    prompts = prompt_nodes(view, prompt)
+    if not prompts:
+        return None
+    nodes = list(view.root.walk())
+    prompt_at = {i for i, n in enumerate(nodes) if n in prompts}
+    for node in reversed(view.copies):
+        try:
+            at = nodes.index(node)
+        except (ValueError, COMError):
+            continue
+        if any(at > i for i in prompt_at):
+            try:
+                text = conversation.copy(node)
+            except (RuntimeError, COMError):
+                continue
+            if text and not textcmp.equal(prompt, text):
+                return text
+    return None
+
+
+def _clear_draft_verified(conversation, view, is_empty) -> bool:
+    """清空输入框并读回为空（CARD-09f 第 3 条）。读回为空返回 True，否则 False。"""
+    try:
+        conversation.clear(view)
+        recheck = conversation.read()
+        return bool(is_empty(recheck))
+    except (RuntimeError, COMError):
+        return False
+
+
+def ask(conversation, prompt, timeout=180.0, pre_send=None, plain=False, watch=None):
+    """Timeout is a single budget. A submitted/unknown turn is never retried.
+
+    `pre_send()`：**写入文本之后、点发送之前**跑的门（CARD-06b 第 3 条）。
+    它负责档位只读复核 + 人机验证，并返回 {"stamp": 页面指纹}；
+    本函数在真正点击之前再比一次指纹，变了就拒发。
+
+    `plain=True`：打字版本核对不上时，清空改用粘贴纯文本再写一次
+    （CARD-09e 第 5 条，见 `Conversation.paste`）。
+
+    `watch(view)`：每轮读完树之后调一次（CARD-09e 第 3 条）。返回 dict 就**提前交卷**，
+    返回 None 继续按原判据等。给 ChatGPT 用：它的提问气泡会被折叠，共享判据永远
+    认领不到，只能一路等到超时（2026-11-02 实测 240s）；而页面自己会说"回答已完成"。
+    默认 None —— 另外几端的行为一个字节不变。
+    """
     is_empty = getattr(conversation, "empty", composer_empty)
     state = {"ok": False, "submission": "not_sent", "sent": False}
     deadline = time.monotonic() + timeout
@@ -324,18 +503,83 @@ def ask(conversation, prompt, timeout=180.0):
         before = conversation.read()
         if before.busy:
             return {**state, "stage": "conversation_busy"}
+        # 第 6 条：发送前先看对话里是否已有「本提问」且它之后有回复（防重发）。
+        # 中断后重跑、页面其实已答完时，绝不重发，只读已有回复返回 already_answered。
+        existing = _existing_reply(conversation, before, prompt)
+        if existing:
+            # 第 6 条：已提交后提问被回填进输入框时，要清掉并读回为空（失败也如实记，
+            # 不冒充"已清"）。already_answered 命中即命中，清草稿只是顺手收尾。
+            cleared = None
+            if not is_empty(before):
+                cleared = _clear_draft_verified(conversation, before, is_empty)
+            return {**state, "ok": True, "stage": "already_answered", "reply": existing,
+                    "submission": None, "sent": False, "basis": "already_answered",
+                    "cleared_draft": cleared}
         if not is_empty(before):
             return {**state, "stage": "draft_present", "hint": "当前输入框已有草稿"}
         sent_prompts = len(prompt_nodes(before, prompt))
         baseline = len(before.copies)
         anchor_path = path_of(before.url)
 
+        # 第 3 条：写入之前记页面指纹，写入之后、发送之前再比一次；
+        # 前台标签/文档被换走就立即停手、清草稿、以 concurrent_ui 退出。
+        # 只在真机（screen 是真 Screen 实例）时做——离线假件的 screen 是 mock/假件，
+        # 不参与并发检测。
+        screen = getattr(conversation, "screen", None)
+        site = getattr(conversation, "site", None)
+        stamp_before_write = (sendgate.page_stamp(screen, site)
+                              if isinstance(screen, Screen) and isinstance(site, str)
+                              else None)
+
         conversation.write(before, prompt)
         written = conversation.read()
-        if ui.canonical(written.value) != ui.canonical(prompt):
-            return {**state, "stage": "input_mismatch"}
+        if plain and not textcmp.equal(prompt, written.value):
+            # 第 5 条：行首 `#`/`* `/`1. ` 被编辑器当 Markdown 吃掉，打字这条路走不通，
+            # 清空改用粘贴纯文本（只再试一次，不无限重来）
+            retried = _rewrite_plain(conversation, prompt)
+            if retried is not None:
+                written, state["write_via"] = retried, "paste"
+        if not textcmp.equal(prompt, written.value):
+            # 第 5 条：归一只用于比对；hint 要给出第一处差异的行号与前后 20 字
+            return {**state, "stage": "input_mismatch",
+                    "hint": textcmp.describe(prompt, written.value) or
+                            f"写进去的文本和提问对不上（{textcmp.lengths(prompt, written.value)}）"}
         state.update(submission="unknown", sent=None)
-        conversation.submit(written)
+
+        # 第 3 条：发送阶段复核页面指纹，被换走 → 清掉已写入的半截文本 + concurrent_ui
+        if stamp_before_write is not None:
+            concurrent = sendgate.page_confirm(screen, site, stamp_before_write)
+            if not concurrent["ok"]:
+                cleared = _clear_draft_verified(conversation, written, is_empty)
+                return {**state, "stage": "concurrent_ui", "reason": "page_changed",
+                        "changed": concurrent["changed"], "cleared_draft": cleared,
+                        "submission": "not_sent", "sent": False}
+
+        # 最后一刻门禁：复核（消费回执）+ 记指纹，然后立刻再比一次
+        stamp = None
+        if pre_send is not None:
+            try:
+                door = pre_send() or {}
+            except (tier_guard.TierUnconfirmed, human.HumanCheck) as exc:
+                return {**exc.as_result(), "submission": "not_sent", "sent": False}
+            stamp = door.get("stamp")
+            if stamp is not None:
+                verdict = sendgate.page_confirm(conversation.screen, conversation.site, stamp)
+                if not verdict["ok"]:
+                    return {**state, "stage": "tier_unconfirmed",
+                            "reason": "page_changed", "code": tier_guard.TierUnconfirmed.code,
+                            "changed": verdict["changed"], "page": verdict["now"],
+                            "hint": "档位复核之后页面发生了导航/新对话/窗口切换，"
+                                    "按卡面拒发；请重新 choose 再发"}
+        try:
+            conversation.submit(written)
+        except UserTookOver as exc:
+            return {**state, "submission": "not_sent", "sent": False,
+                    "stage": "user_took_over", "hint": str(exc)}
+        # 第5项：同一个候选连续 settle 秒（两次读取）没变、且期间不忙才复制
+        settle = getattr(conversation, "settle", 1.5)
+        stable_sig = stable_since = None
+        last_busy = False
 
         accepted = False
         read_failures = 0
@@ -351,6 +595,11 @@ def ask(conversation, prompt, timeout=180.0):
                 time.sleep(1.0)
                 continue
             read_failures = 0
+            last_busy = view.busy
+            if watch is not None:
+                early = watch(view)
+                if early:
+                    return {**state, **early}
             prompts = prompt_nodes(view, prompt)
             if len(prompts) <= sent_prompts:
                 if accepted:
@@ -371,6 +620,7 @@ def ask(conversation, prompt, timeout=180.0):
                 continue
             # 有图片兜底的端（Grok）动作条不进控件树，copies 永远是空，不能拿条数当门
             if view.busy or (len(view.copies) <= baseline and not getattr(conversation, "images", None)):
+                stable_sig = None
                 time.sleep(0.4)
                 continue
             ordered = list(view.root.walk())
@@ -390,17 +640,29 @@ def ask(conversation, prompt, timeout=180.0):
                 images = getattr(conversation, "images", None)
                 match = image_reply(screen, images, prompts) if screen else None
                 if match is not None:
+                    sig, now = ("image", tuple(match.center)), time.monotonic()
+                    if sig != stable_sig:
+                        stable_sig, stable_since = sig, now
+                    if now - stable_since < settle:
+                        time.sleep(0.4)
+                        continue
                     answer = conversation.copy_at(*match.center)
-                    if ui.canonical(answer) != ui.canonical(prompt):
+                    if not textcmp.equal(prompt, answer):
                         return {**state, "ok": True, "stage": "answered", "reply": answer,
                                 "basis": "new_user_message_and_screen_copy"}
+                time.sleep(0.4)
+                continue
+            sig, now = ("copies", len(view.copies), len(candidates)), time.monotonic()
+            if sig != stable_sig:
+                stable_sig, stable_since = sig, now
+            if now - stable_since < settle:
                 time.sleep(0.4)
                 continue
             # 从最新的那条往回试：复制到"我们自己的提问"就换下一个（提问气泡上也有复制键）
             copied_prompt = False
             for node in candidates:
                 answer = conversation.copy(node)
-                if ui.canonical(answer) == ui.canonical(prompt):
+                if textcmp.equal(prompt, answer):
                     copied_prompt = True
                     continue
                 return {**state, "ok": True, "stage": "answered", "reply": answer,
@@ -408,7 +670,9 @@ def ask(conversation, prompt, timeout=180.0):
             if copied_prompt:
                 return {**state, "stage": "copied_prompt",
                         "hint": "复制到的是提问本身，不是回答"}   # 宁可失败也不冒充回答
-        return {**state, "stage": "timeout"}
+        # 第6项：stage 仍是 timeout（兼容旧调用方），另给 timeout_kind 区分
+        kind = "still_generating" if state["sent"] and (last_busy or stable_sig is not None) else "no_reply"
+        return {**state, "stage": "timeout", "timeout_kind": kind}
     except ForegroundLost as exc:
         return {**state, "stage": "user_took_over", "hint": str(exc)}
     except (RuntimeError, COMError) as exc:

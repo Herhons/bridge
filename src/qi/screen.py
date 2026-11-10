@@ -140,6 +140,7 @@ class Match:
     y: int
     w: int
     h: int
+    scale: float = 1.0        # 命中所用的模板尺度（CARD-06b 第 6 条要记录它）
 
     @property
     def center(self) -> tuple[int, int]:
@@ -147,7 +148,8 @@ class Match:
 
     def __repr__(self) -> str:
         cx, cy = self.center
-        return f"<{self.name} {self.score:.3f} 中心({cx},{cy})>"
+        tail = f" 尺度{self.scale:g}" if self.scale != 1.0 else ""
+        return f"<{self.name} {self.score:.3f} 中心({cx},{cy}){tail}>"
 
 
 class ForegroundLost(RuntimeError):
@@ -165,6 +167,9 @@ class Screen:
         self.verbose = verbose
         self._tpl: dict[str, np.ndarray] = {}
         self.target_hwnd: int | None = None
+        # 最近一次 find/find_all 的最高分（不管过没过阈值）。模板失配的报错要带它：
+        # 「没找到」和「差 0.03 分」是两件事，现场看日志时差别很大。
+        self.last_best: float | None = None
         # 点击前是否要求目标窗口在前台。默认要：点到别的窗口上比不点更糟。
         self.require_foreground = True
 
@@ -184,11 +189,14 @@ class Screen:
 
         按标题找的用途是把"找图/找色"限定在目标窗口内——整块虚拟桌面里别的屏
         有视频、图标也可能是同色，很容易抢先命中。
+
+        2026-11-02 CARD-06a (c)：绑定的窗口**最小化**时不能再把哨兵矩形
+        `(-32000,-32000,160,28)` 当矩形返回——`grok_choose --list` 就是这么
+        在 `move_to(-31970,-31880)` 上抛 RuntimeError 的。现在先恢复再取，
+        恢复不了抛 `WindowMinimized`（退出码 7），绝不拿哨兵坐标去点。
         """
         if self.target_hwnd and user32.IsWindow(self.target_hwnd):
-            r = wintypes.RECT()
-            user32.GetWindowRect(self.target_hwnd, ctypes.byref(r))
-            return (r.left, r.top, r.right - r.left, r.bottom - r.top)
+            return self.bound_rect()
         if title_hint is None:
             return None
         pw, ph = user32.GetSystemMetrics(0), user32.GetSystemMetrics(1)
@@ -218,11 +226,38 @@ class Screen:
         user32.EnumWindows(_cb, 0)
         return found[0] if found else None
 
+    def bound_rect(self) -> tuple[int, int, int, int]:
+        """绑定窗口的可用矩形；最小化就先恢复，恢复不了抛 `WindowMinimized`。
+
+        返回值保证不是哨兵矩形、宽高都过阈值——所以拿它算出来的点击点
+        一定是真实屏幕坐标。恢复成功的那一下已经轮询确认过，不看
+        `ShowWindow` 的返回值（它返回"调用前是否可见"，不是"恢复成功"）。
+        """
+        from . import window as window_mod
+        facts = window_mod.restore(self.target_hwnd)
+        if not facts["ok"]:
+            raise window_mod.WindowMinimized(
+                f"目标窗口 hwnd={self.target_hwnd} 处于最小化且没能恢复"
+                f"（reason={facts['reason']}，rect={facts['rect']}，"
+                f"等了 {facts['waited']}s）；不拿哨兵坐标去点。", facts)
+        x, y, w, h = facts["rect"]
+        return (x, y, w, h)
+
     def bind(self, hwnd: int) -> bool:
-        """绑定一个窗口句柄。之后 window_rect / 前台校验都认它，不再按标题搜。"""
+        """绑定一个窗口句柄。之后 window_rect / 前台校验都认它，不再按标题搜。
+
+        2026-11-02 CARD-06a (c)：顺手把最小化的窗口恢复掉（轮询确认，失败也不抛——
+        真正的判定留给 `window_rect`）。放在 bind 里而不是各脚本里，是因为
+        "绑定一个还在最小化的窗口"在每个调用方都是同一个错误，没必要抄 8 遍。
+        """
         if not hwnd or not user32.IsWindow(int(hwnd)):
             return False
         self.target_hwnd = int(hwnd)
+        from . import window as window_mod
+        try:
+            window_mod.restore(self.target_hwnd)
+        except Exception:                   # noqa: BLE001 - 恢复失败由 window_rect 报
+            pass
         return True
 
     def focus(self) -> bool:
@@ -358,14 +393,117 @@ class Screen:
             res = cv2.matchTemplate(hay, tpl, cv2.TM_CCOEFF_NORMED)
             _, mx, _, loc = cv2.minMaxLoc(res)
             if best is None or mx > best.score:
-                best = Match(name, float(mx), ox + loc[0], oy + loc[1], tpl.shape[1], tpl.shape[0])
+                best = Match(name, float(mx), ox + loc[0], oy + loc[1],
+                             tpl.shape[1], tpl.shape[0], float(sc))
+        self.last_best = best.score if best is not None else None
         if best is not None and best.score >= th:
             if self.verbose:
                 print(f"  找到 {best}")
             return best
         if self.verbose:
-            print(f"  没找到 {name}（最高 {best.score:.3f} / 阈值 {th}）" if best else f"  没找到 {name}（图比屏幕大）")
+            # 分数之外还要带上「在哪块屏、什么缩放」：本机副屏是竖屏，
+            # 窗口坐标是负的，模板又可能是在另一个页面缩放下截的，只看分数判不出原因。
+            tried = (f"；模板缩放 {'/'.join(f'{sc * 100:.0f}%' for sc in scales)}"
+                     if len(scales) > 1 else "")
+            print(f"  没找到 {name}（最高 {best.score:.3f} / 阈值 {th}{tried}；{self.describe(region)}）"
+                  if best else f"  没找到 {name}（图比屏幕大；{self.describe(region)}）")
         return None
+
+    def find_unique(self, name: str, *, threshold: float | None = None,
+                    region: tuple[int, int, int, int] | None = None,
+                    scales: tuple[float, ...] = (1.0,), limit: int = 10,
+                    gap: int = 8) -> dict:
+        """多尺度 + **唯一性**匹配（CARD-06b 第 6 条）。
+
+        `find()` 只给最高分，多尺度时"同一张图在两处命中"看不出来。档位芯片
+        必须唯一：芯片和菜单项长得像，取第一个就可能读到菜单里那一行。
+
+        返回：{"match": Match|None, "ambiguous": bool, "best": 最高分,
+               "scale": 最高分所在尺度, "hits": 该尺度下的命中}
+        · 只要**任一**尺度上同一模板有 ≥2 处命中 → ambiguous=True，match=None；
+        · 最高分没过阈值 → match=None，best 仍然带出来（报错要用它）。
+        """
+        th = self.threshold if threshold is None else threshold
+        hay = cv2.cvtColor(self.grab(region), cv2.COLOR_BGR2GRAY)
+        tpl0 = self.template(name)
+        ox, oy = (region[0], region[1]) if region else (
+            user32.GetSystemMetrics(SM_XVIRTUALSCREEN), user32.GetSystemMetrics(SM_YVIRTUALSCREEN))
+        best_score, best_scale, best_match = -1.0, 1.0, None
+        ambiguous = False
+
+        def keep(hits):
+            hits.sort(key=lambda m: m.score, reverse=True)
+            kept = []
+            for hit in hits:
+                if all(abs(hit.x - old.x) > gap or abs(hit.y - old.y) > gap for old in kept):
+                    kept.append(hit)
+                    if len(kept) >= limit:
+                        break
+            return kept
+
+        for sc in scales:
+            tpl = tpl0 if sc == 1.0 else cv2.resize(
+                tpl0, None, fx=sc, fy=sc, interpolation=cv2.INTER_AREA if sc < 1 else cv2.INTER_CUBIC)
+            if tpl.shape[0] > hay.shape[0] or tpl.shape[1] > hay.shape[1]:
+                continue
+            res = cv2.matchTemplate(hay, tpl, cv2.TM_CCOEFF_NORMED)
+            if not res.size:
+                continue
+            peak = float(res.max())
+            if peak > best_score:
+                py, px = np.unravel_index(int(res.argmax()), res.shape)
+                best_score = peak
+                best_scale = float(sc)
+                best_match = Match(name, peak, ox + int(px), oy + int(py),
+                                   tpl.shape[1], tpl.shape[0], float(sc))
+            ys, xs = np.where(res >= th)
+            if len(xs) > 1:
+                same = keep([Match(name, float(res[y, x]), ox + int(x), oy + int(y),
+                                   tpl.shape[1], tpl.shape[0], float(sc))
+                             for y, x in zip(ys, xs)])
+                if len(same) > 1:
+                    ambiguous = True
+        self.last_best = None if best_score < 0 else best_score
+        if ambiguous:
+            return {"match": None, "ambiguous": True, "best": self.last_best,
+                    "scale": best_scale, "hits": []}
+        if best_match is not None and best_match.score >= th:
+            return {"match": best_match, "ambiguous": False, "best": self.last_best,
+                    "scale": best_scale, "hits": [best_match]}
+        return {"match": None, "ambiguous": False, "best": self.last_best,
+                "scale": best_scale, "hits": []}
+
+    def dpi_scale(self) -> float | None:
+        """目标窗口所在显示器的缩放倍率（1.0 = 100%）。读不到返回 None。"""
+        try:
+            user32.GetDpiForWindow.argtypes = [wintypes.HWND]
+            user32.GetDpiForWindow.restype = wintypes.UINT
+            user32.GetDpiForSystem.argtypes = []
+            user32.GetDpiForSystem.restype = wintypes.UINT
+            if self.target_hwnd and user32.IsWindow(int(self.target_hwnd)):
+                return user32.GetDpiForWindow(int(self.target_hwnd)) / 96.0
+            return user32.GetDpiForSystem() / 96.0
+        except Exception:                   # noqa: BLE001 - 诊断信息不许把主流程带崩
+            return None
+
+    def describe(self, region: tuple[int, int, int, int] | None = None) -> str:
+        """一行说清「找图找在哪块屏、什么缩放」。只给报错/日志用，不参与判定。"""
+        parts = []
+        try:
+            r = region or self.window_rect()
+        except Exception:                   # noqa: BLE001
+            r = None
+        if r:
+            parts.append(f"区域 {r[0]},{r[1]} {r[2]}x{r[3]}")
+            try:
+                m = self.monitor_rect(r[0] + r[2] // 2, r[1] + r[3] // 2)
+                parts.append(f"显示器 {m[0]},{m[1]} {m[2]}x{m[3]}")
+            except Exception:               # noqa: BLE001
+                pass
+        scale = self.dpi_scale()
+        if scale:
+            parts.append(f"显示器缩放 {round(scale * 100)}%")
+        return "；".join(parts) if parts else "区域未知"
 
     def region_mean(self, m: Match) -> tuple[float, float, float]:
         """命中框内的平均 BGR。
@@ -390,6 +528,7 @@ class Screen:
         ox, oy = (region[0], region[1]) if region else (
             user32.GetSystemMetrics(SM_XVIRTUALSCREEN), user32.GetSystemMetrics(SM_YVIRTUALSCREEN))
         res = cv2.matchTemplate(hay, tpl, cv2.TM_CCOEFF_NORMED)
+        self.last_best = float(res.max()) if res.size else None
         ys, xs = np.where(res >= th)
         hits = [Match(name, float(res[y, x]), ox + int(x), oy + int(y), tpl.shape[1], tpl.shape[0])
                 for y, x in zip(ys, xs)]
@@ -463,6 +602,19 @@ class Screen:
         return (r.left, r.top, r.right - r.left, r.bottom - r.top)
 
     # ---------------------------------------------------------------- 动作
+    def _mark_input(self) -> None:
+        """记一笔「最后这次键鼠输入是我合成的」（CARD-09e 第 7 条）。
+
+        下一个脚本启动时的空闲闸会读这个 tick：如果系统最后的输入就是这一笔，
+        说明用户从那以后没动过机器，那句「你正在用电脑」是我们自己造成的。
+        纯提示，写失败一律吞掉，不许影响动作本身。
+        """
+        try:
+            from . import guard
+            guard.mark_synthetic("screen")
+        except Exception:                   # noqa: BLE001
+            pass
+
     def move_to(self, x: int, y: int) -> None:
         """把光标移到屏幕坐标 (x, y)。
 
@@ -506,6 +658,7 @@ class Screen:
         _send(_INPUT(type=INPUT_MOUSE, mi=_MOUSEINPUT(0, 0, 0, MOUSEEVENTF_LEFTDOWN, 0, None)))
         time.sleep(0.03)
         _send(_INPUT(type=INPUT_MOUSE, mi=_MOUSEINPUT(0, 0, 0, MOUSEEVENTF_LEFTUP, 0, None)))
+        self._mark_input()
 
     def click(self, m: Match, *, offset: tuple[int, int] = (0, 0)) -> None:
         cx, cy = m.center
@@ -542,6 +695,7 @@ class Screen:
             user32.SetCursorPos(int(x2), int(y2))
             time.sleep(0.05)
         user32.mouse_event(0x0004, 0, 0, 0, 0)      # LEFTUP
+        self._mark_input()
 
     def click_image(self, name: str, *, offset: tuple[int, int] = (0, 0),
                     wait: float = 0.0, threshold: float | None = None,
@@ -566,6 +720,7 @@ class Screen:
             self.move_to(int(at[0]), int(at[1]))
             time.sleep(0.05)
         user32.mouse_event(0x0800, 0, 0, int(notches) * 120, 0)
+        self._mark_input()
 
     def type_text(self, text: str, *, interval: float = 0.004) -> None:
         for ch in text.replace("\r\n", "\n").replace("\r", "\n"):
@@ -584,6 +739,7 @@ class Screen:
                 _send(_INPUT(type=INPUT_KEYBOARD, ki=_KEYBDINPUT(0, code, KEYEVENTF_UNICODE | KEYEVENTF_KEYUP, 0, None)))
             if interval:
                 time.sleep(interval)
+        self._mark_input()
 
     def press(self, key: str, *, times: int = 1) -> None:
         self._assert_foreground()
@@ -593,6 +749,7 @@ class Screen:
             time.sleep(0.02)
             _send(_INPUT(type=INPUT_KEYBOARD, ki=_KEYBDINPUT(vk, 0, KEYEVENTF_KEYUP, 0, None)))
             time.sleep(0.02)
+        self._mark_input()
 
     def hotkey(self, *keys: str) -> None:
         self._assert_foreground()
@@ -601,6 +758,7 @@ class Screen:
             _send(_INPUT(type=INPUT_KEYBOARD, ki=_KEYBDINPUT(c, 0, 0, 0, None)))
         for c in reversed(codes):
             _send(_INPUT(type=INPUT_KEYBOARD, ki=_KEYBDINPUT(c, 0, KEYEVENTF_KEYUP, 0, None)))
+        self._mark_input()
 
     # ---------------------------------------------------------------- 剪贴板
     def clipboard(self) -> str:
@@ -616,6 +774,18 @@ class Screen:
                 kernel32.GlobalUnlock(ctypes.c_void_p(h))
         finally:
             user32.CloseClipboard()
+
+    def clipboard_seq(self) -> int | None:
+        """剪贴板序列号：有人写一次剪贴板，Windows 就把它 +1。读不到返回 None。
+
+        CARD-09f 第 5 条：写剪贴板后用「序列号确实变了」确认内容真的更新了，
+        而不是靠「读回来的文本对不对」（两个不同文本在极端情况下也可能被判成
+        没变）。纯诊断，读不到不猜。
+        """
+        try:
+            return int(user32.GetClipboardSequenceNumber())
+        except Exception:                    # noqa: BLE001 - 诊断信息，不许带崩主流程
+            return None
 
     def set_clipboard(self, text: str) -> None:
         data = text.encode("utf-16-le") + b"\x00\x00"

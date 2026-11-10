@@ -30,6 +30,14 @@ class FakeForegroundLost(RuntimeError):
     pass
 
 
+class FakeZoomNot100(RuntimeError):
+    stage = "zoom_not_100"
+    code = 1
+
+    def as_result(self):
+        return {"ok": False, "stage": self.stage, "code": self.code}
+
+
 class Fixture:
     def __init__(self, script, argv):
         self.events = []
@@ -105,6 +113,17 @@ class Fixture:
             "EFFORTS": {"chat": {"instant": ("Instant", 0)},
                         "work": {"max": ("Max", 1)}},
             "COMPOSER": "composer", "CHECK": "check",
+            # CARD-06b 新增的模块级依赖：这里给最小替身，测的是"步骤顺序"，
+            # 不是缩放/留证本身（那两条在 test_card06b.py 里覆盖）。
+            "zoom_mod": types.SimpleNamespace(ensure=lambda *a, **k: None,
+                                              ZoomNot100=FakeZoomNot100,
+                                              SCALES=(1.0,)),
+            "failure": types.SimpleNamespace(record=lambda *a, **k: None),
+            "WindowMinimized": FakeForegroundLost,
+            "_fail": lambda endpoint, screen, hwnd, result, code: code,
+            "_evidence": lambda *a, **k: None,
+            "_zoom_guard": lambda screen: None,
+            "_CURRENT_HWND": {"v": None},
         }
         if script == "common":
             callback = load_function("src/qi/choose.py", "cli", self.namespace)

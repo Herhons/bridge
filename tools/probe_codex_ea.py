@@ -10,7 +10,7 @@ import cv2
 import numpy as np
 
 sys.path.insert(0, "src")
-from qi import desk, desk_flow, Screen  # noqa: E402
+from qi import desk, desk_flow, Screen, uilock  # noqa: E402
 from qi.desk_sites import SITES  # noqa: E402
 
 
@@ -92,4 +92,5 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # UI 前台锁（CARD-09f）：真机探针也要全程持有 runs\ui.lock
+    sys.exit(uilock.run("probe_codex_ea", main))

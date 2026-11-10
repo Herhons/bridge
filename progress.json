@@ -1,0 +1,54 @@
+{
+  "card_id": "09f-fix2",
+  "status": "done",
+  "note": "CARD-09f-fix2 完成：09f 第二轮返工（只补测试，不改 src 生产代码）。补 5 项单测：①gemini/grok 各 1 项——已答先于草稿判定（回填草稿存在返回 already_answered 而非 draft_present）+ 清回填草稿读回为空 + 不重发（write_prompt/_submit 未调用），真树走真实 scan/parse/_already_answered/_clear_draft；②workbuddy._already_replied 真实执行 2 项（只 patch open_app/ReplyConversation，prompt_at/last_reply/reply_text/reply_copy 真跑），覆盖已答与未答两种情况断言返回值；③两次调用同一流程 1 项——第一次 accepted 真实提交、第二次重跑只读不重发，submit 仅一次且回填草稿清空读回为空。py3.10 731 OK（726+5）。证据 card09f_fix2_unittest.txt。未验：三项均离线，真机路径未制造。",
+  "updated_at": "2026-11-02T19:22:07+08:00",
+  "running": [],
+  "verdicts": {
+    "01": "PASS",
+    "02": "PASS",
+    "03": "PASS",
+    "04+04b": "BLOCK",
+    "04c": "PASS(GLM,待Codex复验)",
+    "PLAN-r1": "PASS(GLM,待Codex复验)",
+    "GEM": "PASS(GLM,待Codex复验)",
+    "WEB": "PASS(GLM,待Codex复验)",
+    "05": "PASS(GLM,待Codex复验)",
+    "WEB2": "PASS(GLM,待Codex复验)",
+    "06a": "PASS(GLM,待Codex复验)",
+    "06b": "PASS(Hy3,WorkBuddy只读,412 OK;待Codex复验)",
+    "06c": "PASS(Hy4 preview,只读,447 OK;GLM 链路按额度报错规则;待Codex复验)",
+    "06d": "PASS(Hy4 preview,只读,447 OK;待Codex复验)",
+    "07": "PASS(Hy4 preview,只读,py3.10 487 OK;evidence\\accept_07_hy4_reply_uia.txt;待Codex复验)",
+    "08": "PASS(Hy4 preview,只读,py3.10 529 OK;evidence\\accept_08_hy4.txt;第3项 chatgpt_choose --list UIA读出 聊天/GPT-6/高 EXIT=0;7b 仅dry-run,真推未发未接调度;待Codex复验)",
+    "09a": "PASS(Hy4 preview,??,583 OK;evidence\\accept_09a_hy4_r2.txt;??FAIL?????,??card09a_notify.txt;BRIDGE_NOTIFY_URL???????;?Codex??)",
+    "09b": "PASS(Hy4 preview,只读,py3.10 645 OK;evidence\\accept_09b_hy4_reply_uia.txt;/health保留port为已知偏差;扩展未真机加载待09d;待Codex复验)",
+    "09e": "PASS(Hy4 preview,只读,py3.10 709 OK;evidence\\accept_09e_hy4.txt;未验:WorkBuddy自身重启真机,粘贴兜底真机未触发;待Codex复验)",
+    "09f": {
+      "verdict": "FAIL",
+      "by": "Hy4 preview accept",
+      "at": "2026-11-02 18:49",
+      "reason": "第7条 accepted后不自动重发+清回填草稿读回为空：无实现无单测；第6条中断重跑不重复提交单测缺；其余条有实现+单测；720 OK",
+      "evidence": "evidence/accept_09f_hy4_send.txt"
+    },
+    "09f-fix": {
+      "verdict": "FAIL",
+      "by": "Hy4 preview accept",
+      "at": "2026-11-02 19:12",
+      "reason": "gemini/grok 已答先判+清回填草稿无单测；_already_replied 判据单测全被 mock 未真实执行；第3/4项PASS；726 OK",
+      "evidence": "evidence/accept_09f_fix_hy4_send.txt"
+    },
+    "09f-fix2": {
+      "verdict": "PASS",
+      "by": "Hy4 preview accept",
+      "at": "2026-11-02 19:26",
+      "where": "构建者对话（例外，仅此一次；Herhons 批准）",
+      "note": "Ran 731 OK；变异验证5/5；src 未改。新对话验收由 Herhons 在7s 主动中断以免重复，作废、未重发。下张卡起验收一律新对话。",
+      "evidence": "evidence/accept_09f_fix2_builderchat_reply_REFERENCE.txt; evidence/wb_dump_builderchat_1927.txt",
+      "void": "evidence/accept_09f_fix2_hy4_send.txt（新对话，已中断）"
+    }
+  },
+  "queue": [
+    "10"
+  ]
+}

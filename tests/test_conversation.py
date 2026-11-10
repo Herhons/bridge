@@ -74,7 +74,7 @@ class FakeConversation:
 class ConversationTests(unittest.TestCase):
     prompt = "first line\nsecond line"
 
-    def run_turn(self, snapshots, timeout=2):
+    def run_turn(self, snapshots, timeout=4):  # 2026-10-30: +1.5s settle window
         clock = [0.0]
         conv = FakeConversation(snapshots)
         with patch("qi.conversation.time.monotonic", side_effect=lambda: clock[0]), \

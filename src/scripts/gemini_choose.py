@@ -28,8 +28,9 @@ _SRC = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _SRC not in sys.path:
     sys.path.insert(0, _SRC)
 
-from qi import ForegroundLost, Library, Screen  # noqa: E402
-from qi import guard  # noqa: E402
+from qi import ForegroundLost, Library, Screen, console, uilock  # noqa: E402
+from qi import failure, guard  # noqa: E402
+from qi import zoom as zoom_mod  # noqa: E402
 from qi.browser import ensure_site  # noqa: E402
 from qi.choose import Chooser, choose_writer, read_writer  # noqa: E402
 from qi.flow import Site, _open_new_chat  # noqa: E402
@@ -90,22 +91,43 @@ def _open_model_menu(s) -> bool:
     return _items_visible(s)
 
 
+CHECK_INK_BOX = (-26, 3, 22, 22)      # 勾的取样窗：相对标题模板左上角 (dx, dy, w, h)
+
+
+def _check_ink(band) -> int:
+    """采样窗里"勾"的亮像素数；**不是勾的形状就返回 0**。
+
+    为什么不能只数亮像素：菜单刚打开时**第一项可能带一个白色焦点框**（2026-11-02 实测），
+    框的左边线正好擦着采样窗的左边，能数出几十个亮像素，比真勾（30）还多——
+    只数像素会把"焦点停在第一项"误读成"选的就是第一项"，而它恰恰不是。
+    勾是 11 列 × 8 行的一小坨弯线；焦点框的边是 2~3 列、二十来行的直线。
+    所以要求列数 ≥5：直线过不了，勾过得去。
+    """
+    g = cv2.cvtColor(band, cv2.COLOR_BGR2GRAY)
+    mask = g > 100
+    cols = int(mask.any(axis=0).sum())
+    rows = int(mask.any(axis=1).sum())
+    if cols < 5 or rows < 3:
+        return 0
+    return int(mask.sum())
+
+
 def read_model(s) -> dict:
     """读当前模型：看菜单项**左侧**有没有勾。
 
-    实测（2026-10-29 新菜单）：勾在标题左边，采样窗 = (m.x-45, m.y+10, 26, 24)，
-    选中 42 个亮像素，未选 0。之前判成"勾位置会变"，是因为整行模板把定位点带偏了；
-    现在模板只截标题文字（125x19），定位稳定到 1.000，勾区就跟着稳了。
+    CARD-07 第 4 条：2026-11-02 的菜单换了排版，旧采样窗 (m.x-45, m.y+10, 26, 24)
+    从 m.y+10 起、到 m.x-19 止，把勾（垂直居中、离标题左边缘 12~18px）整个错过去，
+    四个档位全读成 0、model=unknown。现在采「标题左侧紧邻的一小块」，
+    并且用 `_check_ink` 按形状认勾（顺手排掉第一项的焦点框）。
     """
     if not _open_model_menu(s):
         return {"model": "unknown", "hint": "打不开模型菜单"}
     ink = {}
+    dx, dy, w, h = CHECK_INK_BOX
     for k in CFG.options:
         m = s.find(f"gem_item_{k}", threshold=0.88, region=_win(s))
         if m is not None:
-            band = s.grab((m.x - 45, m.y + 10, 26, 24))
-            g = cv2.cvtColor(band, cv2.COLOR_BGR2GRAY)
-            ink[k] = int((g > 110).sum())
+            ink[k] = _check_ink(s.grab((m.x + dx, m.y + dy, w, h)))
     s.press("esc")
     time.sleep(0.3)
     if not ink:
@@ -140,6 +162,19 @@ def set_model(s, key: str) -> dict:
 REQUIRED = ([f"gem_item_{k}" for k in CFG.options]
             + ["gem_mic"]
             + list(CFG.writer_tabs))
+
+
+def _record_receipt(hwnd, dimension, target, readback, raw):
+    """写档位回执（CARD-06a (a)）。**失败一律不影响选择结果。**
+
+    读回为空/读不回原名时传 None：use 会因此拒发——那是实话。
+    """
+    try:
+        from qi import tier_guard
+        tier_guard.record_choice("gemini", target=target, readback=readback,
+                                 dimension=dimension, hwnd=hwnd, raw=raw)
+    except Exception:                                  # noqa: BLE001 - 回执不是主流程
+        pass
 
 
 def main() -> int:
@@ -181,6 +216,8 @@ def main() -> int:
     time.sleep(1.2)
 
     try:
+        # 页面缩放预检（CARD-06b 第 6 条）：非 100% 先 Ctrl+0，仍不是就退出
+        zoom_mod.ensure(sc, verbose=True)
         if args.new:
             site = Site(name="gemini", title_hint=CFG.title_hint, composer="gem_composer",
                         send="gem_send_on", actions="gem_actions", copy="gem_copy",
@@ -208,12 +245,23 @@ def main() -> int:
             print(json.dumps(result, ensure_ascii=False))
             if not result["ok"]:
                 return 1
+            rec = globals().get("_record_receipt")
+            if callable(rec):
+                rec(hwnd, "model", args.model,
+                    None if result.get("after") in (None, "unknown") else result.get("after"),
+                    result)
     except ForegroundLost as exc:
         print(json.dumps({"ok": False, "stage": "user_took_over", "hint": str(exc)},
                          ensure_ascii=False))
         return 4
+    except zoom_mod.ZoomNot100 as exc:
+        result = {**exc.as_result(), "ok": False}
+        failure.record("gemini", result, screen=sc, hwnd=hwnd)
+        print(json.dumps(result, ensure_ascii=False))
+        return exc.code
     return 0
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    console.setup()          # 入口编码：GBK 控制台不再被 \u200b 打崩（CARD-08 第 1 条）
+    raise SystemExit(uilock.run("gemini_choose", main))

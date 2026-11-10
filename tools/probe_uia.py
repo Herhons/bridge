@@ -19,6 +19,13 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from pathlib import Path
+
+# UI 前台锁（CARD-09f）：真机探针也要全程持有 runs\ui.lock
+_SRC = str(Path(__file__).resolve().parents[1] / "src")
+if _SRC not in sys.path:
+    sys.path.insert(0, _SRC)
+from qi import uilock  # noqa: E402
 
 try:
     import uiautomation as auto
@@ -91,4 +98,5 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # UI 前台锁（CARD-09f）：真机探针也要全程持有 runs\ui.lock
+    sys.exit(uilock.run("probe_uia", main))

@@ -202,10 +202,12 @@ class DesktopControlTests(unittest.TestCase):
             "set_model": lambda *args: calls.append("model") or {"ok": model_ok},
             "set_effort": lambda *args: calls.append("effort") or {"ok": effort_ok},
             "ask": lambda *args: calls.append("ask") or {"ok": True},
+            "_CURRENT_HWND": {"v": None},
         }
         argv = [script, "--model", "target", "--effort", "low", "--force"]
         if script.endswith("_use.py"):
-            argv.append("test question")
+            # 2026-11-02 CARD-06a：发送必须带 --purpose（无默认值）
+            argv += ["test question", "--purpose", "test"]
         fn = load_function(script, "main", namespace)
         with patch.object(sys, "argv", argv), contextlib.redirect_stdout(io.StringIO()):
             result = fn()

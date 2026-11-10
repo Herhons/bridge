@@ -8,13 +8,33 @@
 
 为什么必须放在 `bring_to_front` 之前：把窗口提到前台本身就是抢焦点，
 被抢的那一下你正在打字就会丢字，所以检查要在一切动作之前。
+
+## CARD-09e 第 7 条：别把自己的输入当成"用户在用电脑"
+
+`GetLastInputInfo` 数的是**整台机器**的最后一次输入，脚本自己用 `SendInput`
+打的字、点的鼠标同样算数。于是每次刚跑完 `*_choose` 再跑 `*_use`，
+启动闸都会报一句「你正在用电脑（空闲 0.7–1.9s）」再白等两秒——那不是用户在用，
+是我们上一秒打的字。
+
+判据：`Screen` 每次合成输入之后把当时的 tick 记进 `runs\\synthetic_input.json`；
+如果系统现在的"最后输入 tick"跟记下的完全一致，说明从那以后**没人动过机器**，
+那次输入就是我们自己 —— 按"很久没动"处理。用户只要碰一下键鼠，tick 就变了，
+判据自动失效，不会把真人操作吞掉。
+
+记录只做提示用：读不到/写不进都不影响 `--idle` 的原语义（宁可多等，不会硬闯）。
 """
 
 from __future__ import annotations
 
 import ctypes
+import json
 import time
 from ctypes import wintypes
+from pathlib import Path
+
+RUNS = Path(__file__).resolve().parents[2] / "runs"
+MARK_FILE = RUNS / "synthetic_input.json"
+OWN_IDLE = 999.0        # 「最后那次输入是我们自己打的」时报的空闲秒数
 
 _user32 = ctypes.windll.user32
 _kernel32 = ctypes.windll.kernel32
@@ -25,15 +45,73 @@ class _LASTINPUTINFO(ctypes.Structure):
     _fields_ = [("cbSize", wintypes.UINT), ("dwTime", wintypes.DWORD)]
 
 
-def idle_seconds() -> float:
-    """距离最后一次键鼠输入过了多少秒。拿不到就当作"很久没动"。"""
+def _last_input_tick() -> int | None:
+    """系统最后一次键鼠输入的 tick（毫秒）；拿不到返回 None。"""
     lii = _LASTINPUTINFO()
     lii.cbSize = ctypes.sizeof(_LASTINPUTINFO)
     if not _user32.GetLastInputInfo(ctypes.byref(lii)):
+        return None
+    return int(lii.dwTime)
+
+
+def idle_seconds() -> float:
+    """距离最后一次键鼠输入过了多少秒。拿不到就当作"很久没动"。
+
+    若最后那次输入是脚本自己合成的（见文件开头第 7 条），同样按"很久没动"
+    处理：那一刻之前用户空了多久我们不知道，但"用户正在用"这个结论一定不成立。
+    """
+    tick = _last_input_tick()
+    if tick is None:
         return 999.0
+    if tick == synthetic_tick():
+        return OWN_IDLE
     now = _kernel32.GetTickCount64() & 0xFFFFFFFF
-    delta = (now - lii.dwTime) & 0xFFFFFFFF
+    delta = (now - tick) & 0xFFFFFFFF
     return delta / 1000.0
+
+
+# ---------------------------------------------------------------- 合成输入标记
+_MARK_CACHE: dict = {"path": None, "mtime": None, "tick": None}
+
+
+def mark_synthetic(kind: str = "input", *, path: str | Path | None = None) -> int | None:
+    """记下"最后一次输入是我合成的"：写当时的 tick，返回它（读不到 tick 返回 None）。
+
+    原子替换写入；写失败一律吞掉——这是**提示**，不许影响主流程。
+    """
+    tick = last_input_tick()
+    if tick is None:
+        return None
+    target = Path(path) if path is not None else MARK_FILE
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        tmp = target.with_name(f".{target.name}.{time.time_ns()}.tmp")
+        tmp.write_text(json.dumps({"tick": tick, "wall": time.time(), "kind": kind},
+                                  ensure_ascii=False), encoding="utf-8")
+        tmp.replace(target)
+    except OSError:
+        pass
+    return tick
+
+
+def synthetic_tick(*, path: str | Path | None = None) -> int | None:
+    """读回记下的 tick；文件不在/读坏了返回 None。按 mtime 缓存，循环里调用不心疼。"""
+    target = Path(path) if path is not None else MARK_FILE
+    try:
+        stamp = target.stat().st_mtime_ns
+    except OSError:
+        return None
+    if _MARK_CACHE["path"] == str(target) and _MARK_CACHE["mtime"] == stamp:
+        return _MARK_CACHE["tick"]
+    tick = None
+    try:
+        data = json.loads(target.read_text(encoding="utf-8"))
+        if isinstance(data, dict) and data.get("tick") is not None:
+            tick = int(data["tick"])
+    except (OSError, ValueError, TypeError):
+        tick = None
+    _MARK_CACHE.update(path=str(target), mtime=stamp, tick=tick)
+    return tick
 
 
 def wait_for_idle(need: float = 2.0, timeout: float = 120.0, verbose: bool = True) -> tuple[bool, float]:
@@ -58,6 +136,19 @@ def wait_for_idle(need: float = 2.0, timeout: float = 120.0, verbose: bool = Tru
 def user_active(threshold: float = 0.8) -> bool:
     """最近 threshold 秒内有没有输入。运行中用它判断"要不要让位"。"""
     return idle_seconds() < threshold
+
+
+def last_input_tick() -> int | None:
+    """最后一次键鼠输入的系统 tick（毫秒）；拿不到返回 None。"""
+    return _last_input_tick()
+
+
+def user_moved_since(mark: int | None) -> bool:
+    """自 mark 以后有没有新的键鼠输入。mark 为空（没记过）就不拦。"""
+    if mark is None:
+        return False
+    now = last_input_tick()
+    return now is not None and now != mark
 
 
 def parse_guard_args(argv: list[str]) -> tuple[float, float, bool, list[str]]:

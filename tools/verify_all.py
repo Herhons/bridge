@@ -38,7 +38,8 @@ CHATGPT_MODELS = {
              "gpt6_luna", "gpt56_sol", "gpt56_terra", "gpt56_luna"],
 }
 CHATGPT_EFFORTS = {
-    "chat": ["low", "mid", "high"],
+    # CARD-06c 第 1 条：聊天模式三档是 即时/中/高，档名 instant/mid/high
+    "chat": ["instant", "mid", "high"],
     "work": ["low", "mid", "high", "xhigh", "max"],
 }
 
