@@ -1,0 +1,452 @@
+"""自迭代循环的驱动器（规格 §4 的十步）。
+
+真机动作只在这里：发问、上传、读回复。判定、材料、匿名、验真全在
+`src/qi/iteration.py`（可离线测）。
+
+用法：
+    py -3.10 -B tools/iterate.py status --round round-0
+    py -3.10 -B tools/iterate.py snapshot --round round-0
+    py -3.10 -B tools/iterate.py review --round round-0 --site chatgpt
+    py -3.10 -B tools/iterate.py verify --round round-0
+    py -3.10 -B tools/iterate.py anonymize --round round-0
+    py -3.10 -B tools/iterate.py summarize --round round-0
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "src"))
+
+from qi import iteration as it                      # noqa: E402
+
+CONFIG_PATH = ROOT / "docs" / "iteration.json"
+DEFAULT_CONFIG = {
+    # 投喂方式：upload=网页端上传文件；paste=分段粘贴。按厂商分别设定。
+    "feed": {"chatgpt": "upload", "grok": "paste", "gemini": "paste", "deepseek": "paste"},
+    "chunk_chars": 3600,
+    "seats": ["chatgpt", "grok", "gemini", "deepseek"],
+    "review_timeout": 900,
+    "upload_timeout": 120,
+}
+
+
+def load_config() -> dict:
+    cfg = dict(DEFAULT_CONFIG)
+    if CONFIG_PATH.is_file():
+        cfg.update(json.loads(CONFIG_PATH.read_text(encoding="utf-8")) or {})
+    return cfg
+
+
+def git(*args: str) -> str:
+    return subprocess.run(["git", *args], cwd=ROOT, capture_output=True,
+                          text=True, encoding="utf-8").stdout.strip()
+
+
+def round_dir(name: str) -> Path:
+    return ROOT / "docs" / "iterations" / name
+
+
+# ---------------------------------------------------------------- 1. 快照
+def cmd_snapshot(args, cfg) -> int:
+    state = it.State.load(ROOT, args.round)
+    sha = git("rev-parse", "HEAD")
+    branch = git("rev-parse", "--abbrev-ref", "HEAD")
+    remote = git("remote", "get-url", "origin")
+    snapshot = {"repo": remote, "branch": branch, "sha": sha,
+                "date": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+                "orchestrator": "tools/iterate.py@1"}
+    it.write_archive(round_dir(args.round), {"snapshot.json": snapshot})
+    state.set("snapshot", snapshot)
+    state.mark("snapshot", {"sha": sha})
+    print(json.dumps(snapshot, ensure_ascii=False))
+    return 0
+
+
+# ---------------------------------------------------------------- 2. 发问
+def _screen_for(site: str, *, new: bool = False):
+    from qi.flow import ensure_site
+    from qi.screen import Screen
+
+    hwnd = ensure_site(site, tab=None, continue_session=not new, verbose=False)
+    screen = Screen(verbose=False)
+    screen.bind(hwnd)
+    if not screen.focus():
+        raise RuntimeError(f"{site}: 拿不到前台")
+    screen.tab_site = site
+    return screen
+
+
+def _upload_settled(site: str, screen, timeout: float = 90.0) -> bool:
+    """等附件传完。
+
+    注意：**不能**等"发送键可用"——空输入框本来就不启用发送键，
+    那样会一直等到超时（Round 0 第一枪就是这么空等 20 分钟的）。
+    判据改成页面上不再出现「正在上传」。
+    """
+    from qi import ui
+
+    end = time.time() + timeout
+    while time.time() < end:
+        try:
+            control, _url = ui.document(screen.target_hwnd, site)
+            root = ui.tree(control)
+        except Exception:                     # noqa: BLE001
+            time.sleep(1.0)
+            continue
+        if not any("正在上传" in (node.name or "") for node in root.walk()):
+            return True
+        time.sleep(1.0)
+    return False
+
+
+#: 各端「新开会话」的入口名。取不到就退回站点根。
+NEW_CHAT = {
+    "chatgpt": ("新聊天", "新对话"),
+    "gemini": ("发起新对话",),
+    "grok": ("聊天",),
+    "deepseek": ("开启新对话", "新建对话"),
+}
+ROOT_URL = {
+    "chatgpt": "https://chatgpt.com/",
+    "grok": "https://grok.com/",
+    "gemini": "https://gemini.google.com/app",
+    "deepseek": "https://chat.deepseek.com/",
+}
+
+
+def conversation_session_id(url: str):
+    """从地址里取与标题无关的会话 id；没有就是新会话页。"""
+    from qi.conversation import session_id_of
+    return session_id_of(url)
+
+
+def start_new_chat(screen, site: str, timeout: float = 20.0) -> bool:
+    """真的新开一个会话，并**验证 URL 已经变**。
+
+    上一轮的教训：`ensure_site(continue_session=False)` 并不会替 chatgpt 新开，
+    材料被贴进了旧会话，取回的"回复"是别的话题。发错地方的代价比不发大得多，
+    所以这里必须验证；验证不过就返回 False，调用方**不许发送**。
+    """
+    from qi import ui
+
+    def url_now() -> str:
+        try:
+            control, url = ui.document(screen.target_hwnd, site)
+            return url or ""
+        except Exception:                     # noqa: BLE001
+            return ""
+
+    before = url_now()
+    if before and conversation_session_id(before) is None:
+        return True                      # 已经在新会话页（例如站点根）
+    end = time.time() + timeout
+    while time.time() < end:
+        try:
+            control, _url = ui.document(screen.target_hwnd, site)
+            root = ui.tree(control)
+        except Exception:                     # noqa: BLE001
+            time.sleep(0.5)
+            continue
+        target = None
+        for node in root.walk():
+            if node.kind not in ("ButtonControl", "HyperlinkControl") or node.offscreen:
+                continue
+            name = (node.name or "").strip()
+            if name and any(name == want for want in NEW_CHAT.get(site, ())):
+                target = node
+                break
+        if target is not None:
+            rect = target.control.BoundingRectangle
+            screen.click_xy((rect.left + rect.right) // 2, (rect.top + rect.bottom) // 2)
+            time.sleep(2.0)
+            after = url_now()
+            if after and conversation_session_id(after) is None:
+                # 「新会话页」= 地址里没有会话 id。已经在 `/` 时点一下不会变地址，
+                # 那也算成功（再发一条自然就是新会话）。
+                return True
+        time.sleep(1.0)
+    return False
+
+
+def _clear_composer(screen, site: str) -> bool:
+    """清空输入框。上一次失败会把提问留在里面，下一次就会被判 draft_present。"""
+    from qi import ui
+
+    try:
+        control, _url = ui.document(screen.target_hwnd, site)
+        root = ui.tree(control)
+    except Exception:                     # noqa: BLE001
+        return False
+    editors = [n for n in root.walk()
+               if n.kind == "EditControl" and (n.name or "").strip()]
+    if not editors:
+        return False
+    editors[0].control.SetFocus()
+    screen.hotkey("ctrl", "a")
+    screen.press("delete")
+    return True
+
+
+def _ask_upload(site: str, prompt: str, material: Path, cfg) -> dict:
+    from qi import conversation, upload
+
+    screen = _screen_for(site)
+    _clear_composer(screen, site)
+    up = upload.upload(screen, site, str(material), timeout=cfg["upload_timeout"])
+    if not up.ok:
+        return {"ok": False, "stage": "upload_failed", **up.as_dict()}
+    if not _upload_settled(site, screen):
+        return {"ok": False, "stage": "upload_not_settled", "upload": up.as_dict()}
+    conv = conversation.Conversation(screen, site)
+    result = conversation.ask(conv, prompt, timeout=cfg["review_timeout"],
+                              purpose="review")
+    result["feed"] = "upload"
+    result["upload"] = up.as_dict()
+    return result
+
+
+def _ask_paste(site: str, prompt: str, material_text: str, cfg) -> dict:
+    """分段粘贴：第一段新开会话，其余续写同一会话。"""
+    from qi import conversation
+
+    limit = int((cfg.get("chunk_chars_by_site") or {}).get(site, cfg["chunk_chars"]))
+    chunks = it.pack_chunks(material_text, limit, head=prompt)
+    last = {"ok": False, "stage": "no_chunks"}
+    for index, chunk in enumerate(chunks, start=1):
+        screen = _screen_for(site, new=(index == 1))
+        if index == 1:
+            _clear_composer(screen, site)     # 上一轮残留的草稿会判 draft_present
+        if index == 1 and not start_new_chat(screen, site):
+            # 新开会话没成功就绝不发：贴上旧会话等于拿旧上下文冒充本轮意见。
+            return {"ok": False, "stage": "new_chat_failed", "feed": "paste",
+                    "chunks": len(chunks)}
+        conv = conversation.Conversation(screen, site)
+        # 中间分段只是"读材料"，用短超时；最后一段要出意见，才用 review 档。
+        budget = cfg["review_timeout"] if index == len(chunks) else int(
+            cfg.get("chunk_timeout", 300))
+        last = conversation.ask(conv, chunk, timeout=budget, purpose="review")
+        if not last.get("ok"):
+            return {**last, "feed": "paste", "chunks": len(chunks), "at": index}
+    return {**last, "feed": "paste", "chunks": len(chunks)}
+
+
+def cmd_review(args, cfg) -> int:
+    state = it.State.load(ROOT, args.round)
+    done = state.done(f"review:{args.site}")
+    if done and not args.force:
+        print(json.dumps({"skipped": "already_done", **done}, ensure_ascii=False))
+        return 0
+
+    prompt_path = round_dir(args.round) / "prompt.md"
+    if not prompt_path.is_file():
+        print(json.dumps({"ok": False, "error": "prompt_missing",
+                          "hint": f"先写 {prompt_path}"}, ensure_ascii=False))
+        return 2
+    prompt = prompt_path.read_text(encoding="utf-8")
+    material = round_dir(args.round) / "materials" / "material.md"
+    mode = str(cfg["feed"].get(args.site, "paste"))
+
+    started = time.time()
+    if mode == "upload":
+        if not material.is_file():
+            print(json.dumps({"ok": False, "error": "material_missing"}, ensure_ascii=False))
+            return 2
+        result = _ask_upload(args.site, prompt, material, cfg)
+    else:
+        text = material.read_text(encoding="utf-8") if material.is_file() else ""
+        result = _ask_paste(args.site, prompt, text, cfg)
+
+    reply = result.get("reply") or ""
+    replies_dir = round_dir(args.round) / "replies"
+    replies_dir.mkdir(parents=True, exist_ok=True)
+    (replies_dir / f"{args.site}.md").write_text(reply, encoding="utf-8")
+    payload = {"ok": bool(result.get("ok")), "stage": result.get("stage"),
+               "feed": result.get("feed", mode), "chars": len(reply),
+               "elapsed": round(time.time() - started, 1)}
+    state.mark(f"review:{args.site}", payload)
+    print(json.dumps(payload, ensure_ascii=False))
+
+    # 材料上传/粘贴的原始证据留档（不入库）
+    evidence = ROOT / "evidence" / "iterations" / args.round
+    evidence.mkdir(parents=True, exist_ok=True)
+    (evidence / f"{args.site}.json").write_text(
+        json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+    return 0 if result.get("ok") else 1
+
+
+# ---------------------------------------------------------------- 3. 验真
+def _tree_paths(sha: str, rdir: Path | None = None) -> list:
+    """真值表：优先读本轮的 `tree.txt`（离线可测），否则问 git。"""
+    if rdir is not None:
+        cached = rdir / "tree.txt"
+        if cached.is_file():
+            return [line.strip() for line in cached.read_text(encoding="utf-8").splitlines()
+                    if line.strip()]
+    try:
+        out = git("ls-tree", "-r", "--name-only", sha)
+    except Exception:                    # noqa: BLE001 - 离线测试守卫会拦 subprocess
+        return []
+    return [line for line in out.splitlines() if line.strip()]
+
+
+def cmd_verify(args, cfg) -> int:
+    state = it.State.load(ROOT, args.round)
+    snapshot = state.data.get("snapshot") or {}
+    sha = str(snapshot.get("sha") or "")
+    if not sha:
+        cached = round_dir(args.round) / "tree.txt"
+        if cached.is_file():
+            sha = "unknown"              # 有真值表就够，不必惊动 git（离线干跑）
+        else:
+            try:
+                sha = git("rev-parse", "HEAD")
+            except Exception:            # noqa: BLE001 - 没有 git 也能降级
+                sha = "unknown"
+    tree = _tree_paths(sha, round_dir(args.round))
+    spec_text = (ROOT / it.SPEC_PATH).read_text(encoding="utf-8")
+
+    replies_dir = round_dir(args.round) / "replies"
+    verdicts, report = {}, {}
+    for path in sorted(replies_dir.glob("*.md")):
+        site = path.stem
+        text = path.read_text(encoding="utf-8")
+        if "NO_ACCESS" in text[:200]:
+            verdict = {"hits": 0, "total": 0, "rate": 0.0, "core": False,
+                       "verdict": "no_access", "rows": []}
+        else:
+            verdict = it.verify_reply(text, tree_paths=tree, spec_text=spec_text,
+                                      core_paths=(it.SPEC_PATH,))
+        verdicts[site] = verdict
+        report[site] = {"chars": len(text), **{k: verdict[k] for k in
+                                              ("hits", "total", "rate", "core", "verdict")}}
+
+    valid = [s for s, v in verdicts.items() if v["verdict"] == "true_read"]
+    summary = {"sha": sha, "valid_seats": valid, "valid_count": len(valid),
+               "meets_three_vendors": len(valid) >= 3, "seats": report}
+
+    it.write_archive(round_dir(args.round), {
+        "quote_check.json": {"summary": summary, "detail": verdicts},
+        "quote_check.md": _quote_md(summary, report),
+    })
+    state.mark("verify", {"valid": valid, "count": len(valid)})
+    print(json.dumps(summary, ensure_ascii=False, indent=2))
+    return 0 if summary["meets_three_vendors"] else 1
+
+
+def _quote_md(summary, report) -> str:
+    lines = ["# 引用验真（Round 0 变体）", "",
+             f"快照 SHA：`{summary['sha']}`", "",
+             "| 端 | 字数 | 命中 | 总数 | 命中率 | 核心命中 | 判定 |",
+             "|---|---:|---:|---:|---:|---|---|"]
+    for site, row in sorted(report.items()):
+        lines.append(f"| {site} | {row['chars']} | {row['hits']} | {row['total']} | "
+                     f"{row['rate']} | {'是' if row['core'] else '否'} | {row['verdict']} |")
+    lines += ["", f"有效（真读）：{', '.join(summary['valid_seats']) or '无'}；"
+                  f"门槛 3 家：{'满足' if summary['meets_three_vendors'] else '未满足'}"]
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------- 4. 匿名 + 5. 汇总
+def cmd_anonymize(args, cfg) -> int:
+    state = it.State.load(ROOT, args.round)
+    qc = json.loads((round_dir(args.round) / "quote_check.json").read_text(encoding="utf-8"))
+    detail = qc["detail"]
+    replies = {p.stem: p.read_text(encoding="utf-8")
+               for p in sorted((round_dir(args.round) / "replies").glob("*.md"))}
+    pack = it.anonymize(replies, verdicts=detail)
+    (round_dir(args.round) / "anonymous_pack.md").write_text(pack, encoding="utf-8")
+    state.mark("anonymize", {"entries": pack.count("## F")})
+    print(json.dumps({"ok": True, "entries": pack.count("## F"),
+                      "chars": len(pack)}, ensure_ascii=False))
+    return 0
+
+
+def cmd_summarize(args, cfg) -> int:
+    from qi import conversation
+
+    pack = (round_dir(args.round) / "anonymous_pack.md").read_text(encoding="utf-8")
+    prompt = it.anonymize_prompt(pack)
+    screen = _screen_for("gemini")
+    conv = conversation.Conversation(screen, "gemini")
+    result = conversation.ask(conv, prompt, timeout=cfg["review_timeout"],
+                              purpose="review")
+    if not result.get("ok"):
+        print(json.dumps({"ok": False, "stage": result.get("stage")}, ensure_ascii=False))
+        return 1
+    (round_dir(args.round) / "gemini_summary.md").write_text(
+        result.get("reply") or "", encoding="utf-8")
+    it.State.load(ROOT, args.round).mark("summarize", {"chars": len(result.get("reply") or "")})
+    print(json.dumps({"ok": True, "chars": len(result.get("reply") or "")}, ensure_ascii=False))
+    return 0
+
+
+# ---------------------------------------------------------------- 上传自检
+def cmd_upload_check(args, cfg) -> int:
+    """新会话 → 上传一个小文件 → 只问一句 → 答案必须来自文件内容。
+
+    规格 §8 要求「文件已落到该端、对方按文件内容作答」，这一步就是那个自检。
+    """
+    from qi import conversation, upload
+
+    site = args.site or "chatgpt"
+    sample = ROOT / "docs" / "iterations" / args.round / "materials" / "upload_check.md"
+    sample.parent.mkdir(parents=True, exist_ok=True)
+    token = "BRIDGE-UPLOAD-CHECK-20261111"
+    sample.write_text(f"# 上传自检\n\n本文件只有一行关键内容：{token}\n", encoding="utf-8")
+
+    screen = _screen_for(site, new=True)
+    if not start_new_chat(screen, site):
+        print(json.dumps({"ok": False, "stage": "new_chat_failed"}, ensure_ascii=False))
+        return 1
+    _clear_composer(screen, site)
+    up = upload.upload(screen, site, str(sample), timeout=cfg["upload_timeout"])
+    if not up.ok:
+        print(json.dumps({"ok": False, "stage": "upload_failed", **up.as_dict()},
+                         ensure_ascii=False))
+        return 1
+    _upload_settled(site, screen)
+    conv = conversation.Conversation(screen, site)
+    result = conversation.ask(conv, "附件里那行关键内容是什么？只回答那一行，不要解释。",
+                              timeout=cfg["review_timeout"], purpose="review")
+    reply = (result.get("reply") or "").strip()
+    ok = token.lower() in reply.lower()
+    payload = {"ok": bool(result.get("ok")) and ok, "upload": up.as_dict(),
+               "stage": result.get("stage"), "answer": reply[:200],
+               "token_found": ok}
+    (ROOT / "docs" / "iterations" / args.round / "upload_check.json").write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(json.dumps(payload, ensure_ascii=False))
+    return 0 if payload["ok"] else 1
+
+
+# ---------------------------------------------------------------- status
+def cmd_status(args, cfg) -> int:
+    state = it.State.load(ROOT, args.round)
+    print(json.dumps(state.data, ensure_ascii=False, indent=2))
+    return 0
+
+
+def main(argv=None) -> int:
+    parser = argparse.ArgumentParser(description="自迭代循环驱动器")
+    parser.add_argument("command", choices=("status", "snapshot", "review", "verify",
+                                            "anonymize", "summarize", "upload-check"))
+    parser.add_argument("--round", default="round-0")
+    parser.add_argument("--site", default=None)
+    parser.add_argument("--force", action="store_true")
+    args = parser.parse_args(argv)
+    cfg = load_config()
+    if args.command == "review" and not args.site:
+        parser.error("review 需要 --site")
+    return {"status": cmd_status, "snapshot": cmd_snapshot, "review": cmd_review,
+            "verify": cmd_verify, "anonymize": cmd_anonymize,
+            "summarize": cmd_summarize, "upload-check": cmd_upload_check}[args.command](args, cfg)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

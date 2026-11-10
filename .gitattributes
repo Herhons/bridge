@@ -1,0 +1,5 @@
+# 钩子脚本必须 LF，否则 /bin/sh 会报 bad interpreter
+.githooks/** text eol=lf
+
+# 取证夹具按字节保存，绝不做换行转换（bundle 里记着它们的 sha256）
+evidence/** -text

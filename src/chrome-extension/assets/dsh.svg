@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
+  <title>DSH 示意图标</title>
+  <desc>BRIDGE 自制终端图形，仅用于识别 DSH 席位，不是官方品牌标识。</desc>
+  <rect x="1" y="1" width="30" height="30" rx="9" fill="#2367ED"/>
+  <path d="M9 11L14 16L9 21M17 21H23" stroke="#FFF" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="23" cy="10" r="2" fill="#A8CAFF"/>
+</svg>

@@ -1,0 +1,145 @@
+[
+  {
+    "case": "syntax",
+    "ok": true,
+    "files": 54
+  },
+  {
+    "case": "regressions",
+    "ok": true,
+    "returncode": 0,
+    "output": "test_existing_draft_and_busy_conversation_are_not_modified (test_conversation.ConversationTests.test_existing_draft_and_busy_conversation_are_not_modified) ... ok\ntest_first_turn_url_change_is_not_a_conversation_change (test_conversation.ConversationTests.test_first_turn_url_change_is_not_a_conversation_change)\n首轮发送后网页把 / 改成 /c/<id>，这是新建会话，不是用户切走。 ... ok\ntest_generation_pause_with_copy_available_is_not_completion (test_conversation.ConversationTests.test_generation_pause_with_copy_available_is_not_completion) ... ok\ntest_mismatched_input_never_submits (test_conversation.ConversationTests.test_mismatched_input_never_submits) ... ok\ntest_new_reply_waits_for_generation_to_finish (test_conversation.ConversationTests.test_new_reply_waits_for_generation_to_finish) ... ok\ntest_placeholder_text_counts_as_empty_composer (test_conversation.ConversationTests.test_placeholder_text_counts_as_empty_composer) ... ok\ntest_prompt_disappearing_is_a_conversation_change (test_conversation.ConversationTests.test_prompt_disappearing_is_a_conversation_change) ... ok\ntest_runtime_id_churn_does_not_look_like_a_switch (test_conversation.ConversationTests.test_runtime_id_churn_does_not_look_like_a_switch)\nChrome 重排会给同一个气泡换 RuntimeId；不能当成会话切换。 ... ok\ntest_shared_text_input_does_not_submit_on_newline (test_conversation.ConversationTests.test_shared_text_input_does_not_submit_on_newline) ... ok\ntest_switching_conversation_does_not_copy_another_reply (test_conversation.ConversationTests.test_switching_conversation_does_not_copy_another_reply)\n地址栏换了、屏幕上已经有回复：宁可超时也不复制它。 ... ok\ntest_typed_text_is_not_a_placeholder (test_conversation.ConversationTests.test_typed_text_is_not_a_placeholder) ... ok\ntest_unsent_question_never_returns_existing_answer (test_conversation.ConversationTests.test_unsent_question_never_returns_existing_answer) ... ok\ntest_url_change_only_rebaselines_existing_replies (test_conversation.ConversationTests.test_url_change_only_rebaselines_existing_replies)\n地址变了只把已有回复划成旧回复，不中止也不复制它们。 ... ok\ntest_user_copy_without_reply_actions_is_not_a_reply (test_conversation.ConversationTests.test_user_copy_without_reply_actions_is_not_a_reply) ... ok\ntest_failed_effort_blocks_message (test_desktop_controls.DesktopControlTests.test_failed_effort_blocks_message) ... ok\ntest_failed_model_blocks_effort_and_message (test_desktop_controls.DesktopControlTests.test_failed_model_blocks_effort_and_message) ... ok\ntest_foreground_loss_during_typing_stops_before_next_character (test_desktop_controls.DesktopControlTests.test_foreground_loss_during_typing_stops_before_next_character) ... ok\ntest_foreground_loss_stops_without_reactivation (test_desktop_controls.DesktopControlTests.test_foreground_loss_stops_without_reactivation) ... ok\ntest_model_requires_exact_readback_for_both_key_and_display_name (test_desktop_controls.DesktopControlTests.test_model_requires_exact_readback_for_both_key_and_display_name) ... ok\ntest_multiline_and_non_bmp_text_are_preserved_without_submission (test_desktop_controls.DesktopControlTests.test_multiline_and_non_bmp_text_are_preserved_without_submission) ... ok\ntest_successful_configuration_runs_in_order (test_desktop_controls.DesktopControlTests.test_successful_configuration_runs_in_order) ... ok\ntest_unsupported_model_does_not_change_selection (test_desktop_controls.DesktopControlTests.test_unsupported_model_does_not_change_selection) ... ok\ntest_default_run_keeps_historical_json (test_verifier.VerifierTests.test_default_run_keeps_historical_json) ... ok\ntest_effort_cases_match_current_script_options (test_verifier.VerifierTests.test_effort_cases_match_current_script_options) ... ok\ntest_failed_mode_never_runs_dependent_model_or_effort (test_verifier.VerifierTests.test_failed_mode_never_runs_dependent_model_or_effort) ... ok\ntest_failed_suite_returns_nonzero_and_records_failure (test_verifier.VerifierTests.test_failed_suite_returns_nonzero_and_records_failure) ... ok\ntest_malformed_success_output_is_protocol_failure (test_verifier.VerifierTests.test_malformed_success_output_is_protocol_failure) ... ok\ntest_random_effort_uses_effort_flag_and_establishes_mode (test_verifier.VerifierTests.test_random_effort_uses_effort_flag_and_establishes_mode) ... ok\ntest_random_rerun_includes_failed_cases (test_verifier.VerifierTests.test_random_rerun_includes_failed_cases) ... ok\ntest_successful_suite_returns_zero (test_verifier.VerifierTests.test_successful_suite_returns_zero) ... ok\ntest_wrong_effort_readback_fails (test_verifier.VerifierTests.test_wrong_effort_readback_fails) ... ok\ntest_wrong_mode_readback_stops_combination (test_verifier.VerifierTests.test_wrong_mode_readback_stops_combination) ... ok\ntest_chatgpt_incompatible_writer_and_model_are_rejected_before_ui (test_web_cli.WebCliTests.test_chatgpt_incompatible_writer_and_model_are_rejected_before_ui) ... ok\ntest_chatgpt_successful_combination_preserves_dependency_order (test_web_cli.WebCliTests.test_chatgpt_successful_combination_preserves_dependency_order) ... ok\ntest_failure_to_open_new_chat_stops_all_following_actions (test_web_cli.WebCliTests.test_failure_to_open_new_chat_stops_all_following_actions) ... ok\ntest_foreground_loss_stops_a_multi_step_command (test_web_cli.WebCliTests.test_foreground_loss_stops_a_multi_step_command) ... ok\ntest_gemini_combined_command_applies_every_requested_step_in_order (test_web_cli.WebCliTests.test_gemini_combined_command_applies_every_requested_step_in_order) ... ok\ntest_invalid_command_line_cannot_start_ui_work (test_web_cli.WebCliTests.test_invalid_command_line_cannot_start_ui_work) ... ok\ntest_list_alone_does_not_create_a_conversation (test_web_cli.WebCliTests.test_list_alone_does_not_create_a_conversation) ... ok\ntest_model_failure_never_applies_effort_to_the_wrong_model (test_web_cli.WebCliTests.test_model_failure_never_applies_effort_to_the_wrong_model) ... ok\ntest_new_and_list_reads_the_new_conversation (test_web_cli.WebCliTests.test_new_and_list_reads_the_new_conversation) ... ok\ntest_read_and_mutation_flags_are_rejected_before_opening_the_browser (test_web_cli.WebCliTests.test_read_and_mutation_flags_are_rejected_before_opening_the_browser) ... ok\ntest_tab_selection_is_passed_to_the_browser (test_web_cli.WebCliTests.test_tab_selection_is_passed_to_the_browser) ... ok\ntest_unreadable_state_does_not_report_success (test_web_cli.WebCliTests.test_unreadable_state_does_not_report_success) ... ok\ntest_writer_failure_never_selects_a_model_in_the_wrong_mode (test_web_cli.WebCliTests.test_writer_failure_never_selects_a_model_in_the_wrong_mode) ... ok\n\n----------------------------------------------------------------------\nRan 45 tests in 1.046s\n\nOK\n"
+  },
+  {
+    "case": "deepseek_choose:help",
+    "ok": true,
+    "returncode": 0,
+    "stdout": "用法：\n  python deepseek_choose.py --list                    # 读当前两个开关（只读）\n  python deepseek_choose.py --think on|off\n  python deepseek_choose.py --search on|off\n  python deepseek_choose.py --list --tab N            # 先按 Ctrl+N 切标签页\n  （发提问请用 deepseek_use.py）\n",
+    "stderr": "",
+    "seconds": 0.37
+  },
+  {
+    "case": "deepseek_use:help",
+    "ok": true,
+    "returncode": 0,
+    "stdout": "资源库就绪：4/4 张\nusage: deepseek_use.py [-h] [--new | --continue] [--timeout TIMEOUT]\n                       [--tab {1,2,3,4,5,6,7,8,9}]\n                       prompt\n\npositional arguments:\n  prompt                完整提问，可包含换行\n\noptions:\n  -h, --help            show this help message and exit\n  --new                 新对话（默认）\n  --continue\n  --timeout TIMEOUT\n  --tab {1,2,3,4,5,6,7,8,9}\n",
+    "stderr": "",
+    "seconds": 0.4
+  },
+  {
+    "case": "grok_choose:help",
+    "ok": true,
+    "returncode": 0,
+    "stdout": "资源库就绪：7/7 张\nusage: grok_choose.py [-h] [--list] [--writer {}]\n                      [--model {fast,expert,auto,build}]\n                      [--tab {1,2,3,4,5,6,7,8,9}]\n\n按写入器、模型的顺序选择并复核\n\noptions:\n  -h, --help            show this help message and exit\n  --list, -l\n  --writer {}\n  --model, --effort, --mode {fast,expert,auto,build}\n  --tab {1,2,3,4,5,6,7,8,9}\n",
+    "stderr": "",
+    "seconds": 0.38
+  },
+  {
+    "case": "grok_use:help",
+    "ok": true,
+    "returncode": 0,
+    "stdout": "资源库就绪：4/4 张\nusage: grok_use.py [-h] [--new | --continue] [--timeout TIMEOUT]\n                   [--tab {1,2,3,4,5,6,7,8,9}]\n                   prompt\n\npositional arguments:\n  prompt                完整提问，可包含换行\n\noptions:\n  -h, --help            show this help message and exit\n  --new                 新对话（默认）\n  --continue\n  --timeout TIMEOUT\n  --tab {1,2,3,4,5,6,7,8,9}\n",
+    "stderr": "",
+    "seconds": 0.38
+  },
+  {
+    "case": "gemini_choose:help",
+    "ok": true,
+    "returncode": 0,
+    "stdout": "usage: gemini_choose.py [-h] [--list] [--new] [--writer {dialog,task}]\n                        [--model {flash_lite,flash,pro,argon}] [--think THINK]\n                        [--tab {1,2,3,4,5,6,7,8,9}]\n\n选择 Gemini 写入器和模型，不发送消息\n\noptions:\n  -h, --help            show this help message and exit\n  --list, -l            读取当前模式和模型\n  --new                 先开新对话\n  --writer {dialog,task}\n  --model {flash_lite,flash,pro,argon}\n  --think THINK         思考等级（当前未实现）\n  --tab {1,2,3,4,5,6,7,8,9}\n",
+    "stderr": "",
+    "seconds": 0.39
+  },
+  {
+    "case": "gemini_use:help",
+    "ok": true,
+    "returncode": 0,
+    "stdout": "资源库就绪：8/8 张\nusage: gemini_use.py [-h] [--new | --continue] [--timeout TIMEOUT]\n                     [--tab {1,2,3,4,5,6,7,8,9}]\n                     prompt\n\npositional arguments:\n  prompt                完整提问，可包含换行\n\noptions:\n  -h, --help            show this help message and exit\n  --new                 新对话（默认）\n  --continue\n  --timeout TIMEOUT\n  --tab {1,2,3,4,5,6,7,8,9}\n\n--task 发到「任务（计划）」模式：先新对话，再切任务，然后提交 --chat 发到「对话」模式（默认）\n",
+    "stderr": "",
+    "seconds": 0.39
+  },
+  {
+    "case": "chatgpt_choose:help",
+    "ok": true,
+    "returncode": 0,
+    "stdout": "usage: chatgpt_choose.py [-h] [--list] [--new] [--writer {chat,work}]\n                         [--model {default,gpt56,gpt56_luna,gpt56_sol,gpt56_terra,gpt6,gpt61_sol,gpt61_terra,gpt6_astra,gpt6_luna,gpt6_sol}]\n                         [--effort {high,low,max,mid,xhigh}]\n                         [--tab {1,2,3,4,5,6,7,8,9}]\n\n选择 ChatGPT 模式、模型和强度，不发送消息\n\noptions:\n  -h, --help            show this help message and exit\n  --list, -l            读取当前状态\n  --new                 先开新对话\n  --writer {chat,work}\n  --model {default,gpt56,gpt56_luna,gpt56_sol,gpt56_terra,gpt6,gpt61_sol,gpt61_terra,gpt6_astra,gpt6_luna,gpt6_sol}\n  --effort {high,low,max,mid,xhigh}\n  --tab {1,2,3,4,5,6,7,8,9}\n",
+    "stderr": "",
+    "seconds": 0.39
+  },
+  {
+    "case": "chatgpt_use:help",
+    "ok": true,
+    "returncode": 0,
+    "stdout": "资源库就绪：4/4 张\nusage: chatgpt_use.py [-h] [--new | --continue] [--timeout TIMEOUT]\n                      [--tab {1,2,3,4,5,6,7,8,9}]\n                      prompt\n\npositional arguments:\n  prompt                完整提问，可包含换行\n\noptions:\n  -h, --help            show this help message and exit\n  --new                 新对话（默认）\n  --continue\n  --timeout TIMEOUT\n  --tab {1,2,3,4,5,6,7,8,9}\n",
+    "stderr": "",
+    "seconds": 0.41
+  },
+  {
+    "case": "deepseek_choose:live",
+    "ok": true,
+    "returncode": 0,
+    "stdout": "资源库就绪：2/2 张\n  复用窗口 hwnd=3280516（当前已是 deepseek）\n  找到 <ds_think 1.000 中心(-948,714)>\n  找到 <ds_search 1.000 中心(-846,714)>\n{\"think\": {\"state\": \"off\", \"blue\": 36.9}, \"search\": {\"state\": \"off\", \"blue\": 38.7}}\n",
+    "stderr": "",
+    "seconds": 3.64
+  },
+  {
+    "case": "deepseek_use:live",
+    "ok": true,
+    "returncode": 0,
+    "stdout": "资源库就绪：5/5 张\n  复用窗口 hwnd=3280516（当前已是 deepseek）\n  找到 <ds_newchat 1.000 中心(-1298,-347)>\n  没找到 ds_stop（最高 0.817 / 阈值 0.92）\n  找到 <ds_send_on 1.000 中心(-261,196)>\n  没找到 ds_stop（最高 0.817 / 阈值 0.92）\n  找到 <ds_send_on 1.000 中心(-261,208)>\n  找到 <ds_stop 1.000 中心(-261,715)>\n  没找到 ds_send_on（最高 0.875 / 阈值 0.95）\n  没找到 ds_stop（最高 0.817 / 阈值 0.92）\n  找到 <ds_copy 1.000 中心(-987,10)>\n{\"ok\": true, \"submission\": \"accepted\", \"sent\": true, \"stage\": \"answered\", \"reply\": \"BR009-20261030-005034-deepseek-OK\", \"basis\": \"new_user_message_and_reply_control\", \"elapsed\": 3.2, \"mode\": \"new\"}\n",
+    "stderr": "",
+    "seconds": 3.75,
+    "expected_reply": "BR009-20261030-005034-deepseek-OK"
+  },
+  {
+    "case": "grok_choose:live",
+    "ok": true,
+    "returncode": 0,
+    "stdout": "资源库就绪：7/7 张\n[等待] 你正在用电脑（空闲 0.5s < 2s），最多等你 15s 停手…\n[继续] 已空闲 2.1s，开始执行。\n  复用窗口 hwnd=3280516（当前已是 grok）\n  找到 <grok_chip_fast 1.000 中心(-408,723)>\n{\"state\": \"fast\", \"score\": 1.0}\n",
+    "stderr": "",
+    "seconds": 4.59
+  },
+  {
+    "case": "grok_use:live",
+    "ok": true,
+    "returncode": 0,
+    "stdout": "资源库就绪：5/5 张\n[等待] 你正在用电脑（空闲 0.9s < 2s），最多等你 15s 停手…\n[继续] 已空闲 2.1s，开始执行。\n  复用窗口 hwnd=3280516（当前已是 grok）\n  没找到 grok_send_on（最高 0.490 / 阈值 0.95）\n  找到 <grok_send_on 0.998 中心(-323,723)>\n  没找到 grok_send_on（最高 0.919 / 阈值 0.95）\n  找到 <grok_copy 0.940 中心(-943,-214)>\n{\"ok\": true, \"submission\": \"accepted\", \"sent\": true, \"stage\": \"answered\", \"reply\": \"BR009-20261030-005034-grok-OK\", \"basis\": \"new_user_message_and_screen_copy\", \"elapsed\": 8.6, \"mode\": \"new\"}\n",
+    "stderr": "",
+    "seconds": 10.35,
+    "expected_reply": "BR009-20261030-005034-grok-OK"
+  },
+  {
+    "case": "gemini_choose:live",
+    "ok": true,
+    "returncode": 0,
+    "stdout": "资源库就绪：7/7 张\n[等待] 你正在用电脑（空闲 0.5s < 2s），最多等你 15s 停手…\n[继续] 已空闲 2.1s，开始执行。\n  复用窗口 hwnd=3280516（当前已是 gemini）\n  没找到 gem_writer_tabs_dialog（最高 0.403 / 阈值 0.62）\n  没找到 gem_writer_tabs_task（最高 0.372 / 阈值 0.62）\n  没找到 gem_item_flash_lite（最高 0.480 / 阈值 0.85）\n  没找到 gem_item_flash（最高 0.519 / 阈值 0.85）\n  没找到 gem_item_pro（最高 0.821 / 阈值 0.85）\n  没找到 gem_item_argon（最高 0.543 / 阈值 0.85）\n  找到 <gem_mic 1.000 中心(-197,665)>\n  找到 <gem_item_flash_lite 0.965 中心(-315,269)>\n  找到 <gem_item_flash_lite 0.965 中心(-315,269)>\n  找到 <gem_item_flash 0.975 中心(-315,347)>\n  找到 <gem_item_pro 0.976 中心(-315,424)>\n  找到 <gem_item_argon 0.982 中心(-315,504)>\n{\"writer\": \"unknown\", \"model\": \"argon\", \"ink\": {\"flash_lite\": 0, \"flash\": 0, \"pro\": 0, \"argon\": 40}, \"note\": \"模式按钮只在新对话页出现；可用 --new --list 开新对话后读取。\"}\n",
+    "stderr": "",
+    "seconds": 6.7
+  },
+  {
+    "case": "gemini_use:live",
+    "ok": true,
+    "returncode": 0,
+    "stdout": "资源库就绪：8/8 张\n[等待] 你正在用电脑（空闲 0.7s < 2s），最多等你 15s 停手…\n[继续] 已空闲 2.3s，开始执行。\n  复用窗口 hwnd=3280516（当前已是 gemini）\n  找到 <gem_writer_tabs_dialog 1.000 中心(-570,245)>\n  没找到 gem_send_on（最高 0.652 / 阈值 0.95）\n  没找到 gem_send_on（最高 0.652 / 阈值 0.95）\n{\"ok\": true, \"submission\": \"accepted\", \"sent\": true, \"stage\": \"answered\", \"reply\": \"BR009-20261030-005034-gemini-OK\", \"basis\": \"new_user_message_and_reply_control\", \"elapsed\": 52.1, \"mode\": \"new\"}\n",
+    "stderr": "",
+    "seconds": 54.25,
+    "expected_reply": "BR009-20261030-005034-gemini-OK"
+  },
+  {
+    "case": "chatgpt_choose:live",
+    "ok": false,
+    "returncode": 1,
+    "stdout": "资源库就绪：15/15 张\n[等待] 你正在用电脑（空闲 0.5s < 2s），最多等你 15s 停手…\n[继续] 已空闲 2.1s，开始执行。\n  复用窗口 hwnd=3280516（当前已是 chatgpt）\n  找到 <gpt_tab_chat_word 0.782 中心(-1360,-361)>\n  没找到 gpt_tab_work_word（最高 0.430 / 阈值 0.75）\n{\"writer\": \"unknown\", \"hint\": \"找不到模式词 ['work']（可能不在新聊天页，或缩放变了要重截模板）\", \"note\": \"模式按钮只在新聊天页出现；这里不主动改页面，读不到就手动开个新聊天。\"}\n",
+    "stderr": "",
+    "seconds": 4.23
+  },
+  {
+    "case": "chatgpt_use:live",
+    "ok": true,
+    "returncode": 0,
+    "stdout": "资源库就绪：5/5 张\n  复用窗口 hwnd=3280516（当前已是 chatgpt）\n  没找到 gpt_send_on（最高 0.911 / 阈值 0.95）\n  没找到 gpt_send_on（最高 0.898 / 阈值 0.95）\n{\"ok\": true, \"submission\": \"accepted\", \"sent\": true, \"stage\": \"answered\", \"reply\": \"BR009-20261030-005034-chatgpt-OK\", \"basis\": \"new_user_message_and_reply_control\", \"elapsed\": 8.7, \"mode\": \"new\"}\n",
+    "stderr": "",
+    "seconds": 9.23,
+    "expected_reply": "BR009-20261030-005034-chatgpt-OK"
+  }
+]

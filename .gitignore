@@ -1,0 +1,25 @@
+__pycache__/
+*.pyc
+*.pyo
+
+# 运行取证（每次跑都会产生，属临时产物）
+evidence/
+
+# 浏览器测试配置（体积大，不入库）
+.profile/
+
+*.log
+
+# 扩展签名私钥：只放 %LOCALAPPDATA%\Bridge\v009\，绝不入库（CARD-09b）
+*.pem
+*.p12
+*.pfx
+
+# B20：合并时补的忽略项（robocopy 会用 WIP 的 .gitignore 覆盖，故两处都要有）
+_selftest/
+_tmp/
+.chrome-window.json
+progress.json.lock
+runs/
+docs/history/checkpoints/
+@AutomationLog.txt

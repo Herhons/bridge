@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light">
+    <title>BRIDGE · 会审工作台</title>
+    <link rel="icon" href="assets/bridge-32.png" type="image/png">
+    <link rel="stylesheet" href="styles.css">
+    <script type="module" src="sidepanel.js"></script>
+  </head>
+  <body class="sidepanel">
+    <div class="app-shell">
+      <header class="app-header">
+        <div class="brand">
+          <img class="brand-mark" src="assets/bridge.svg" alt="" width="30" height="30">
+          <h1>BRIDGE</h1>
+          <span class="version">0.0.9</span>
+        </div>
+        <div class="header-actions">
+          <span id="backend-badge" class="status-badge" data-state="unknown">
+            <span class="status-dot" aria-hidden="true"></span><span id="backend-text">检测中</span>
+          </span>
+          <span class="header-divider" aria-hidden="true"></span>
+          <button id="settings-toggle" class="text-button" type="button" aria-expanded="true" aria-controls="pair-panel">配对设置</button>
+        </div>
+      </header>
+
+      <main class="workspace-content">
+        <section id="pair-panel" class="panel pair-panel" aria-labelledby="pair-heading">
+          <div class="section-heading">
+            <div class="heading-group"><h2 id="pair-heading">配对本地后端</h2><span id="pair-state" class="quiet">未配对</span></div>
+            <span class="quiet">127.0.0.1:18765</span>
+          </div>
+          <label class="sr-only" for="token-input">配对 token</label>
+          <div class="pair-row">
+            <input id="token-input" class="field-control" type="password" autocomplete="off" spellcheck="false"
+                   placeholder="粘贴 server.json 里的 token">
+            <button id="token-save" class="primary-button" type="button">保存</button>
+            <button id="token-clear" class="subtle-button" type="button">清除</button>
+          </div>
+          <p id="pair-status" class="pair-status" role="status" aria-live="polite">token 只保存在本机 chrome.storage.local，不进同步、不进日志。</p>
+          <div class="endpoint-row">
+            <span class="control-label">后端端点</span>
+            <span id="endpoint-list" class="endpoint-chips"><span class="quiet">未读取</span></span>
+          </div>
+        </section>
+
+        <section class="panel setup-panel" aria-labelledby="seats-heading">
+          <div class="section-heading seat-heading">
+            <div class="heading-group"><h2 id="seats-heading">会审席位</h2><span id="selected-count" class="quiet">已选 3 席</span></div>
+            <div class="seat-actions">
+              <button id="add-seat" class="text-button" type="button"><span aria-hidden="true">＋</span> 添加席位</button>
+              <button id="seat-prev" class="icon-button scroll-button" type="button" aria-label="向左查看席位"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m14 6-6 6 6 6"/></svg></button>
+              <button id="seat-next" class="icon-button scroll-button" type="button" aria-label="向右查看席位"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m10 6 6 6-6 6"/></svg></button>
+            </div>
+          </div>
+          <div id="seat-track" class="seat-track" role="group" aria-label="会审席位，可多选，左右滚动查看更多"></div>
+          <div class="setup-controls">
+            <div class="mode-control" role="group" aria-label="会审方式">
+              <span class="control-label">会审方式</span>
+              <div class="segmented">
+                <button id="mode-discuss" type="button" aria-pressed="true" class="is-active">共同讨论</button>
+                <button id="mode-debate" type="button" aria-pressed="false">正反辩论</button>
+              </div>
+            </div>
+            <div class="purpose-control" role="group" aria-label="用途">
+              <span class="control-label">用途</span>
+              <div class="segmented">
+                <button id="purpose-test" type="button" aria-pressed="false">测试</button>
+                <button id="purpose-review" type="button" aria-pressed="true" class="is-active">会审</button>
+                <button id="purpose-accept" type="button" aria-pressed="false">验收</button>
+              </div>
+            </div>
+            <div class="summary-control">
+              <span class="control-label">结论汇总</span>
+              <button id="summary-select" class="role-select summary-select" type="button" aria-label="选择结论汇总 AI"></button>
+              <button id="summary-settings" class="icon-button settings-button" type="button" aria-label="设置汇总 AI 的模型、模式和思考强度"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 4 .7-2h4.6l.7 2 2 .9 2.1-.4 2.3 4-1.4 1.6v2.3l1.4 1.6-2.3 4-2.1-.4-2 .9-.7 2H9.7L9 18.5l-2-.9-2.1.4-2.3-4L4 12.4v-2.3L2.6 8.5l2.3-4L7 4.9 9 4Z"/><circle cx="12" cy="10.8" r="3"/></svg></button>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel input-panel" aria-labelledby="input-heading">
+          <div class="section-heading"><h2 id="input-heading">任务输入</h2><span id="draft-status" class="quiet" role="status">草稿保存在本机</span></div>
+          <label class="sr-only" for="prompt-input">问题、需求或施工目标</label>
+          <textarea id="prompt-input" rows="3" maxlength="20000" spellcheck="false" placeholder="描述你的问题、需求或施工目标…"></textarea>
+          <div id="attachment-list" class="attachment-list" aria-label="本次临时选择的附件"></div>
+          <div class="input-toolbar">
+            <input id="attachment-input" type="file" multiple hidden>
+            <button id="attach-button" class="subtle-button" type="button" title="仅暂存文件名称，不读取或上传文件内容"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m20 11-8.5 8.5a5 5 0 0 1-7-7l10-10a3.5 3.5 0 0 1 5 5L9.4 17.6a2 2 0 0 1-2.8-2.8L16 5.5"/></svg>添加附件</button>
+            <button id="start-button" class="primary-button" type="button">开始会审 <span aria-hidden="true">→</span></button>
+          </div>
+        </section>
+
+        <section class="panel output-section" aria-labelledby="output-heading">
+          <div class="section-heading"><h2 id="output-heading">会审结果</h2><span id="output-provider" class="output-provider"></span></div>
+          <div class="result-tabs" role="tablist" aria-label="会审结果分类">
+            <button id="tab-summary" type="button" role="tab" aria-controls="output-panel" aria-selected="true" class="is-active">汇总结论</button>
+            <button id="tab-opinions" type="button" role="tab" aria-controls="output-panel" aria-selected="false" tabindex="-1">各方意见</button>
+            <button id="tab-disagreements" type="button" role="tab" aria-controls="output-panel" aria-selected="false" tabindex="-1">分歧点</button>
+          </div>
+          <div id="output-panel" class="output-panel" role="tabpanel" aria-labelledby="tab-summary" tabindex="0">
+            <div id="output-icon" class="empty-icon" aria-hidden="true"><svg viewBox="0 0 40 40"><path d="M24 6H12a4 4 0 0 0-4 4v20a4 4 0 0 0 4 4h16a4 4 0 0 0 4-4V14L24 6Z"/><path d="M24 6v8h8M14 20h12M14 26h8"/></svg></div>
+            <div id="output-empty" class="empty-copy"><p id="output-title">会审结论将在这里汇集</p><p id="output-description">保留各方意见与未解决的分歧</p></div>
+            <div id="output-body" class="output-body" hidden></div>
+          </div>
+          <div class="result-footer"><span id="result-status" class="quiet">尚未提交任务</span><button id="refresh-button" class="text-button" type="button">立即刷新 <span aria-hidden="true">↻</span></button></div>
+        </section>
+
+        <section class="panel jobs-panel" aria-labelledby="jobs-heading">
+          <div class="section-heading">
+            <div class="heading-group"><h2 id="jobs-heading">本机任务</h2><span id="jobs-count" class="quiet">0 个</span></div>
+            <span class="quiet">保留 24 小时</span>
+          </div>
+          <div id="jobs-list" class="jobs-list" role="list"></div>
+          <p id="jobs-empty" class="field-hint">还没有提交过任务。提交后会在这里按时间列出，关掉侧栏再打开仍在。</p>
+        </section>
+
+        <!-- T4-2 F4 工作流卡片。默认「测试模式」：**只读写 progress-test.json**，
+             正式 progress.json 在前端是永久只读的（三重防护见 sidepanel.js 的
+             workflowFile / canWrite / assertWritable）。 -->
+        <section class="panel workflow-panel" aria-labelledby="workflow-heading">
+          <div class="section-heading">
+            <div class="heading-group"><h2 id="workflow-heading">工作流卡片</h2><span id="workflow-status" class="quiet">未连接</span></div>
+            <button id="workflow-mode" class="subtle-button" type="button" aria-pressed="true">测试模式：开</button>
+          </div>
+          <div id="workflow-list" class="workflow-list" role="list"></div>
+        </section>
+
+        <section class="panel execution-panel" aria-labelledby="execution-heading">
+          <div class="section-heading"><h2 id="execution-heading">执行安排</h2><span class="quiet execution-hint">会审后，交给合适的伙伴</span></div>
+          <div class="execution-selectors">
+            <div class="execution-role"><span class="control-label">施工方</span><button id="builder-select" class="role-select" type="button" aria-label="选择并设置施工方"></button></div>
+            <div class="execution-role"><span class="control-label">验收方</span><button id="reviewer-select" class="role-select" type="button" aria-label="选择并设置验收方"></button></div>
+          </div>
+          <div class="execution-footer"><span>等待会审结论后进入施工</span><button id="handoff-button" class="secondary-button" type="button" disabled title="交付施工不在本卡范围">交给施工方 <span aria-hidden="true">→</span></button></div>
+        </section>
+      </main>
+
+      <footer class="app-footer"><span class="status-dot" aria-hidden="true"></span>本地后端 127.0.0.1:18765<span class="footer-divider">·</span>token 只存本机</footer>
+    </div>
+
+    <dialog id="config-dialog" aria-labelledby="dialog-title" aria-describedby="dialog-subtitle">
+      <form id="dialog-form">
+        <header class="dialog-header"><div><h2 id="dialog-title">席位设置</h2><p id="dialog-subtitle"></p></div><button id="dialog-close" class="icon-button" type="button" aria-label="关闭设置"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M6 18 18 6"/></svg></button></header>
+        <div id="dialog-content" class="dialog-content"></div>
+        <footer class="dialog-footer"><button id="dialog-cancel" class="secondary-button" type="button">取消</button><button id="dialog-save" class="primary-button" type="submit">保存设置</button></footer>
+      </form>
+    </dialog>
+    <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+  </body>
+</html>

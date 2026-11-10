@@ -1,0 +1,16 @@
+{
+  "ok": true,
+  "upload": {
+    "ok": true,
+    "reason": "ok",
+    "path": "F:\\Bridge\\v0.0.9\\docs\\iterations\\round-0\\materials\\upload_check.md",
+    "filename": "upload_check.md",
+    "waited": 3.2,
+    "detail": {
+      "needle": "upload_check.md"
+    }
+  },
+  "stage": "answered",
+  "answer": "BRIDGE-UPLOAD-CHECK-20261111",
+  "token_found": true
+}

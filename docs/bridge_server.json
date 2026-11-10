@@ -1,0 +1,41 @@
+{
+ "schema_version": 1,
+ "updated_at": "2026-11-02T16:26:00+08:00",
+ "note": "CARD-09a 本地后端配置 + CARD-09b 扩展配对。host 故意不开放修改：服务只绑 127.0.0.1，端口也只在本机用。改端口后重启 bridge_server.py start；token 在 %LOCALAPPDATA%\\Bridge\\v009\\server.json，换 token 用 rotate。allowed_extension_id 来自 manifest.json 的固定 key（私钥 .pem 只在 %LOCALAPPDATA%\\Bridge\\v009\\，不入库）：配了它，Origin 必须精确等于 chrome-extension://<该 ID>；留空才会退回 09a 的「chrome-extension:// 前缀」兼容规则。",
+ "port": 18765,
+ "queue_limit": 20,
+ "memory_jobs": 50,
+ "choose_timeout": 120.0,
+ "use_timeout": 120.0,
+ "endpoint_timeout": 420.0,
+ "ui_lock_timeout": 600.0,
+ "output_limit": 65536,
+ "prompt_limit": 20000,
+ "allowed_extension_id": "odjanlclocbikpjlkcfepnfbcejlapkd",
+ "allow_test_faults": false,
+ "endpoint_concurrency": 1,
+ "min_success": 3,
+ "exclusive_endpoints": [],
+ "endpoint_stagger": 0.0,
+ "web_window_mode": "tabs",
+ "prelaunch_endpoints": [
+  "dsh"
+ ],
+ "stall_busy_ignore": {
+  "codex": 45,
+  "dsh": 30
+ },
+ "budget_overrides": {
+  "codex": {
+   "use": 300
+  }
+ },
+ "max_endpoints_per_job": 4,
+ "choose_args": {
+  "chatgpt": [
+   "--new",
+   "--ready-wait",
+   "15"
+  ]
+ }
+}

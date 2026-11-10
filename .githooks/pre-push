@@ -1,0 +1,17 @@
+#!/bin/sh
+# B21：推送前跑全量离线用例（约 160 秒）。入库，靠 .gitattributes 保证 LF。
+set -u
+cd "$(git rev-parse --show-toplevel)" || exit 1
+PY=py
+command -v py >/dev/null 2>&1 || PY=python
+LOG="${TMPDIR:-/tmp}/qi-pre-push.log"
+echo "[pre-push] 离线回归（约 160s）..." >&2
+env -u PYTHONPATH "$PY" -3.10 -X utf8 -B -m unittest discover -s tests -q >"$LOG" 2>&1
+rc=$?
+if [ $rc -eq 0 ]; then
+    echo "[pre-push] 通过" >&2
+    exit 0
+fi
+echo "[pre-push] 回归失败（rc=$rc），已阻止推送。日志：$LOG" >&2
+tail -30 "$LOG" >&2
+exit 1

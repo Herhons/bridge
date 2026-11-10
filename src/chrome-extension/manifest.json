@@ -1,0 +1,34 @@
+{
+  "manifest_version": 3,
+  "name": "BRIDGE 会审工作台",
+  "version": "0.0.9",
+  "minimum_chrome_version": "116",
+  "description": "Bridge 0.0.9 会审工作台：Chrome 侧栏界面，配对本地后端后提交会审任务并轮询结果。",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAmLojnsfcjED80ib6y7wkDPbhhcZcwFrv8v9mD6hRfHnrYXTBA8HWI/BORMLFm6NZ3JlVRUF5jmwhjnV3RodF/se+rm2EHpbqlwhHM8KW7iuJyc7KYUccsAkKCQNKDyBTe6lRPJfhTSTxl4nsKKrVmNAeZdQX3ibrzwDfYmYcxmU/5XL5d42KTF4eXU/4EhW3LB0YHMBsqcCxO8rHMTQ24dPZdO8nCXS3M7i1kjdjScViB3tunHFAbjWWKSljIB3oAY4hhpPvZRWzxohmaUzFU+w2aruWF07l5UxEdZFedMao4Upixndtx/G1LLrstOGC8GBAwII8Gf/60t1vUTDNgwIDAQAB",
+  "permissions": ["storage", "sidePanel"],
+  "host_permissions": ["http://127.0.0.1:18765/*"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
+  "action": {
+    "default_title": "打开 BRIDGE 会审工作台",
+    "default_icon": {
+      "16": "assets/bridge-16.png",
+      "32": "assets/bridge-32.png",
+      "48": "assets/bridge-48.png",
+      "128": "assets/bridge-128.png"
+    }
+  },
+  "icons": {
+    "16": "assets/bridge-16.png",
+    "32": "assets/bridge-32.png",
+    "48": "assets/bridge-48.png",
+    "128": "assets/bridge-128.png"
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'none'; connect-src 'self' http://127.0.0.1:18765;"
+  }
+}

@@ -1,0 +1,317 @@
+{
+  "schema_version": 1,
+  "updated_at": "2026-11-07T12:12:23+08:00",
+  "note": "档位表（CARD-06a）。use 的 --purpose 按这张表取「该端该维度、这个用途要求的最低/最高档」，与 *_choose 写下的回执读回值逐字比对。表是数据，代码里不写死任何端名、档名。ladder 从低到高，只作说明与人工核对；真正参与判定的是 test/review/accept 三个白名单。",
+  "purposes": {
+    "test": "最低档：只验证「能不能发出去、能不能收到」，别烧额度（PLAN 档位规则）",
+    "review": "最高档：会审、判断用",
+    "accept": "最高档：验收用",
+    "accept_lite": "独立白名单，只给 opencode 的 GLM-5.3-Flash-Free：验链路连通性，不是旗舰档，结论写 PASS(GLM-lite)（CARD-06c 第 6 条）"
+  },
+  "dimensions": {
+    "model": "模型档（--model / --writer 选出来的那个）",
+    "effort": "思考强度档（--effort）",
+    "think": "deepseek 的「深度思考」开关（on/off），本端没有模型选择器，用它当档位"
+  },
+  "endpoints": {
+    "grok": {
+      "dimensions": {
+        "model": {
+          "ladder": [
+            "fast",
+            "auto",
+            "expert",
+            "build"
+          ],
+          "test": [
+            "fast"
+          ],
+          "review": [
+            "expert"
+          ],
+          "accept": [
+            "expert"
+          ],
+          "note": "build 是构建模式、不是更高档；Heavy 要订阅，不提供，所以最高档取 expert。auto/build 没有 chip 图，读不回来，use 会按「读回档为空」拒发。"
+        }
+      }
+    },
+    "gemini": {
+      "dimensions": {
+        "model": {
+          "ladder": [
+            "flash_lite",
+            "flash",
+            "pro",
+            "argon"
+          ],
+          "test": [
+            "flash_lite"
+          ],
+          "review": [
+            "argon"
+          ],
+          "accept": [
+            "argon"
+          ],
+          "note": "4 Argon = 复杂任务，菜单里最上一档；思考等级子菜单未实现，不进表。"
+        }
+      }
+    },
+    "chatgpt": {
+      "writer_modes": [
+        "work",
+        "chat"
+      ],
+      "dimensions": {
+        "model": {
+          "ladder": [
+            "gpt56_luna",
+            "gpt56_sol",
+            "gpt6_luna",
+            "gpt6_sol",
+            "gpt6_astra",
+            "gpt6",
+            "gpt61_terra",
+            "gpt61_sol"
+          ],
+          "test": [
+            "gpt56_luna"
+          ],
+          "review": [
+            "gpt61_sol"
+          ],
+          "accept": [
+            "gpt61_sol"
+          ],
+          "note": "默认表 = 工作模式。聊天模式的模型只有 gpt6 / gpt56，登记在 writers.chat 里（CARD-06c 第 2 条），回执带上 writer 后 use 按 writer 取表。",
+          "writers": {
+            "chat": {
+              "ladder": [
+                "gpt56",
+                "gpt6"
+              ],
+              "test": [
+                "gpt56"
+              ],
+              "review": [
+                "gpt6"
+              ],
+              "accept": [
+                "gpt6"
+              ],
+              "note": "聊天模式只有两个模型：GPT-5.6 Sol / GPT-6。最高档 = GPT-6（配合 effort=high，见 effort 的 writers.chat）。"
+            }
+          }
+        },
+        "effort": {
+          "ladder": [
+            "low",
+            "mid",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "test": [
+            "low"
+          ],
+          "review": [
+            "max"
+          ],
+          "accept": [
+            "max"
+          ],
+          "note": "默认表 = 工作模式五档（轻度/中/高/极高/Max）。聊天模式三档（即时/中/高）在 writers.chat 里，档名是 instant/mid/high。",
+          "writers": {
+            "chat": {
+              "ladder": [
+                "instant",
+                "mid",
+                "high"
+              ],
+              "test": [
+                "instant"
+              ],
+              "review": [
+                "high"
+              ],
+              "accept": [
+                "high"
+              ],
+              "note": "聊天模式三档：即时/中/高，最高是 high（界面上没有「极高/Max」）。accept/review = gpt6 + high。"
+            }
+          }
+        }
+      },
+      "required_dimensions": [
+        "model",
+        "effort"
+      ],
+      "require_writer": true
+    },
+    "codex": {
+      "dimensions": {
+        "model": {
+          "ladder": [
+            "default",
+            "gpt6_luna",
+            "gpt6_sol",
+            "gpt6_astra",
+            "gpt61_terra",
+            "gpt61_sol"
+          ],
+          "test": [
+            "gpt6_luna",
+            "default"
+          ],
+          "review": [
+            "gpt61_sol"
+          ],
+          "accept": [
+            "gpt61_sol"
+          ],
+          "note": "验收按 PLAN：GPT-6.1 Sol。default 是「自动选」，读回仍是具体模型名，所以只在测试档里兜底。"
+        },
+        "effort": {
+          "ladder": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max",
+            "ultra"
+          ],
+          "test": [
+            "low"
+          ],
+          "review": [
+            "ultra"
+          ],
+          "accept": [
+            "ultra"
+          ],
+          "note": "档数随模型变（5 档是 low..max，6 档才有 ultra）；ultra 只在 6 档模型上读得回来。"
+        }
+      }
+    },
+    "dsh": {
+      "dimensions": {
+        "model": {
+          "ladder": [
+            "deepseek_v41_flash",
+            "gpt6_luna"
+          ],
+          "test": [
+            "deepseek_v41_flash"
+          ],
+          "review": [
+            "gpt6_luna"
+          ],
+          "accept": [
+            "gpt6_luna"
+          ],
+          "note": "模板库只覆盖这两个可读回的模型。"
+        },
+        "effort": {
+          "ladder": [
+            "off",
+            "low",
+            "high",
+            "max"
+          ],
+          "test": [
+            "off"
+          ],
+          "review": [
+            "max"
+          ],
+          "accept": [
+            "max"
+          ],
+          "note": "菜单四行 Off / Low / High / Max。"
+        }
+      }
+    },
+    "opencode": {
+      "dimensions": {
+        "model": {
+          "ladder": [
+            "glm_53_flash_free",
+            "deepseek_v41_flash_free",
+            "claude_opus_55"
+          ],
+          "test": [
+            "deepseek_v41_flash_free"
+          ],
+          "review": [
+            "claude_opus_55"
+          ],
+          "accept": [
+            "claude_opus_55"
+          ],
+          "accept_lite": [
+            "glm_53_flash_free"
+          ],
+          "note": "accept 仍是最高档 Claude Opus 5.5。accept_lite 是独立白名单，只有 GLM-5.3-Flash-Free（界面显示 GLM-5.3-Flash Free）：验链路、走通收发，但结论只能写 PASS(GLM-lite)，不能当 accept。"
+        },
+        "effort": {
+          "ladder": [
+            "default",
+            "low",
+            "high",
+            "max"
+          ],
+          "test": [
+            "default"
+          ],
+          "review": [
+            "max"
+          ],
+          "accept": [
+            "max"
+          ],
+          "note": "菜单四行 Default / Low / High / Max。"
+        }
+      }
+    },
+    "deepseek": {
+      "dimensions": {
+        "think": {
+          "ladder": [
+            "off",
+            "on"
+          ],
+          "test": [
+            "off"
+          ],
+          "review": [
+            "on"
+          ],
+          "accept": [
+            "on"
+          ],
+          "note": "本端没有模型选择器，只有「深度思考」「智能搜索」两个开关；档位只认深度思考。"
+        }
+      }
+    },
+    "workbuddy": {
+      "dimensions": {
+        "model": {
+          "ladder": [],
+          "test": [
+            "DeepSeek-V4.1-Flash"
+          ],
+          "review": [
+            "DeepSeek-V4.1-Flash",
+            "Hy4"
+          ],
+          "accept": [
+            "DeepSeek-V4.1-Flash",
+            "Hy4"
+          ],
+          "note": "Owner authorized all three purposes on 2026-11-07 (T4-1): test/accept filled with the same models already verified for review (DeepSeek-V4.1-Flash; Hy4 verified by normal UI choose). ladder stays empty because there is no authoritative low/high ranking for WorkBuddy models -- ordering is NOT inferred from these allowlists. Empty-list fail-closed behavior is unchanged and still covered by tests."
+        }
+      }
+    }
+  }
+}

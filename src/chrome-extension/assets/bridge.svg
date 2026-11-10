@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" fill="none">
+  <title>BRIDGE</title>
+  <desc>自制紫色桥形标识。</desc>
+  <defs>
+    <linearGradient id="bridge-purple" x1="8" y1="8" x2="120" y2="120" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#9766F2"/>
+      <stop offset="1" stop-color="#6840C5"/>
+    </linearGradient>
+  </defs>
+  <rect x="4" y="4" width="120" height="120" rx="32" fill="url(#bridge-purple)"/>
+  <g stroke="#FFF" stroke-width="9" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M28 77H100"/>
+    <path d="M32 76C43 36 85 36 96 76"/>
+    <path d="M39 77V97M89 77V97"/>
+  </g>
+</svg>
