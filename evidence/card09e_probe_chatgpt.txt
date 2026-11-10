@@ -1,0 +1,696 @@
+  复用窗口 hwnd=526630（当前已是 chatgpt）
+hwnd=526630 url='https://chatgpt.com/c/6ae8452b-1218-83ea-a284-3189ca42e4e3'
+DocumentControl	'审查插件卡片'	-1432,-439 1364x1211	enabled=True	off=False
+GroupControl	''	-1432,-439 1364x1211	enabled=True	off=False
+GroupControl	''	-1432,-439 1364x1211	enabled=True	off=False
+GroupControl	''	-1432,-439 1364x1211	enabled=True	off=False
+GroupControl	''	-1427,-432 1x1	enabled=True	off=False
+GroupControl	''	-1427,-432 1x1	enabled=True	off=False
+HyperlinkControl	'跳转到内容'	-1427,-432 34x32	enabled=True	off=False
+TextControl	'跳转到内容'	-1410,-426 80x20	enabled=True	off=True
+GroupControl	''	0,0 0x0	enabled=True	off=True
+GroupControl	''	-1432,-439 1364x1211	enabled=True	off=False
+GroupControl	''	-1432,-439 1364x1211	enabled=True	off=False
+GroupControl	''	-1432,-439 372x1211	enabled=True	off=False
+GroupControl	''	-1432,-439 372x1211	enabled=True	off=False
+GroupControl	''	-1432,-439 372x1211	enabled=True	off=False
+GroupControl	''	-1432,-439 372x1211	enabled=True	off=False
+ButtonControl	'切换模式，当前模式：ChatGPT'	-1422,-429 109x32	enabled=True	off=False
+ButtonControl	'搜索'	-1148,-431 36x36	enabled=True	off=False
+ButtonControl	'隐藏侧边栏'	-1104,-431 36x36	enabled=True	off=False
+GroupControl	'聊天记录'	-1432,-387 372x1159	enabled=True	off=False
+GroupControl	''	-1432,-387 372x44	enabled=True	off=False
+ButtonControl	'新聊天'	-1426,-379 360x35	enabled=True	off=False
+GroupControl	''	-1432,-344 372x1052	enabled=True	off=False
+ButtonControl	'定时任务'	-1426,-340 350x35	enabled=True	off=False
+ButtonControl	'资料库'	-1426,-304 350x35	enabled=True	off=False
+ButtonControl	'插件'	-1426,-268 350x35	enabled=True	off=False
+ButtonControl	'探索'	-1426,-232 350x35	enabled=True	off=False
+GroupControl	''	-1432,-176 362x36	enabled=True	off=False
+ButtonControl	'置顶'	-1420,-176 338x36	enabled=True	off=False
+GroupControl	''	-1432,-120 362x36	enabled=True	off=False
+GroupControl	''	-1426,-120 350x36	enabled=True	off=False
+ButtonControl	'项目'	-1420,-120 330x36	enabled=True	off=False
+GroupControl	''	0,0 0x0	enabled=True	off=False
+ButtonControl	'项目侧边栏选项'	-1082,-114 24x24	enabled=True	off=True
+ButtonControl	'添加新项目'	-1054,-114 24x24	enabled=True	off=True
+ImageControl	''	-1050,-110 16x16	enabled=True	off=True
+GroupControl	''	-1432,-64 362x781	enabled=True	off=False
+GroupControl	''	-1426,-64 350x36	enabled=True	off=False
+ButtonControl	'最近'	-1420,-64 330x36	enabled=True	off=False
+GroupControl	''	0,0 0x0	enabled=True	off=False
+ButtonControl	'聊天侧边栏选项'	-1082,-58 24x24	enabled=True	off=True
+ButtonControl	'筛选聊天和工作'	-1054,-58 24x24	enabled=True	off=True
+ImageControl	''	-1050,-54 16x16	enabled=True	off=True
+ButtonControl	'新聊天'	-1026,-58 24x24	enabled=True	off=True
+GroupControl	''	-1426,-28 350x745	enabled=True	off=False
+GroupControl	''	-1426,-28 350x745	enabled=True	off=False
+ListControl	''	-1426,-24 350x740	enabled=True	off=False
+ListItemControl	'分支 · Character Design Prompt'	-1426,-24 350x37	enabled=True	off=False
+GroupControl	'分支 · Character Design Prompt'	-1426,-24 350x36	enabled=True	off=False
+HyperlinkControl	'分支 · Character Design Prompt'	-1416,-16 331x20	enabled=True	off=False
+GroupControl	''	-1416,-16 331x20	enabled=True	off=False
+TextControl	'分支 · Character Design Prompt'	-1416,-15 209x18	enabled=True	off=False
+GroupControl	''	-1130,-24 52x36	enabled=True	off=False
+ButtonControl	'聊天操作'	-1132,-16 20x21	enabled=True	off=False
+GroupControl	''	-1132,-16 20x21	enabled=True	off=False
+ButtonControl	'置顶聊天'	-1104,-16 20x20	enabled=True	off=False
+ListItemControl	'审查插件卡片'	-1426,13 350x37	enabled=True	off=False
+GroupControl	'审查插件卡片'	-1426,13 350x36	enabled=True	off=False
+HyperlinkControl	'审查插件卡片'	-1416,21 331x20	enabled=True	off=False
+GroupControl	''	-1416,21 331x20	enabled=True	off=False
+TextControl	'审查插件卡片'	-1416,22 84x18	enabled=True	off=False
+GroupControl	''	-1130,13 52x36	enabled=True	off=False
+ButtonControl	'聊天操作'	-1132,21 20x21	enabled=True	off=False
+GroupControl	''	-1132,21 20x21	enabled=True	off=False
+ButtonControl	'置顶聊天'	-1104,21 20x20	enabled=True	off=False
+ListItemControl	'Character Design Prompt'	-1426,50 350x37	enabled=True	off=False
+GroupControl	'Character Design Prompt'	-1426,50 350x36	enabled=True	off=False
+HyperlinkControl	'Character Design Prompt'	-1416,58 331x20	enabled=True	off=False
+GroupControl	''	-1416,58 331x20	enabled=True	off=False
+TextControl	'Character Design Prompt'	-1416,59 169x18	enabled=True	off=False
+GroupControl	''	-1130,50 52x36	enabled=True	off=False
+ButtonControl	'聊天操作'	-1132,58 20x21	enabled=True	off=False
+GroupControl	''	-1132,58 20x21	enabled=True	off=False
+ButtonControl	'置顶聊天'	-1104,58 20x20	enabled=True	off=False
+ListItemControl	'Flow生图报错处理'	-1426,87 350x37	enabled=True	off=False
+GroupControl	'Flow生图报错处理'	-1426,87 350x36	enabled=True	off=False
+HyperlinkControl	'Flow生图报错处理'	-1416,95 331x20	enabled=True	off=False
+GroupControl	''	-1416,95 331x20	enabled=True	off=False
+TextControl	'Flow生图报错处理'	-1416,96 116x18	enabled=True	off=False
+GroupControl	''	-1130,87 52x36	enabled=True	off=False
+ButtonControl	'聊天操作'	-1132,95 20x21	enabled=True	off=False
+GroupControl	''	-1132,95 20x21	enabled=True	off=False
+ButtonControl	'置顶聊天'	-1104,95 20x20	enabled=True	off=False
+ListItemControl	'修改图1底图'	-1426,124 350x37	enabled=True	off=False
+GroupControl	'修改图1底图'	-1426,124 350x36	enabled=True	off=False
+HyperlinkControl	'修改图1底图'	-1416,132 331x20	enabled=True	off=False
+GroupControl	''	-1416,132 331x20	enabled=True	off=False
+TextControl	'修改图1底图'	-1416,133 79x18	enabled=True	off=False
+GroupControl	''	-1130,124 52x36	enabled=True	off=False
+ButtonControl	'聊天操作'	-1132,132 20x21	enabled=True	off=False
+GroupControl	''	-1132,132 20x21	enabled=True	off=False
+ButtonControl	'置顶聊天'	-1104,132 20x20	enabled=True	off=False
+ListItemControl	'方案审查结论'	-1426,161 350x37	enabled=True	off=False
+GroupControl	'方案审查结论'	-1426,161 350x36	enabled=True	off=False
+HyperlinkControl	'方案审查结论'	-1416,169 331x20	enabled=True	off=False
+GroupControl	''	-1416,169 331x20	enabled=True	off=False
+TextControl	'方案审查结论'	-1416,170 84x18	enabled=True	off=False
+GroupControl	''	-1130,161 52x36	enabled=True	off=False
+ButtonControl	'聊天操作'	-1132,169 20x21	enabled=True	off=False
+GroupControl	''	-1132,169 20x21	enabled=True	off=False
+ButtonControl	'置顶聊天'	-1104,169 20x20	enabled=True	off=False
+ListItemControl	'制定最小工作流'	-1426,198 350x37	enabled=True	off=False
+GroupControl	'制定最小工作流'	-1426,198 350x36	enabled=True	off=False
+HyperlinkControl	'制定最小工作流'	-1416,206 331x20	enabled=True	off=False
+GroupControl	''	-1416,206 331x20	enabled=True	off=False
+TextControl	'制定最小工作流'	-1416,207 98x18	enabled=True	off=False
+GroupControl	''	-1130,198 52x36	enabled=True	off=False
+ButtonControl	'聊天操作'	-1132,206 20x21	enabled=True	off=False
+GroupControl	''	-1132,206 20x21	enabled=True	off=False
+ButtonControl	'置顶聊天'	-1104,206 20x20	enabled=True	off=False
+ListItemControl	'修复方案会审 乐彩'	-1426,235 350x37	enabled=True	off=False
+GroupControl	'修复方案会审 乐彩'	-1426,235 350x36	enabled=True	off=False
+HyperlinkControl	'修复方案会审 乐彩'	-1416,243 331x20	enabled=True	off=False
+GroupControl	''	-1416,243 331x20	enabled=True	off=False
+TextControl	'修复方案会审 乐彩'	-1416,244 117x18	enabled=True	off=False
+GroupControl	''	-1130,235 52x36	enabled=True	off=False
+ButtonControl	'聊天操作'	-1132,243 20x21	enabled=True	off=False
+GroupControl	''	-1132,243 20x21	enabled=True	off=False
+ButtonControl	'置顶聊天'	-1104,243 20x20	enabled=True	off=False
+ListItemControl	'修复卡会审结论'	-1426,272 350x37	enabled=True	off=False
+GroupControl	'修复卡会审结论'	-1426,272 350x36	enabled=True	off=False
+HyperlinkControl	'修复卡会审结论'	-1416,280 331x20	enabled=True	off=False
+GroupControl	''	-1416,280 331x20	enabled=True	off=False
+TextControl	'修复卡会审结论'	-1416,281 98x18	enabled=True	off=False
+GroupControl	''	-1130,272 52x36	enabled=True	off=False
+ButtonControl	'聊天操作'	-1132,280 20x21	enabled=True	off=False
+GroupControl	''	-1132,280 20x21	enabled=True	off=False
+ButtonControl	'置顶聊天'	-1104,280 20x20	enabled=True	off=False
+ListItemControl	'重试任务'	-1426,309 350x37	enabled=True	off=False
+GroupControl	'重试任务'	-1426,309 350x36	enabled=True	off=False
+HyperlinkControl	'重试任务'	-1416,317 331x20	enabled=True	off=False
+GroupControl	''	-1416,317 331x20	enabled=True	off=False
+TextControl	'重试任务'	-1416,318 56x18	enabled=True	off=False
+GroupControl	''	-1130,309 52x36	enabled=True	off=False
+ButtonControl	'聊天操作'	-1132,317 20x21	enabled=True	off=False
+GroupControl	''	-1132,317 20x21	enabled=True	off=False
+ButtonControl	'置顶聊天'	-1104,317 20x20	enabled=True	off=False
+ListItemControl	'分支 · 分支 · 制作新封面'	-1426,346 350x37	enabled=True	off=False
+GroupControl	'分支 · 分支 · 制作新封面'	-1426,346 350x36	enabled=True	off=False
+HyperlinkControl	'分支 · 分支 · 制作新封面'	-1416,354 331x20	enabled=True	off=False
+GroupControl	''	-1416,354 331x20	enabled=True	off=False
+TextControl	'分支 · 分支 · 制作新封面'	-1416,355 150x18	enabled=True	off=False
+GroupControl	''	-1130,346 52x36	enabled=True	off=False
+ButtonControl	'聊天操作'	-1132,354 20x21	enabled=True	off=False
+GroupControl	''	-1132,354 20x21	enabled=True	off=False
+ButtonControl	'置顶聊天'	-1104,354 20x20	enabled=True	off=False
+ListItemControl	'分支 · 制作新封面'	-1426,383 350x37	enabled=True	off=False
+GroupControl	'分支 · 制作新封面'	-1426,383 350x36	enabled=True	off=False
+HyperlinkControl	'分支 · 制作新封面'	-1416,391 331x20	enabled=True	off=False
+GroupControl	''	-1416,391 331x20	enabled=True	off=False
+TextControl	'分支 · 制作新封面'	-1416,392 110x18	enabled=True	off=False
+GroupControl	''	-1130,383 52x36	enabled=True	off=False
+ButtonControl	'聊天操作'	-1132,391 20x21	enabled=True	off=False
+GroupControl	''	-1132,391 20x21	enabled=True	off=False
+ButtonControl	'置顶聊天'	-1104,391 20x20	enabled=True	off=False
+ListItemControl	'重试优惠拆单计划群'	-1426,420 350x37	enabled=True	off=False
+GroupControl	'重试优惠拆单计划群'	-1426,420 350x36	enabled=True	off=False
+HyperlinkControl	'重试优惠拆单计划群'	-1416,428 331x20	enabled=True	off=False
+GroupControl	''	-1416,428 331x20	enabled=True	off=False
+TextControl	'重试优惠拆单计划群'	-1416,429 126x18	enabled=True	off=False
+GroupControl	''	-1130,420 52x36	enabled=True	off=False
+ButtonControl	'聊天操作'	-1132,428 20x21	enabled=True	off=False
+GroupControl	''	-1132,428 20x21	enabled=True	off=False
+ButtonControl	'置顶聊天'	-1104,428 20x20	enabled=True	off=False
+ListItemControl	'拆单优惠计算'	-1426,457 350x37	enabled=True	off=False
+GroupControl	'拆单优惠计算'	-1426,457 350x36	enabled=True	off=False
+HyperlinkControl	'拆单优惠计算'	-1416,465 331x20	enabled=True	off=False
+GroupControl	''	-1416,465 331x20	enabled=True	off=False
+TextControl	'拆单优惠计算'	-1416,466 84x18	enabled=True	off=False
+GroupControl	''	-1130,457 52x36	enabled=True	off=False
+ButtonControl	'聊天操作'	-1132,465 20x21	enabled=True	off=False
+GroupControl	''	-1132,465 20x21	enabled=True	off=False
+ButtonControl	'置顶聊天'	-1104,465 20x20	enabled=True	off=False
+ListItemControl	'淘宝物料效果图'	-1426,494 350x37	enabled=True	off=False
+GroupControl	'淘宝物料效果图'	-1426,494 350x36	enabled=True	off=False
+HyperlinkControl	'淘宝物料效果图'	-1416,502 331x20	enabled=True	off=False
+GroupControl	''	-1416,502 331x20	enabled=True	off=False
+TextControl	'淘宝物料效果图'	-1416,503 98x18	enabled=True	off=False
+GroupControl	''	-1130,494 52x36	enabled=True	off=False
+ButtonControl	'聊天操作'	-1132,502 20x21	enabled=True	off=False
+GroupControl	''	-1132,502 20x21	enabled=True	off=False
+ButtonControl	'置顶聊天'	-1104,502 20x20	enabled=True	off=False
+ListItemControl	'制定餐食计划'	-1426,531 350x37	enabled=True	off=False
+GroupControl	'制定餐食计划'	-1426,531 350x36	enabled=True	off=False
+HyperlinkControl	'制定餐食计划'	-1416,539 331x20	enabled=True	off=False
+GroupControl	''	-1416,539 331x20	enabled=True	off=False
+TextControl	'制定餐食计划'	-1416,540 84x18	enabled=True	off=False
+GroupControl	''	-1130,531 52x36	enabled=True	off=False
+ButtonControl	'聊天操作'	-1132,539 20x21	enabled=True	off=False
+GroupControl	''	-1132,539 20x21	enabled=True	off=False
+ButtonControl	'置顶聊天'	-1104,539 20x20	enabled=True	off=False
+ListItemControl	'即梦视频耗时估算'	-1426,568 350x37	enabled=True	off=False
+GroupControl	'即梦视频耗时估算'	-1426,568 350x36	enabled=True	off=False
+HyperlinkControl	'即梦视频耗时估算'	-1416,576 331x20	enabled=True	off=False
+GroupControl	''	-1416,576 331x20	enabled=True	off=False
+TextControl	'即梦视频耗时估算'	-1416,577 112x18	enabled=True	off=False
+GroupControl	''	-1130,568 52x36	enabled=True	off=False
+ButtonControl	'聊天操作'	-1132,576 20x21	enabled=True	off=False
+GroupControl	''	-1132,576 20x21	enabled=True	off=False
+ButtonControl	'置顶聊天'	-1104,576 20x20	enabled=True	off=False
+ListItemControl	'短剧视频成本计算'	-1426,605 350x37	enabled=True	off=False
+GroupControl	'短剧视频成本计算'	-1426,605 350x36	enabled=True	off=False
+HyperlinkControl	'短剧视频成本计算'	-1416,613 331x20	enabled=True	off=False
+GroupControl	''	-1416,613 331x20	enabled=True	off=False
+TextControl	'短剧视频成本计算'	-1416,614 112x18	enabled=True	off=False
+GroupControl	''	-1130,605 52x36	enabled=True	off=False
+ButtonControl	'聊天操作'	-1132,613 20x21	enabled=True	off=False
+GroupControl	''	-1132,613 20x21	enabled=True	off=False
+ButtonControl	'置顶聊天'	-1104,613 20x20	enabled=True	off=False
+ListItemControl	'Steam家庭组同时游玩'	-1426,642 350x37	enabled=True	off=False
+GroupControl	'Steam家庭组同时游玩'	-1426,642 350x36	enabled=True	off=False
+HyperlinkControl	'Steam家庭组同时游玩'	-1416,650 331x20	enabled=True	off=False
+GroupControl	''	-1416,650 331x20	enabled=True	off=False
+TextControl	'Steam家庭组同时游玩'	-1416,651 140x18	enabled=True	off=False
+GroupControl	''	-1130,642 52x36	enabled=True	off=False
+ButtonControl	'聊天操作'	-1132,650 20x21	enabled=True	off=False
+GroupControl	''	-1132,650 20x21	enabled=True	off=False
+ButtonControl	'置顶聊天'	-1104,650 20x20	enabled=True	off=False
+ListItemControl	'AI短剧工作流整理'	-1426,679 350x36	enabled=True	off=False
+GroupControl	'AI短剧工作流整理'	-1426,679 350x36	enabled=True	off=False
+HyperlinkControl	'AI短剧工作流整理'	-1416,687 331x20	enabled=True	off=False
+GroupControl	''	-1416,687 331x20	enabled=True	off=False
+TextControl	'AI短剧工作流整理'	-1416,688 112x18	enabled=True	off=False
+GroupControl	''	-1130,679 52x36	enabled=True	off=False
+ButtonControl	'聊天操作'	-1132,687 20x21	enabled=True	off=False
+GroupControl	''	-1132,687 20x21	enabled=True	off=False
+ButtonControl	'置顶聊天'	-1104,687 20x20	enabled=True	off=False
+ListItemControl	''	-1426,715 350x1	enabled=True	off=True
+GroupControl	''	-1432,708 372x64	enabled=True	off=False
+GroupControl	''	0,0 0x0	enabled=True	off=False
+GroupControl	''	-1432,708 372x64	enabled=True	off=False
+GroupControl	''	-1426,714 360x52	enabled=True	off=False
+ButtonControl	'打开个人资料菜单'	-1426,714 360x52	enabled=True	off=False
+GroupControl	''	-1416,720 340x40	enabled=True	off=False
+GroupControl	''	-1416,720 340x40	enabled=True	off=False
+TextControl	'poppy.chen'	-1384,723 78x18	enabled=True	off=False
+TextControl	'Plus'	-1384,744 24x15	enabled=True	off=False
+GroupControl	''	-1068,-491 16x1263	enabled=True	off=False
+SeparatorControl	''	-1068,-491 16x1263	enabled=True	off=False
+GroupControl	''	-1060,-439 992x1211	enabled=True	off=False
+GroupControl	''	-1059,-439 991x1211	enabled=True	off=False
+GroupControl	''	-1432,-439 1364x52	enabled=True	off=False
+GroupControl	''	-1432,-439 372x52	enabled=True	off=False
+GroupControl	''	-1432,-439 372x52	enabled=True	off=False
+GroupControl	''	-1060,-439 992x52	enabled=True	off=False
+ButtonControl	'聊天操作'	-198,-431 36x36	enabled=True	off=False
+ButtonControl	'分享'	-154,-431 78x36	enabled=True	off=False
+GroupControl	''	0,0 0x0	enabled=True	off=False
+GroupControl	''	0,0 0x0	enabled=True	off=True
+GroupControl	''	-1059,-439 991x1211	enabled=True	off=False
+GroupControl	''	-1059,-439 991x1211	enabled=True	off=False
+GroupControl	''	-1059,-439 991x1211	enabled=True	off=False
+GroupControl	''	-1059,-439 991x1211	enabled=True	off=False
+GroupControl	''	-1059,-439 991x1211	enabled=True	off=False
+GroupControl	''	-1059,-439 991x1211	enabled=True	off=False
+GroupControl	''	-1059,-439 991x1211	enabled=True	off=False
+GroupControl	''	0,0 0x0	enabled=True	off=True
+GroupControl	''	-1059,-439 991x1211	enabled=True	off=False
+GroupControl	''	-1059,-439 991x1211	enabled=True	off=False
+GroupControl	'对话'	-1059,-439 991x1211	enabled=True	off=False
+GroupControl	''	-968,-644 809x2749	enabled=True	off=False
+GroupControl	''	-948,-644 769x2691	enabled=True	off=False
+TextControl	'你说：'	-948,-644 2x1	enabled=True	off=True
+TextControl	'你说：'	-948,-642 49x20	enabled=True	off=True
+GroupControl	''	-718,-644 539x574	enabled=True	off=False
+GroupControl	''	-702,-634 507x520	enabled=True	off=False
+GroupControl	''	-702,-634 507x494	enabled=True	off=False
+GroupControl	''	-702,-634 507x624	enabled=True	off=False
+TextControl	'请审一张 Chrome MV3 插件卡 CARD-09b，回答 VERDICT APPROVE 或 REVISE 并列出缺口和风险。背景：本机后端已完成，ThreadingHTTPServer 只绑 127.0.0.1:18765，Bearer token 持久化在 LOCALAPPDATA，GET /health 免鉴权，/endpoints /ask /jobs /workflow 需 token，Origin 只收 chrome-extension 前缀，POST /ask 返回 202 和 job_id。旧插件在 v0.0.8，manifest 只有 storage 和 sidePanel 权限，CSP connect-src none，popup 加 sidePanel，604 行纯界面空壳。本卡计划：一，把 v0.0.8 插件只读复制到 v0.0.9 的 src/chrome-extension，版本改 0.0.9，v0.0.8 不改。二，manifest 加固定 key 让扩展 ID 稳定，host_permissions 只给 本机回环地址 18765 端口，CSP connect-src 同址。三，配对：设置页粘贴 token，只存 chrome.storage.local，不进 sync 不进日志，后端 Origin 改成只收这个固定 ID。四，主界面改用 sidePanel 承载长任务，因为 popup 失焦就销毁，轮询 /jobs 放 sidePanel 页面里，job_id 存 storage.local 以便重开后恢复。五，后端不在线 10 秒内红字提示，401 时提示重新配对。六，离线测试用 node 或 py 对 manifest 和 js 做静态检查，不自动安装插件，真机加载留到下一张卡由用户手动。另外顺带修几个已知问题：notify_done 写 progress.json 时覆盖 verdicts 和 queue 字段，WorkBuddy 闲置后 UIA 文档丢失需要脚本自动重启它，ChatGPT 回复检测超时，ChatGPT 新对话不清残留草稿，ChatGPT 和 Grok 输入框把 Markdown 字符转格式导致文本比对失败。问题：固定 key 和 Origin 绑定是否合适，sidePanel 方案有没有坑，这些顺带修的问题该不该拆成单独一张卡，还缺什么测试。请简短回答。'	-702,-631 510x618	enabled=True	off=False
+ButtonControl	'显示更多'	-702,-104 85x24	enabled=True	off=False
+TextControl	'显示更多'	-702,-102 65x20	enabled=True	off=False
+ImageControl	''	-634,-100 17x16	enabled=True	off=False
+ButtonControl	'复制消息'	-280,-66 33x32	enabled=True	off=False
+ImageControl	''	-274,-60 21x20	enabled=True	off=False
+ButtonControl	'共享提示'	-248,-66 33x32	enabled=True	off=False
+ButtonControl	'编辑消息'	-216,-66 33x32	enabled=True	off=False
+ImageControl	''	-210,-60 21x20	enabled=True	off=False
+GroupControl	''	-948,-30 769x26	enabled=True	off=False
+ButtonControl	'思考了 2m 26s'	-948,-29 129x25	enabled=True	off=False
+TextControl	'思考了 2m 26s'	-948,-27 109x21	enabled=True	off=False
+ImageControl	''	-836,-25 17x17	enabled=True	off=False
+TextControl	'ChatGPT 说：'	-948,4 2x2	enabled=True	off=False
+TextControl	'ChatGPT 说：'	-948,6 104x21	enabled=True	off=True
+GroupControl	''	-948,4 769x1999	enabled=True	off=False
+TextControl	'VERDICT REVISE'	-941,6 98x16	enabled=True	off=False
+GroupControl	''	-948,40 769x27	enabled=True	off=False
+TextControl	'整体架构方向正确，可以保留，但有几个必须补齐的安全和生命周期问题。'	-948,43 529x21	enabled=True	off=False
+TextControl	'一、必须修改的缺口'	-948,90 769x27	enabled=True	off=False
+TextControl	'一、必须修改的缺口'	-948,93 145x21	enabled=True	off=False
+GroupControl	''	-948,124 769x54	enabled=True	off=False
+TextControl	'1. '	-948,127 19x21	enabled=True	off=False
+TextControl	'固定 '	-930,127 38x21	enabled=True	off=False
+TextControl	'Key：通过。'	-893,127 94x21	enabled=True	off=False
+TextControl	' '	-800,127 6x21	enabled=True	off=False
+TextControl	''	-795,128 107x21	enabled=True	off=False
+TextControl	'manifest.key'	-791,129 99x19	enabled=True	off=False
+TextControl	' '	-689,127 6x21	enabled=True	off=False
+TextControl	'可以固定扩展 '	-684,127 102x21	enabled=True	off=False
+TextControl	'ID，适合当前后端绑定扩展身份的设计。注意它是公开身份材料，不要把私钥或打包签名密钥提交到仓库。'	-948,127 767x48	enabled=True	off=False
+ButtonControl	'Chrome for Developers +1'	-596,151 101x27	enabled=True	off=False
+ImageControl	''	-592,158 13x13	enabled=True	off=False
+TextControl	'Chrome '	-576,159 38x12	enabled=True	off=False
+TextControl	'for '	-539,159 20x12	enabled=True	off=False
+TextControl	'Developers'	-524,159 49x12	enabled=True	off=False
+TextControl	'+1'	-514,159 13x12	enabled=True	off=False
+GroupControl	''	-948,193 769x81	enabled=True	off=False
+TextControl	'2. '	-948,196 19x21	enabled=True	off=False
+TextControl	'Origin '	-930,196 56x21	enabled=True	off=False
+TextControl	'绑定：需要加强。'	-875,196 129x21	enabled=True	off=False
+TextControl	' '	-747,196 6x21	enabled=True	off=False
+TextControl	'后端必须完整匹配 '	-742,196 134x21	enabled=True	off=False
+TextControl	''	-609,197 213x21	enabled=True	off=False
+TextControl	'chrome-extension://固定ID'	-605,198 205x19	enabled=True	off=False
+TextControl	'，不能只匹配 '	-397,196 101x21	enabled=True	off=False
+TextControl	''	-948,197 714x48	enabled=True	off=False
+TextControl	'chrome-extension://'	-948,198 714x46	enabled=True	off=False
+TextControl	' '	-846,223 6x21	enabled=True	off=False
+TextControl	'前缀，也不能接受缺失 '	-841,223 166x21	enabled=True	off=False
+TextControl	'Origin。注意 '	-676,223 101x21	enabled=True	off=False
+TextControl	'Origin '	-576,223 54x21	enabled=True	off=False
+TextControl	'只是来源校验，不是身份认证，Bearer '	-523,223 279x21	enabled=True	off=False
+TextControl	'token '	-245,223 49x21	enabled=True	off=False
+TextControl	'仍然必须验证。'	-948,223 768x48	enabled=True	off=False
+GroupControl	''	-948,289 769x28	enabled=True	off=False
+TextControl	'3. '	-948,292 19x21	enabled=True	off=False
+TextControl	'Token '	-930,292 54x21	enabled=True	off=False
+TextControl	'存储：需要补安全措施。'	-877,292 177x21	enabled=True	off=False
+TextControl	' '	-701,292 5x21	enabled=True	off=False
+TextControl	''	-697,293 173x21	enabled=True	off=False
+TextControl	'chrome.storage.local'	-692,294 164x19	enabled=True	off=False
+TextControl	' '	-525,292 6x21	enabled=True	off=False
+TextControl	'不加密，建议：'	-520,292 113x21	enabled=True	off=False
+ListControl	''	-948,324 769x132	enabled=True	off=False
+ListItemControl	'设置 storage.local.setAccessLevel({accessLevel:"TRUSTED_CONTEXTS"})。'	-920,324 741x28	enabled=True	off=False
+TextControl	'• '	-938,324 8x27	enabled=True	off=False
+GroupControl	''	-916,324 737x28	enabled=True	off=False
+TextControl	'设置 '	-916,327 38x21	enabled=True	off=False
+TextControl	''	-879,328 516x21	enabled=True	off=False
+TextControl	'storage.local.setAccessLevel({accessLevel:"TRUSTED_CONTEXTS"})'	-875,329 508x19	enabled=True	off=False
+TextControl	'。'	-364,327 17x21	enabled=True	off=False
+ListItemControl	'不允许 content script 接触 token。'	-920,351 741x27	enabled=True	off=False
+TextControl	'• '	-938,351 8x27	enabled=True	off=False
+GroupControl	''	-916,351 737x27	enabled=True	off=False
+TextControl	'不允许 '	-916,354 54x21	enabled=True	off=False
+TextControl	'content '	-863,354 64x21	enabled=True	off=False
+TextControl	'script '	-800,354 48x21	enabled=True	off=False
+TextControl	'接触 '	-753,354 38x21	enabled=True	off=False
+TextControl	'token。'	-716,354 60x21	enabled=True	off=False
+ListItemControl	'后端 token 文件限制当前 Windows 用户访问。'	-920,377 741x27	enabled=True	off=False
+TextControl	'• '	-938,377 8x27	enabled=True	off=False
+GroupControl	''	-916,377 737x27	enabled=True	off=False
+TextControl	'后端 '	-916,380 38x21	enabled=True	off=False
+TextControl	'token '	-879,380 49x21	enabled=True	off=False
+TextControl	'文件限制当前 '	-831,380 102x21	enabled=True	off=False
+TextControl	'Windows '	-730,380 76x21	enabled=True	off=False
+TextControl	'用户访问。'	-655,380 81x21	enabled=True	off=False
+ListItemControl	'后端使用恒定时间比较验证 token。Chrome for for…Developers+1'	-920,403 741x53	enabled=True	off=False
+TextControl	'• '	-938,403 8x27	enabled=True	off=False
+GroupControl	''	-916,403 737x27	enabled=True	off=False
+TextControl	'后端使用恒定时间比较验证 '	-916,406 198x21	enabled=True	off=False
+TextControl	'token。'	-719,406 60x21	enabled=True	off=False
+ButtonControl	'Chrome for Developers +1'	-916,429 101x27	enabled=True	off=False
+ImageControl	''	-912,436 13x13	enabled=True	off=False
+TextControl	'Chrome '	-896,437 38x12	enabled=True	off=False
+TextControl	'for '	-859,437 20x12	enabled=True	off=False
+TextControl	'Developers'	-844,437 49x12	enabled=True	off=False
+TextControl	'+1'	-834,437 13x12	enabled=True	off=False
+GroupControl	''	-948,471 769x27	enabled=True	off=False
+TextControl	'4. '	-948,474 19x21	enabled=True	off=False
+TextControl	'SidePanel：方案通过，但需处理生命周期。'	-930,474 319x21	enabled=True	off=False
+ListControl	''	-948,505 769x158	enabled=True	off=False
+ListItemControl	'关闭面板后，轮询会停止，不能假设面板永久存活。'	-920,505 741x27	enabled=True	off=False
+TextControl	'• '	-938,505 8x27	enabled=True	off=False
+GroupControl	''	-916,505 737x27	enabled=True	off=False
+TextControl	'关闭面板后，轮询会停止，不能假设面板永久存活。'	-916,508 369x21	enabled=True	off=False
+ListItemControl	'重开后必须重新读取 job_id 并恢复状态。'	-920,531 741x27	enabled=True	off=False
+TextControl	'• '	-938,531 8x27	enabled=True	off=False
+GroupControl	''	-916,531 737x27	enabled=True	off=False
+TextControl	'重开后必须重新读取 '	-916,534 150x21	enabled=True	off=False
+TextControl	'job_id '	-767,534 52x21	enabled=True	off=False
+TextControl	'并恢复状态。'	-716,534 97x21	enabled=True	off=False
+ListItemControl	'明确单任务限制，或者支持多个 job_id，避免覆盖。'	-920,557 741x27	enabled=True	off=False
+TextControl	'• '	-938,557 8x27	enabled=True	off=False
+GroupControl	''	-916,557 737x27	enabled=True	off=False
+TextControl	'明确单任务限制，或者支持多个 '	-916,560 230x21	enabled=True	off=False
+TextControl	'job_id，避免覆盖。'	-687,560 143x21	enabled=True	off=False
+ListItemControl	'增加任务过期、后端重启、重复轮询处理。'	-920,583 741x27	enabled=True	off=False
+TextControl	'• '	-938,583 8x27	enabled=True	off=False
+GroupControl	''	-916,583 737x27	enabled=True	off=False
+TextControl	'增加任务过期、后端重启、重复轮询处理。'	-916,586 305x21	enabled=True	off=False
+ListItemControl	'注意 action.default_popup 与点击图标打开 SidePanel 的行为冲突；保留 popup 就需要通过 popup 内按钮打开面板，且必须处于用户手势调用链中。Chrome for for…Developers+1'	-920,609 741x54	enabled=True	off=False
+TextControl	'• '	-938,609 8x27	enabled=True	off=False
+GroupControl	''	-916,609 737x54	enabled=True	off=False
+TextControl	'注意 '	-916,612 38x21	enabled=True	off=False
+TextControl	''	-879,613 173x21	enabled=True	off=False
+TextControl	'action.default_popup'	-875,614 165x19	enabled=True	off=False
+TextControl	' '	-707,612 5x21	enabled=True	off=False
+TextControl	'与点击图标打开 '	-703,612 118x21	enabled=True	off=False
+TextControl	'SidePanel '	-586,612 80x21	enabled=True	off=False
+TextControl	'的行为冲突；保留 '	-507,612 134x21	enabled=True	off=False
+TextControl	'popup '	-374,612 56x21	enabled=True	off=False
+TextControl	'就需要通过 '	-319,612 86x21	enabled=True	off=False
+TextControl	'popup '	-234,612 52x21	enabled=True	off=False
+TextControl	'内按钮打开面板，且必须处于用户手势调用链中。'	-916,639 353x21	enabled=True	off=False
+ButtonControl	'Chrome for Developers +1'	-564,636 101x27	enabled=True	off=False
+ImageControl	''	-560,643 13x13	enabled=True	off=False
+TextControl	'Chrome '	-544,644 38x12	enabled=True	off=False
+TextControl	'for '	-507,644 20x12	enabled=True	off=False
+TextControl	'Developers'	-492,644 49x12	enabled=True	off=False
+TextControl	'+1'	-482,644 13x12	enabled=True	off=False
+GroupControl	''	-948,678 769x54	enabled=True	off=False
+TextControl	'5. '	-948,681 19x21	enabled=True	off=False
+TextControl	'健康检查：'	-930,681 81x21	enabled=True	off=False
+TextControl	' '	-850,681 6x21	enabled=True	off=False
+TextControl	''	-845,682 66x21	enabled=True	off=False
+TextControl	'/health'	-841,683 58x19	enabled=True	off=False
+TextControl	' '	-780,681 6x21	enabled=True	off=False
+TextControl	'不鉴权可以接受，但只能返回最小状态信息，不要暴露 '	-775,681 390x21	enabled=True	off=False
+TextControl	'token、文件路径或内部运行信息。'	-948,681 766x48	enabled=True	off=False
+TextControl	'二、顺带修复的问题是否拆卡？'	-948,755 769x27	enabled=True	off=False
+TextControl	'二、顺带修复的问题是否拆卡？'	-948,758 225x21	enabled=True	off=False
+TextControl	'建议全部拆分'	-941,799 74x16	enabled=True	off=True
+GroupControl	''	-1049,833 971x222	enabled=True	off=True
+TableControl	''	-948,833 769x222	enabled=True	off=True
+DataItemControl	''	-948,833 769x38	enabled=True	off=True
+DataItemControl	'问题'	-948,833 584x38	enabled=True	off=True
+GroupControl	''	-948,841 576x21	enabled=True	off=True
+TextControl	'问题'	-948,842 29x19	enabled=True	off=True
+DataItemControl	'建议'	-365,833 186x38	enabled=True	off=True
+GroupControl	''	-357,841 178x21	enabled=True	off=True
+TextControl	'建议'	-357,842 29x19	enabled=True	off=True
+DataItemControl	''	-948,870 769x38	enabled=True	off=True
+DataItemControl	'notify_done 覆盖 progress.json 字段'	-948,870 584x38	enabled=True	off=True
+GroupControl	''	-948,878 576x21	enabled=True	off=True
+TextControl	'notify_done '	-948,879 85x19	enabled=True	off=True
+TextControl	'覆盖 '	-864,879 33x19	enabled=True	off=True
+TextControl	'progress.json '	-832,879 94x19	enabled=True	off=True
+TextControl	'字段'	-739,879 29x19	enabled=True	off=True
+DataItemControl	'独立修复卡'	-365,870 186x38	enabled=True	off=True
+GroupControl	''	-357,878 178x21	enabled=True	off=True
+TextControl	'独立修复卡'	-357,879 71x19	enabled=True	off=True
+DataItemControl	''	-948,907 769x38	enabled=True	off=True
+DataItemControl	'WorkBuddy 闲置后 UIA 文档丢失'	-948,907 584x38	enabled=True	off=True
+GroupControl	''	-948,915 576x21	enabled=True	off=True
+TextControl	'WorkBuddy '	-948,916 84x19	enabled=True	off=True
+TextControl	'闲置后 '	-865,916 47x19	enabled=True	off=True
+TextControl	'UIA '	-819,916 29x19	enabled=True	off=True
+TextControl	'文档丢失'	-791,916 57x19	enabled=True	off=True
+DataItemControl	'独立修复卡'	-365,907 186x38	enabled=True	off=True
+GroupControl	''	-357,915 178x21	enabled=True	off=True
+TextControl	'独立修复卡'	-357,916 71x19	enabled=True	off=True
+DataItemControl	''	-948,944 769x38	enabled=True	off=True
+DataItemControl	'ChatGPT 回复检测超时'	-948,944 584x38	enabled=True	off=True
+GroupControl	''	-948,952 576x21	enabled=True	off=True
+TextControl	'ChatGPT '	-948,953 63x19	enabled=True	off=True
+TextControl	'回复检测超时'	-886,953 85x19	enabled=True	off=True
+DataItemControl	'独立修复卡'	-365,944 186x38	enabled=True	off=True
+GroupControl	''	-357,952 178x21	enabled=True	off=True
+TextControl	'独立修复卡'	-357,953 71x19	enabled=True	off=True
+DataItemControl	''	-948,981 769x38	enabled=True	off=True
+DataItemControl	'ChatGPT 新对话残留草稿'	-948,981 584x38	enabled=True	off=True
+GroupControl	''	-948,989 576x21	enabled=True	off=True
+TextControl	'ChatGPT '	-948,990 63x19	enabled=True	off=True
+TextControl	'新对话残留草稿'	-886,990 99x19	enabled=True	off=True
+DataItemControl	'独立修复卡'	-365,981 186x38	enabled=True	off=True
+GroupControl	''	-357,989 178x21	enabled=True	off=True
+TextControl	'独立修复卡'	-357,990 71x19	enabled=True	off=True
+DataItemControl	''	-948,1018 769x37	enabled=True	off=True
+DataItemControl	'ChatGPT/Grok Markdown 输入转换'	-948,1018 584x37	enabled=True	off=True
+GroupControl	''	-948,1026 576x21	enabled=True	off=True
+TextControl	'ChatGPT/Grok '	-948,1027 101x19	enabled=True	off=True
+TextControl	'Markdown '	-848,1027 77x19	enabled=True	off=True
+TextControl	'输入转换'	-772,1027 57x19	enabled=True	off=True
+DataItemControl	'独立修复卡'	-365,1018 186x37	enabled=True	off=True
+GroupControl	''	-357,1026 178x21	enabled=True	off=True
+TextControl	'独立修复卡'	-357,1027 71x19	enabled=True	off=True
+GroupControl	''	-948,1070 769x53	enabled=True	off=True
+TextControl	'原因：这些属于不同端的自动化稳定性问题，与插件移植、后端配对没有直接依赖。混在一起会扩大回归范围，增加定位难度。'	-948,1073 753x47	enabled=True	off=True
+TextControl	'三、还缺少的测试'	-948,1146 769x27	enabled=True	off=True
+TextControl	'三、还缺少的测试'	-948,1149 129x21	enabled=True	off=True
+GroupControl	''	-948,1180 769x27	enabled=True	off=True
+TextControl	'建议增加以下验收项目：'	-948,1183 177x21	enabled=True	off=True
+GroupControl	''	-1049,1222 971x407	enabled=True	off=True
+TableControl	''	-948,1222 769x407	enabled=True	off=True
+DataItemControl	''	-948,1222 769x38	enabled=True	off=True
+DataItemControl	'测试'	-948,1222 164x38	enabled=True	off=True
+GroupControl	''	-948,1230 156x21	enabled=True	off=True
+TextControl	'测试'	-948,1231 29x19	enabled=True	off=True
+DataItemControl	'验收标准'	-785,1222 606x38	enabled=True	off=True
+GroupControl	''	-777,1230 598x21	enabled=True	off=True
+TextControl	'验收标准'	-777,1231 57x19	enabled=True	off=True
+DataItemControl	''	-948,1259 769x38	enabled=True	off=True
+DataItemControl	'Manifest 检查'	-948,1259 164x38	enabled=True	off=True
+GroupControl	''	-948,1267 156x21	enabled=True	off=True
+TextControl	'Manifest '	-948,1268 63x19	enabled=True	off=True
+TextControl	'检查'	-886,1268 29x19	enabled=True	off=True
+DataItemControl	'MV3 合法，权限和 CSP 范围准确'	-785,1259 606x38	enabled=True	off=True
+GroupControl	''	-777,1267 598x21	enabled=True	off=True
+TextControl	'MV3 '	-777,1268 37x19	enabled=True	off=True
+TextControl	'合法，权限和 '	-741,1268 89x19	enabled=True	off=True
+TextControl	'CSP '	-653,1268 31x19	enabled=True	off=True
+TextControl	'范围准确'	-623,1268 57x19	enabled=True	off=True
+DataItemControl	''	-948,1296 769x38	enabled=True	off=True
+DataItemControl	'扩展 ID'	-948,1296 164x38	enabled=True	off=True
+GroupControl	''	-948,1304 156x21	enabled=True	off=True
+TextControl	'扩展 '	-948,1305 33x19	enabled=True	off=True
+TextControl	'ID'	-916,1305 16x19	enabled=True	off=True
+DataItemControl	'固定 Key 后 ID 不变'	-785,1296 606x38	enabled=True	off=True
+GroupControl	''	-777,1304 598x21	enabled=True	off=True
+TextControl	'固定 '	-777,1305 33x19	enabled=True	off=True
+TextControl	'Key '	-745,1305 30x19	enabled=True	off=True
+TextControl	'后 '	-716,1305 19x19	enabled=True	off=True
+TextControl	'ID '	-698,1305 20x19	enabled=True	off=True
+TextControl	'不变'	-679,1305 29x19	enabled=True	off=True
+DataItemControl	''	-948,1333 769x38	enabled=True	off=True
+DataItemControl	'鉴权'	-948,1333 164x38	enabled=True	off=True
+GroupControl	''	-948,1341 156x21	enabled=True	off=True
+TextControl	'鉴权'	-948,1342 29x19	enabled=True	off=True
+DataItemControl	'无 Token、错误 Token 均拒绝'	-785,1333 606x38	enabled=True	off=True
+GroupControl	''	-777,1341 598x21	enabled=True	off=True
+TextControl	'无 '	-777,1342 19x19	enabled=True	off=True
+TextControl	'Token、错误 '	-759,1342 87x19	enabled=True	off=True
+TextControl	'Token '	-673,1342 44x19	enabled=True	off=True
+TextControl	'均拒绝'	-630,1342 43x19	enabled=True	off=True
+DataItemControl	''	-948,1370 769x38	enabled=True	off=True
+DataItemControl	'Origin'	-948,1370 164x38	enabled=True	off=True
+GroupControl	''	-948,1378 156x21	enabled=True	off=True
+TextControl	'Origin'	-948,1379 43x19	enabled=True	off=True
+DataItemControl	'正确 ID 放行，其他来源及缺失来源拒绝'	-785,1370 606x38	enabled=True	off=True
+GroupControl	''	-777,1378 598x21	enabled=True	off=True
+TextControl	'正确 '	-777,1379 33x19	enabled=True	off=True
+TextControl	'ID '	-745,1379 20x19	enabled=True	off=True
+TextControl	'放行，其他来源及缺失来源拒绝'	-726,1379 197x19	enabled=True	off=True
+DataItemControl	''	-948,1407 769x38	enabled=True	off=True
+DataItemControl	'健康检查'	-948,1407 164x38	enabled=True	off=True
+GroupControl	''	-948,1415 156x21	enabled=True	off=True
+TextControl	'健康检查'	-948,1416 57x19	enabled=True	off=True
+DataItemControl	'不带 Token 可以访问'	-785,1407 606x38	enabled=True	off=True
+GroupControl	''	-777,1415 598x21	enabled=True	off=True
+TextControl	'不带 '	-777,1416 33x19	enabled=True	off=True
+TextControl	'Token '	-745,1416 45x19	enabled=True	off=True
+TextControl	'可以访问'	-701,1416 57x19	enabled=True	off=True
+DataItemControl	''	-948,1444 769x38	enabled=True	off=True
+DataItemControl	'Job 创建'	-948,1444 164x38	enabled=True	off=True
+GroupControl	''	-948,1452 156x21	enabled=True	off=True
+TextControl	'Job '	-948,1453 29x19	enabled=True	off=True
+TextControl	'创建'	-920,1453 29x19	enabled=True	off=True
+DataItemControl	'POST /ask 返回 202 和有效 job_id'	-785,1444 606x38	enabled=True	off=True
+GroupControl	''	-777,1452 598x21	enabled=True	off=True
+TextControl	'POST '	-777,1453 41x19	enabled=True	off=True
+TextControl	'/ask '	-737,1453 33x19	enabled=True	off=True
+TextControl	'返回 '	-705,1453 34x19	enabled=True	off=True
+TextControl	'202 '	-672,1453 29x19	enabled=True	off=True
+TextControl	'和有效 '	-644,1453 48x19	enabled=True	off=True
+TextControl	'job_id'	-597,1453 41x19	enabled=True	off=True
+DataItemControl	''	-948,1481 769x38	enabled=True	off=True
+DataItemControl	'Job 恢复'	-948,1481 164x38	enabled=True	off=True
+GroupControl	''	-948,1489 156x21	enabled=True	off=True
+TextControl	'Job '	-948,1490 29x19	enabled=True	off=True
+TextControl	'恢复'	-920,1490 29x19	enabled=True	off=True
+DataItemControl	'关闭、重开 SidePanel 能恢复任务'	-785,1481 606x38	enabled=True	off=True
+GroupControl	''	-777,1489 598x21	enabled=True	off=True
+TextControl	'关闭、重开 '	-777,1490 75x19	enabled=True	off=True
+TextControl	'SidePanel '	-703,1490 70x19	enabled=True	off=True
+TextControl	'能恢复任务'	-634,1490 71x19	enabled=True	off=True
+DataItemControl	''	-948,1518 769x38	enabled=True	off=True
+DataItemControl	'后端异常'	-948,1518 164x38	enabled=True	off=True
+GroupControl	''	-948,1526 156x21	enabled=True	off=True
+TextControl	'后端异常'	-948,1527 57x19	enabled=True	off=True
+DataItemControl	'离线、重启、任务过期均有明确提示'	-785,1518 606x38	enabled=True	off=True
+GroupControl	''	-777,1526 598x21	enabled=True	off=True
+TextControl	'离线、重启、任务过期均有明确提示'	-777,1527 225x19	enabled=True	off=True
+DataItemControl	''	-948,1555 769x38	enabled=True	off=True
+DataItemControl	'并发'	-948,1555 164x38	enabled=True	off=True
+GroupControl	''	-948,1563 156x21	enabled=True	off=True
+TextControl	'并发'	-948,1564 29x19	enabled=True	off=True
+DataItemControl	'连续提交、重复轮询不会串任务或覆盖状态'	-785,1555 606x38	enabled=True	off=True
+GroupControl	''	-777,1563 598x21	enabled=True	off=True
+TextControl	'连续提交、重复轮询不会串任务或覆盖状态'	-777,1564 267x19	enabled=True	off=True
+DataItemControl	''	-948,1592 769x37	enabled=True	off=True
+DataItemControl	'实际浏览器'	-948,1592 164x37	enabled=True	off=True
+GroupControl	''	-948,1600 156x21	enabled=True	off=True
+TextControl	'实际浏览器'	-948,1601 71x19	enabled=True	off=True
+DataItemControl	'验证真实 Chrome 的权限、CSP、请求和 SidePanel 行为'	-785,1592 606x37	enabled=True	off=True
+GroupControl	''	-777,1600 598x21	enabled=True	off=True
+TextControl	'验证真实 '	-777,1601 61x19	enabled=True	off=True
+TextControl	'Chrome '	-717,1601 59x19	enabled=True	off=True
+TextControl	'的权限、CSP、请求和 '	-659,1601 143x19	enabled=True	off=True
+TextControl	'SidePanel '	-517,1601 70x19	enabled=True	off=True
+TextControl	'行为'	-448,1601 29x19	enabled=True	off=True
+GroupControl	''	-948,1644 769x53	enabled=True	off=True
+TextControl	'特别提醒：'	-948,1647 81x21	enabled=True	off=True
+TextControl	' '	-868,1647 6x21	enabled=True	off=True
+TextControl	'Node/Python '	-863,1647 109x21	enabled=True	off=True
+TextControl	'静态检查不能证明 '	-755,1647 134x21	enabled=True	off=True
+TextControl	'Chrome '	-622,1647 66x21	enabled=True	off=True
+TextControl	'实际加载后权限、Origin '	-557,1647 182x21	enabled=True	off=True
+TextControl	'和 '	-376,1647 21x21	enabled=True	off=True
+TextControl	'CSP '	-356,1647 36x21	enabled=True	off=True
+TextControl	'全部正常。下一张卡的手动加载测试必须保留。'	-948,1647 756x47	enabled=True	off=True
+TextControl	'四、最终建议'	-948,1720 769x27	enabled=True	off=True
+TextControl	'四、最终建议'	-948,1723 97x21	enabled=True	off=True
+GroupControl	''	-948,1754 769x27	enabled=True	off=True
+TextControl	'CARD-09b '	-948,1757 86x21	enabled=True	off=True
+TextControl	'保留原来的六项主体工作，但必须补充：'	-863,1757 289x21	enabled=True	off=True
+ListControl	''	-948,1788 769x131	enabled=True	off=True
+ListItemControl	'Token 安全边界。'	-920,1788 741x27	enabled=True	off=True
+TextControl	'• '	-938,1788 8x27	enabled=True	off=True
+GroupControl	''	-916,1788 737x27	enabled=True	off=True
+TextControl	'Token '	-916,1791 51x21	enabled=True	off=True
+TextControl	'安全边界。'	-866,1791 81x21	enabled=True	off=True
+ListItemControl	'Origin 精确匹配。'	-920,1814 741x27	enabled=True	off=True
+TextControl	'• '	-938,1814 8x27	enabled=True	off=True
+GroupControl	''	-916,1814 737x27	enabled=True	off=True
+TextControl	'Origin '	-916,1817 53x21	enabled=True	off=True
+TextControl	'精确匹配。'	-863,1817 80x21	enabled=True	off=True
+ListItemControl	'SidePanel 生命周期及任务恢复规则。'	-920,1840 741x27	enabled=True	off=True
+TextControl	'• '	-938,1840 8x27	enabled=True	off=True
+GroupControl	''	-916,1840 737x27	enabled=True	off=True
+TextControl	'SidePanel '	-916,1843 80x21	enabled=True	off=True
+TextControl	'生命周期及任务恢复规则。'	-837,1843 193x21	enabled=True	off=True
+ListItemControl	'Job 并发与异常状态处理。'	-920,1866 741x27	enabled=True	off=True
+TextControl	'• '	-938,1866 8x27	enabled=True	off=True
+GroupControl	''	-916,1866 737x27	enabled=True	off=True
+TextControl	'Job '	-916,1869 32x21	enabled=True	off=True
+TextControl	'并发与异常状态处理。'	-885,1869 161x21	enabled=True	off=True
+ListItemControl	'实际 Chrome 加载验收清单。'	-920,1892 741x27	enabled=True	off=True
+TextControl	'• '	-938,1892 8x27	enabled=True	off=True
+GroupControl	''	-916,1892 737x27	enabled=True	off=True
+TextControl	'实际 '	-916,1895 38x21	enabled=True	off=True
+TextControl	'Chrome '	-879,1895 66x21	enabled=True	off=True
+TextControl	'加载验收清单。'	-814,1895 113x21	enabled=True	off=True
+GroupControl	''	-948,1934 769x27	enabled=True	off=True
+TextControl	'其余五类自动化问题全部独立建卡。'	-948,1937 257x21	enabled=True	off=True
+GroupControl	''	-948,1976 769x27	enabled=True	off=True
+TextControl	'结论：REVISE。'	-948,1979 121x21	enabled=True	off=True
+TextControl	' '	-828,1979 6x21	enabled=True	off=True
+TextControl	'不需要推翻架构，也不需要重新设计后端，主要是补齐安全边界、任务恢复和验收标准。'	-823,1979 625x21	enabled=True	off=True
+ButtonControl	'复制'	-954,2014 33x33	enabled=True	off=True
+ImageControl	''	-948,2020 21x21	enabled=True	off=True
+ButtonControl	'评价回复'	-922,2014 33x33	enabled=True	off=True
+ButtonControl	'朗读'	-890,2014 33x33	enabled=True	off=True
+ButtonControl	'分享'	-858,2014 33x33	enabled=True	off=True
+ButtonControl	'重新生成回复'	-826,2014 33x33	enabled=True	off=True
+ButtonControl	'更多操作'	-794,2014 33x33	enabled=True	off=True
+GroupControl	''	-1049,2105 971x24	enabled=True	off=True
+GroupControl	''	0,0 0x0	enabled=True	off=False
+GroupControl	''	0,0 0x0	enabled=True	off=False
+GroupControl	''	0,0 0x0	enabled=True	off=False
+GroupControl	''	-1049,2105 971x24	enabled=True	off=True
+GroupControl	''	-1033,2105 939x16	enabled=True	off=True
+TextControl	'ChatGPT 可能会出错。请核查重要信息。'	-675,2105 223x15	enabled=True	off=True
+GroupControl	''	-1059,696 991x76	enabled=True	off=False
+GroupControl	''	-968,696 809x52	enabled=True	off=False
+GroupControl	''	-580,640 33x32	enabled=True	off=False
+ButtonControl	'滚动到底部'	-580,640 33x32	enabled=True	off=False
+TextControl	'最新一条回复'	-948,696 2x1	enabled=True	off=False
+TextControl	'最新一条回复'	-948,698 97x20	enabled=True	off=True
+StatusBarControl	''	-948,696 2x1	enabled=True	off=False
+GroupControl	''	-948,696 769x52	enabled=True	off=False
+GroupControl	''	-948,696 769x52	enabled=True	off=False
+GroupControl	''	-948,696 769x52	enabled=True	off=False
+GroupControl	''	-948,696 769x52	enabled=True	off=False
+GroupControl	''	-948,696 769x52	enabled=True	off=False
+GroupControl	''	-564,688 385x60	enabled=True	off=True
+GroupControl	''	-948,696 769x52	enabled=True	off=False
+GroupControl	''	-948,696 769x52	enabled=True	off=False
+ButtonControl	'添加文件等内容'	-940,704 37x36	enabled=True	off=False
+EditControl	'询问 ChatGPT'	-896,704 555x36	enabled=True	off=False
+GroupControl	''	-896,709 555x26	enabled=True	off=False
+GroupControl	''	-896,709 555x26	enabled=True	off=False
+TextControl	'询问 ChatGPT'	-896,712 104x20	enabled=True	off=False
+TextControl	'\n'	0,0 0x0	enabled=True	off=False
+GroupControl	''	-190,706 11x34	enabled=True	off=True
+GroupControl	''	-334,704 67x36	enabled=True	off=False
+GroupControl	''	-334,704 67x36	enabled=True	off=False
+ButtonControl	'选择 ChatGPT 模型'	-334,704 67x36	enabled=True	off=False
+GroupControl	''	-318,709 17x26	enabled=True	off=False
+TextControl	'高'	-318,712 17x20	enabled=True	off=False
+ButtonControl	'听写'	-268,704 37x36	enabled=True	off=False
+ButtonControl	'开始语音'	-224,704 37x36	enabled=True	off=False
+StatusBarControl	''	-1433,-440 1x1	enabled=True	off=True
+GroupControl	''	-1432,-439 1364x1211	enabled=True	off=False
+StatusBarControl	''	-1433,-440 1x1	enabled=True	off=True
+GroupControl	''	-1432,-439 1364x10	enabled=True	off=False
+StatusBarControl	''	-1433,771 1x1	enabled=True	off=True
+TextControl	'回答已完成'	-1433,773 80x20	enabled=True	off=True
+GroupControl	''	0,0 0x0	enabled=True	off=False
+GroupControl	''	0,0 0x0	enabled=True	off=False
+GroupControl	''	0,0 0x0	enabled=True	off=False
+GroupControl	''	0,0 0x0	enabled=True	off=False
+GroupControl	''	0,0 0x0	enabled=True	off=True
+GroupControl	''	0,0 0x0	enabled=True	off=True
+GroupControl	''	0,0 0x0	enabled=True	off=True
+-- total 693 nodes

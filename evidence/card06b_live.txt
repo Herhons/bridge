@@ -1,0 +1,349 @@
+CARD-06b 真机证据（发送安全门禁 / 输入归一 / 缩放 / 最小化 / 人机验证 / 留证）
+生成时间：2026-11-02 05:53–06:27 (+08:00)
+机器：Windows（主屏 2560x1440，副屏 -1440 起）
+解释器：C:\Users\Administrator\AppData\Local\Programs\Python\Python310\python.exe
+        （项目依赖 cv2 5.0.0 / numpy 2.2.6 / uiautomation / comtypes 都装在这个 3.10 里）
+Chrome：hwnd=526630，窗口矩形 (512,161) 1380x1024，显示器 100%
+验证页面：Grok（grok.com/c/ddce1a28…）、ChatGPT（chatgpt.com）
+备份：_backup_20261102\*.bak-card06b（32 个文件；见第十一节）
+      改前额外交付的原始模板：_backup_20261102\grok_chip_expert.png.bak-card06b
+      （施工中曾用错图覆盖它，结束后已恢复；sha256 与备份一致：
+       2a4b606e43db4e802d14a169420c332de91779d83029ed059f8dcf95639274a9）
+
+================================================================================
+一、离线单测
+================================================================================
+改前基线（同一解释器、同一命令）：
+    python -X utf8 -B -m unittest discover -s tests   → Ran 294 tests ... OK
+
+改后：
+    python -X utf8 -B -m unittest discover -s tests   → Ran 366 tests ... OK
+    连跑 3 次：pass=3 fail=0（每次 9.0~9.3s）
+
+构成：294 基线 + 72（新增 tests/test_card06b.py，覆盖卡面 1–11）
+为匹配 06b 语义改了 4 个既有测试文件（**改的是期望值与夹具，没有删断言**）：
+  tests/test_card06a.py
+    · gate 的"读回"用例显式 require_readback=False（那些用例考的是回执本身）
+    · window_mismatch → receipt_identity（第 4 条改名）
+    · drift → tier_drift（第 2 条改名）
+    · "读不到不拦" 两个用例改成 "读不到就拒发"（第 1 条反转）
+    · choose 接线测试的命名空间补 zoom_mod / failure / _fail / _evidence
+  tests/test_web_cli.py            命名空间补 zoom_mod / failure / _zoom_guard / _CURRENT_HWND
+  tests/test_desktop_controls.py   命名空间补 _CURRENT_HWND
+  tests/test_conversation.py       无改动（0 行差异；仅被上面几个文件的 import 影响）
+
+新增用例逐条对应（tests/test_card06b.py，72 个）：
+  1  TierUnreadableTests / ChipReadTests / ChooseUniqueTests
+  2  TierDriftTests（含"use 源码里不许出现 choose/open_menu"）
+  3  LastMomentTests（写→pre_send→submit 顺序；拒发不点发送；页面变了拒发）
+  4  ReceiptIdentityTests（receipt_identity；原子写不留 .tmp）
+  5  InputNormalizeTests（列表标记/自动序号/空行；正文原样）
+  6  ZoomTests（Ctrl+0 复检、仍非 100% 退出、非浏览器不碰、尺度 0.8–1.25、唯一性）
+  7  MinimizeTests（qi.window.restore 轮询；恢复失败 WindowMinimized=7）
+  8  HumanCheckTests（Cloudflare / Unknown error 分开；长文本不误判；先于档位闸）
+  9  FailureEvidenceTests（png+json+log；截图失败降级；去重；整屏缩到 1600 宽）
+  10 ChatgptReadbackTests（UIA radio 选中态；不再推断「默认」；强度必须芯片读回）
+  11 NoDuplicateLinesTests（AST 扫全仓相邻重复语句；opencode_use 那处只剩 1 次）
+
+================================================================================
+二、真机 A：页面缩放（第 6 条）
+================================================================================
+A1 失败样本（06:11，125%，页面上有刚探测过的弹层/焦点状态）：
+    $ python src\scripts\grok_choose.py --list --force
+      复用窗口 hwnd=526630（当前已是 grok）
+      页面缩放 125% → 125%（已按 Ctrl+0）
+    失败: {"ok": false, "stage": "zoom_not_100", "code": 1,
+           "hint": "页面缩放 125%，按 Ctrl+0 后仍是 125%；不硬找图（模板是在 100% 下截的）",
+           "zoom": {"ok": true, "before": 125, "after": 125, "pressed": true, "browser": true},
+           "evidence": {"png": "evidence\\fail\\grok_20261102-061101.png",
+                        "json": "evidence\\fail\\grok_20261102-061101.json"}}
+    → 按卡面：仍非 100% 就退出，**不硬找图**。
+
+A2 成功样本（06:26，125%，干净页面）：
+      页面缩放 125% → 100%（第 1 次 Ctrl+0）
+      {"state": "expert", "score": 0.893, "scale": 1.0,
+       "template": {"name": "grok_chip_expert", "score": 0.893, "threshold": 0.85,
+                    "scale": 1.0, "hit": true}}
+    → 只在浏览器窗口发 Ctrl+0；发完重新检测；尺度记录为 1.0。
+
+A3 说明（如实记）：
+    · 最终代码对 Ctrl+0 最多重试 2 次（仍然只发 Ctrl+0，不发 Ctrl+±、不点菜单）；
+    · 同一台机器上观察到 Ctrl+0 有时不生效（A1），有时一次就生效（A2）；
+      不生效时脚本按卡面退出，不"警告放行"。
+    · 非浏览器窗口（桌面端）`zoom.ensure` 直接 skipped，不会往里打按键。
+
+================================================================================
+三、真机 B：最小化统一恢复（第 7 条）
+================================================================================
+    before iconic False rect=(512, 161, 1380, 1024)
+    ShowWindow(SW_MINIMIZE)
+    after  iconic True  rect=(-32000, -32000, 160, 28)      ← 哨兵矩形
+    $ python src\scripts\grok_choose.py --list --force
+      复用窗口 hwnd=526630（当前已是 grok）
+      {"state": "expert", "score": 0.893, ...}
+    LIST_EXIT 0
+    after run iconic False rect=(512, 161, 1380, 1024)      ← 自己恢复了
+  → 网页端走 `Screen.bind → window.restore`；三个桌面端 + 三个桌面 choose 的
+    `rect_of()` 也改成调同一个 `qi.window.restore`（恢复不了仍按哨兵判 7）。
+    恢复**失败**的真机样本做不出来（窗口能被恢复）；该分支由单测覆盖：
+    `MinimizeTests.test_bound_rect_raises_exit_seven`。
+
+================================================================================
+四、真机 C：正常发送（写入 → 复核 → 点击）
+================================================================================
+    $ python src\scripts\grok_choose.py --model expert --force
+      {"ok": true, "stage": "already", "before": "expert", "after": "expert",
+       "chip_score": 0.893, "scale": 1.0, "template": {"name": "grok_chip_expert",
+       "score": 0.893, "threshold": 0.85, "scale": 1.0, "hit": true}}
+
+    $ python src\scripts\grok_use.py "请只原样回复这一行：BR9-06b-20261102T0635-ok" \
+          --continue --purpose accept --timeout 150 --force
+    {"ok": true, "submission": "accepted", "sent": true, "stage": "answered",
+     "reply": "BR9-06b-20261102T0635-ok",
+     "basis": "tree_reply_bar_and_stable_text", "submit": "uia",
+     "elapsed": 7.4, "mode": "continue"}
+    EXIT=0
+  → 档位回执通过 + 芯片读回 expert + 页面指纹未变 → 才点发送；回复逐字带回 token。
+
+================================================================================
+五、真机 D：行首「1. 」不再 input_mismatch（第 5 条，卡面完成标准 2）
+================================================================================
+输入（原样发送，含空行与三种行首标记）：
+    请只回复这一行：BR9-06b-LIST-0642
+
+    补充三条（保持原样）：
+    1. 第一条
+    2. 第二条
+    4. 第四条
+    - 破折号项
+
+真机读回的原始值（施工中单独复现，未发送）：
+    '请只回复这一行：BR9-06b-LIST-0642\n补充三条（保持原样）：\n1. 第一条\n
+     2. 2. 第二条\n3. 4. 第四条\n4. - 破折号项'
+    ↑ Grok 做了三件事：吞掉空行、自动加序号（2./3./4.）、保留原标记
+      （`2. 第二条` → `2. 2. 第二条`）。旧比对（去空白后逐字）必然 input_mismatch。
+
+归一后的两端（textcmp.normalize）：
+    期望 1 请只回复这一行：BR9-06b-LIST-0642
+    期望 2 补充三条（保持原样） / 第一条 / 第二条 / 第四条 / 破折号项
+    实际 完全相同（空行忽略、重复标记连去 4 层、1.5 这种小数不算标记）
+
+    $ python src\scripts\grok_use.py "请只回复这一行：BR9-06b-LIST-0642
+     ...（同上，六行）" --continue --purpose accept --timeout 180 --force
+    {"ok": true, "submission": "accepted", "sent": true, "stage": "answered",
+     "reply": "BR9-06b-LIST-0642", "basis": "tree_reply_bar_and_stable_text",
+     "submit": "uia", "elapsed": 8.3, "mode": "continue"}
+    EXIT=0
+  → 没有 input_mismatch；正文（含标记）原样打进输入框。
+    对照：修复前同一条命令返回 stage=input_mismatch（06:18:06，
+    证据 evidence\fail\grok_20261102-061806.json，hint 已带"第 2 行第 1 字起不一致"）。
+
+================================================================================
+六、真机 E：故意把 Grok 芯片模板换成错图 → 必须退出 5（卡面完成标准 1）
+================================================================================
+步骤（06:22:03）：
+  1. 先用**好模板**跑 grok_choose --model expert，写下有效回执：
+       {"ok": true, "stage": "already", "before": "expert", "after": "expert",
+        "chip_score": 0.893, ...}
+       runs\tier\grok.json: target=expert, readback=expert, consumed=None
+  2. 用随机噪声覆盖 src\assets\library\grok_chip_expert.png（44x120，15964 字节）
+  3. 立刻 grok_use --continue --purpose accept：
+
+    USE_EXIT 5
+    {"ok": false, "stage": "tier_unconfirmed", "reason": "tier_unreadable", "code": 5,
+     "hint": "发送前读不回档位（template_miss）：模板 grok_chip_fast 最高 0.629（阈值 0.85），
+              页面缩放 100%。按 CARD-06b：读不到一律拒发，请人工确认页面/重截模板后重新 choose",
+     "templates": [
+       {"name": "grok_chip_fast",   "score": 0.629, "threshold": 0.85, "scale": 1.1, "hit": false},
+       {"name": "grok_chip_expert", "score": 0.098, "threshold": 0.85, "scale": 0.8, "hit": false}],
+     "zoom_percent": 100,
+     "submission": "not_sent", "sent": false, "elapsed": 1.4,
+     "evidence": {"png": "evidence\\fail\\grok_20261102-062203.png",
+                  "json": "evidence\\fail\\grok_20261102-062203.json"}}
+
+  4. 恢复模板（sha256 与备份一致），清掉拒发时留在输入框里的测试草稿。
+  5. 恢复后再跑一次成功发送（BR9-06b-FINAL-0624，EXIT=0），证明模板没被损坏。
+
+  证据 JSON 关键字段（evidence\fail\grok_20261102-062203.json）：
+    {"schema_version": 1, "endpoint": "grok", "stage": "tier_unconfirmed",
+     "reason": "tier_unreadable", "code": 5, "hwnd": 526630,
+     "window": {"rect": [512,161,1380,1024], "zoom_percent": 100},
+     "templates": [fast 0.629 / expert 0.098], "screenshot": "...062203.png"}
+    PNG 228164 字节（窗口大小，不是整屏）。
+
+  另两次同场景复跑（06:19:16、06:21:24）同样是 USE_EXIT 5 / tier_unreadable；
+  06:19 那次留证的 hwnd 为空、PNG 4.6MB，暴露出"cli 二次留证覆盖第一次"的缺陷，
+  已修（`if not result.get("evidence")` 才补记），06:21 之后的留证都带窗口信息。
+
+  → 注意：**UIA 兜底不会把这次失配洗成确认**。`qi/chip.py:UIA_FALLBACK_WITH_TEMPLATES=False`
+    的理由写在常量旁边：卡面完成标准要求"换成错图必须退出 5"；UIA 只用于本来就没有
+    芯片模板的端（chatgpt 的芯片文本、deepseek 的开关）。这条取舍需要会审确认。
+
+================================================================================
+七、真机 F：ChatGPT 假读回（第 10 条）
+================================================================================
+F1 只读探针（不选中、不改档，06:24 左右，ChatGPT 标签、缩放 100%）：
+    chip effort (read-only): {'effort': 'high', 'raw': '高', 'source': 'uia_chip'}
+    read_effort (should use chip, no popup):
+        {'effort': 'high', 'label': '高', 'source': 'uia_chip', 'raw': '高'}
+    model uia in chat mode: {'model': 'gpt6', 'name': 'GPT-6', 'source': 'uia'}
+    ui rows: [('gpt6', 'GPT-6'), ('gpt56_sol', 'GPT-5.6 Sol')]
+  → 强度来自芯片文本，模型来自模型列表的 RadioButtonControl 选中态；
+    都不依赖模板，也不需要点开强度弹层。
+
+F2 复跑卡面点名的那条命令：
+    $ python src\scripts\chatgpt_choose.py --new --writer chat --model gpt6 --effort high --force
+      （中间照旧打出模板分数：gpt_check 最高 0.656、gpt_model_gpt6 最高 0.467、gpt_model_gpt56 0.369）
+      {"ok": true, "stage": "already", "before": "gpt6", "after": "gpt6", "read": "uia"}
+      {"ok": true, "stage": "done", "before": "high", "after": "high", "want": "high",
+       "read": "uia_chip", "chip": "高", "announce": "high",
+       "slider_geometry": "high", "knob": 1217, "off": 0, "by": "keyboard"}
+      {"ok": true, "stage": "done",
+       "dimensions": {"model":  {"ok": true, "after": "gpt6", "read": "uia"},
+                      "effort": {"ok": true, "after": "high", "read": "uia_chip"}},
+       "readback": {"model": "gpt6", "effort": "high"}}
+    EXIT=0
+  → 和 06b r1 的区别：
+    · 模板 gpt_model_gpt6 仍然不命中（0.467），但**不再靠它**：模型读回走 UIA radio；
+    · 强度读回来自芯片文本 "高"，不再用滑杆键盘位置推断；
+    · 多给一条整体结论：任一维度没读回 → 整体 ok=false（这次两维都读回，才 true）。
+  单测里对"读不回"的两条分支都做了锁定：
+    `test_set_effort_requires_chip_readback`（芯片 mid / 期望 high → ok=false）
+    `test_set_effort_fails_when_chip_is_unreadable`（reason=effort_unreadable）
+    `test_pick_model_no_longer_infers_default`（旧推断必须消失）
+
+================================================================================
+八、失败留证格式（第 9 条）
+================================================================================
+统一落 evidence\fail\<端>_<YYYYmmdd-HHMMSS>.png/.json，并在 runs\YYYYMMDD.jsonl
+追加一行 result=fail_evidence。样例（06:22:03 那条，节选）：
+
+  {"time": "2026-11-02T06:22:03+0800", "endpoint": "grok", "ok": false,
+   "result": "fail_evidence", "submission": "not_sent", "elapsed": 1.4,
+   "error": "发送前读不回档位（template_miss）…",
+   "evidence": {"png": "...\\evidence\\fail\\grok_20261102-062203.png",
+                "json": "...\\evidence\\fail\\grok_20261102-062203.json",
+                "stage": "tier_unconfirmed", "reason": "tier_unreadable"}}
+
+  JSON 字段：schema_version / endpoint / stage / reason / code / at / hwnd /
+            window{rect, zoom_percent} / templates[{name,score,threshold,scale,hit}] /
+            hint / result / evidence / screenshot / deduped
+
+两条保护（施工中实测踩出来的）：
+  · **不重复留证**：同一 (端, stage, reason) 30 秒内再失败，不再截大图，JSON 里
+    `deduped` 指向上一次。起因：06:22:26/36/46 有外部调用（不是本次施工命令）
+    以 10 秒间隔重试 chatgpt_use，每次写一张 4.6MB 整屏图，半小时就能撑爆 evidence。
+  · **整屏缩到 1600 宽**：拿不到窗口矩形时才整屏；窗口截图不缩（228KB 级别）。
+
+================================================================================
+九、逐条对照 1–11
+================================================================================
+ 1 读不到即拒发（tier_unreadable，退出码 5）
+   √ tier_guard.gate 默认 require_readback=True；None/dict.value=None/异常 → tier_unreadable
+   √ 失败也消费回执（防反复试同一张）
+   √ 芯片：模板（0.8–1.25 多尺度 + 唯一性）→ 无模板端才走 UIA
+   √ 真机：六（USE_EXIT 5）+ 单测 5 条
+   ! 取舍：grok/gemini 有芯片模板时，模板失配不再用 UIA 洗成确认（见第六节末）
+ 2 漂移不在 use 里重选（tier_drift）
+   √ 读到 != 回执 → tier_drift；hint 明确"重跑 *_choose"
+   √ 源码级断言：grok_use 不出现 choose(/open_menu(
+   √ 单测 TierDriftTests
+   ! 真机没做"人工改档再发"（会动用户档位）；离线用例覆盖
+ 3 最后一刻复核
+   √ 门在 conversation.ask 的 write/read 之后、submit 之前（grok/gemini/flow/桌面端共用）
+   √ 复核后立刻比页面指纹：hwnd/pid/启动时间/URL/文档 runtime id/前台
+   √ 变了 → stage=tier_unconfirmed, reason=page_changed，不点发送
+   √ 单测：顺序、拒发不点、page_changed 三条
+   ! 真机没制造"复核后导航"（会打断用户会话）；离线用例覆盖
+ 4 回执加固
+   √ 原子写：临时文件 + os.replace（06a 已有，新增用例锁住"不留 .tmp"）
+   √ use 消费时校验 hwnd/pid/process_start_time → reason=receipt_identity
+   √ 单测：identity 改名 + 原子写
+ 5 输入归一只用于比对
+   √ textcmp：行首标记（可多层）、统一换行、去首尾空白、空行忽略；正文原样
+   √ input_mismatch hint：第一处差异的行号 + 前后 20 字 + 字数差
+   √ 真机：五（含列表标记的提问成功）
+ 6 缩放
+   √ 只对浏览器发 Ctrl+0；发完重检；仍非 100% → zoom_not_100（真机二）
+   √ 多尺度限定 0.8–1.25；Match.scale 记录；find_unique 多处命中判失败
+   √ 非浏览器/读不到进程名 → 不发按键（前者 skipped，后者 ZoomNot100）
+ 7 最小化
+   √ 所有 *_choose/*_use 的取矩形统一走 qi.window.restore
+   √ 恢复失败 → WindowMinimized（code 7），不拿哨兵坐标点击
+   √ 真机：三（最小化后 choose 自动恢复）
+ 8 人机验证 / Unknown error
+   √ human.detect：短句整串匹配，长文本里出现 Cloudflare 不算
+   √ HumanCheck(stage=human_check, reason=cloudflare|unknown_error)
+   √ pre_send 先判人机再判档位：命中就抛，不点、不重试、不消费回执
+   √ 失败留证自动截图（stage=human_check 在留证名单里）
+   ! 真机没有遇到 Cloudflare/Unknown error 页面，未做真机触发
+ 9 失败自动留证
+   √ tier_* / zoom_* / human_check / input_mismatch → png+json+一行日志
+   √ 截图失败只影响证据；整屏缩宽；30 秒去重
+   √ 真机：二（zoom）、五（input_mismatch）、六（tier_unreadable）
+ 10 chatgpt 假读回
+   √ 模型：UIA RadioButton 选中态；模板只作兜底且**不再推断 default**
+   √ 强度：芯片文本为准；滑杆读数（`高，第 3 项，共 3 项`）只作诊断
+   √ 任一维度未读回 → 整体 ok=false；结束时多打一条 dimensions/readback 总账
+   √ 真机：七（F1 + F2）
+   ! `--model default`（工作模式）读不回原名 → 现在 ok=false（旧版报 ok=true）；
+     这是第 10 条要求的行为，use 侧本来也会因 readback 为空拒发
+ 11 opencode_use 重复行
+   √ 删掉重复的 `r = {"ok": False, "stage": "aborted", ...}`
+   √ 新增 AST 用例：全仓 src/ + tools/ 不许有相邻重复语句（当前 0 处）
+
+================================================================================
+十、没做到 / 未验（如实记）
+================================================================================
+1. **人机验证与 page_changed 没有真机样本**：这一轮没遇到 Cloudflare/Unknown error，
+   也没有在"复核后、点击前"制造页面导航（会打断用户会话）。两者只有离线用例。
+2. **codex 仍然没有只读档位通道**：Codex 要开卡片才能读档，开卡片要点两下，不算只读。
+   它显式 `require_readback=False`，结果里带 `tier_readback="unsupported"`——
+   登记过的未验，不是静默放行；适配属 CARD-06c。
+3. **dsh / opencode 的只读复核走模板芯片**：读不到会按 tier_unreadable 拒发；
+   本轮没做这两个端的真机发送（只跑过单测）。
+4. **chatgpt 聊天模式读不到模型名**：芯片只显示强度；模型名在要点击才展开的列表里，
+   不算只读。所以聊天模式的 model 回执在 use 侧会 tier_unreadable 拒发；
+   强度回执（芯片档位词）可以正常复核。这条写进了 docs\exit-codes.md 的已知限制。
+5. **gemini 芯片模板已过期**（本轮开工时实测 0.33~0.47）：按第 1 条会拒发。
+   模板重截/多尺度适配是 06c 的事，本卡没有重截素材。
+6. **回执不防伪造**（06a 的设计，未变）：本机单用户，谁都能写 runs\tier\*.json。
+7. **外部调用干扰**：06:22:26/36/46 有非本次施工命令在重试 chatgpt_use
+   （无回执 → tier_unconfirmed）。已加留证去重，没有去动那个调用方。
+8. **`grok_choose --model fast`（真的要从 expert 切走）没有真机跑过**：
+   本轮只跑了 already 路径；切换路径的 item 模板在本机失配（historically 0.56），
+   属 06c 的模板适配。receipt 的写入/消费路径已由 already 路径和单测覆盖。
+
+================================================================================
+十一、回滚
+================================================================================
+备份目录：_backup_20261102\*.bak-card06b（32 个；含 4 个改前本来就没变的同名备份）
+
+  如实说明备份时机：27 个是**改动前**直接 copy 的；下面 5 个当时漏了先拷，
+  是**施工后按改动反向重建**的，并做了回放验证（把正向补丁重新打回去，
+  结果必须与当前文件逐字节相等）：
+      gemini_choose.py / deepseek_choose.py / test_card06a.py /
+      test_web_cli.py / test_desktop_controls.py
+  这 5 个文件的重建差异只有本卡加的那几段（import、zoom 预检、tier 期望值、
+  测试夹具），没有夹带别的改动。
+  改过的文件（去掉 .bak-card06b 后缀拷回原位）：
+    qi:       choose.py conversation.py exit_codes.py flow.py gemini.py runlog.py
+              screen.py tier_guard.py ui.py
+    scripts:  chatgpt_choose.py codex_choose.py codex_use.py deepseek_choose.py
+              dsh_choose.py dsh_use.py gemini_choose.py grok_use.py
+              opencode_choose.py opencode_use.py
+    docs:     exit-codes.md
+    tests:    test_card06a.py test_web_cli.py test_desktop_controls.py
+    progress: progress.json.bak-card06b
+    assets:   grok_chip_expert.png.bak-card06b（原图，施工中被临时覆盖后已恢复）
+  新增文件（回滚时删除）：
+    src\qi\textcmp.py  src\qi\zoom.py  src\qi\human.py  src\qi\failure.py
+    src\qi\chip.py     src\qi\sendgate.py
+    tests\test_card06b.py
+    evidence\card06b_live.txt
+    evidence\fail\grok_20261102-0611*.{png,json} / 0618* / 0619* / 0621* / 0622*
+    （evidence\fail\chatgpt_* 有可能是外部调用产生的，回滚时按需保留）
+  注意：`qi/conversation.py` 的 `ask()` 新增了 `pre_send` 参数，`qi/flow.py`、
+  `qi/gemini.py`、三个桌面 use 都依赖它；要回就一起回，单独回一个会 TypeError。
+  另：`qi/screen.py::Match` 新增 `scale` 字段、`choose.py::choose` 新增"已选中不再开菜单"，
+  这些是 06b 的内部依赖，回滚时与上表一起处理。

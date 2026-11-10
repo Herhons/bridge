@@ -1,0 +1,138 @@
+CARD-07 真机证据（workbuddy / gemini / codex / gemini_choose）
+时间：2026-11-02 09:09–09:23（本机 HERHONS-PC，副屏 -1440,-653 1440x2560，显示器缩放 100%，Chrome 页面缩放 100%）
+Python：py -3.10（uiautomation 装在这个解释器里；workbuddy 的 binaries\python 3.13 没装 uiautomation，跑不了实测）
+
+================================================================ 0. 全量单测
+命令：py -3.10 -X utf8 -B -m unittest discover -s tests
+       Ran 487 tests in 10.065s
+       OK
+（447 基线 + 40 新增 tests\test_card07.py，连跑多次一致）
+
+================================================================ 1. workbuddy_use —— 页面已有回复，UIA 读回（卡面第 1 条）
+
+先写档位回执（workbuddy 的档位表未登记，但回执必须新鲜且与 UIA 当前模型一致）：
+  $ py -3.10 -X utf8 src\scripts\workbuddy_choose.py --model "DeepSeek-V4.1-Flash" --force
+  {"ok": true, "before": "DeepSeek-V4.1-Flash", "after": "DeepSeek-V4.1-Flash", "verified": true}
+  EXIT=0
+
+  $ py -3.10 -X utf8 src\scripts\workbuddy_use.py "只回复：WB-07-LIVE-OK" --new --purpose test --timeout 150 --force
+  {"ok": true, "stage": "tier_confirmed", "tier_check": "table_unconfigured",
+   "tier_readback": "confirmed", "purpose": "test", "purpose_label": "TEST",
+   "readback": "DeepSeek-V4.1-Flash", ...}
+  {"ok": true, "submission": "accepted", "sent": true, "stage": "answered",
+   "reply": "WB-07-LIVE-OK", "read_via": "uia",
+   "basis": "uia_stop_gone_and_stable_text",
+   "copy_note": {"copy": "复制到的仍是提问本身，改用 UIA 正文"}, "elapsed": 7.3}
+  EXIT=0
+
+判据（本卡新写的那条）：停止生成按钮消失 + 回复正文连续 2 轮不变 → 交卷；
+`read_via=uia` 表示正文是从控件树读的（剪贴板那条路在 WorkBuddy 上读到的是**提问**，
+见下面"施工途中撞上的两个真相"）。全程 7.3 秒，没有等到 150 秒超时。
+
+同一窗口同一轮，立刻用 reply_text() 复核：
+  copies=1，prompt_at=247，last_reply='WB-07-LIVE-OK'
+
+（这一轮之前跑过两次，都是**真实失败**，留下来给人看：）
+  · 09:16:41 那次 reply="WB-07-LIVE-OK" 但 read_via=clipboard —— 实际正文来自 UIA，
+    只是 main() 用 conversation.read_via 覆盖了结果字段 → 已改成 setdefault，并让
+    `_answer` 在"复制到的是提问"时把 read_via 写实为 uia。
+  · 09:17:21 那次 reply="VB-07-LIVE-OK"：**不是解析丢字，是模型自己打成 V**。
+    截图为证（evidence 里没有存图，现场核对方式：那一轮 WorkBuddy 气泡里就是
+    "VB-07-LIVE-OK"，侧栏任务标题仍是 "回复 WB-07-LIVE-OK 确认"）。
+
+================================================================ 2. gemini_use —— 一句 ping 回复读回（卡面第 2 条）
+
+  $ py -3.10 -X utf8 src\scripts\gemini_choose.py --model flash_lite --force
+  {"ok": true, "stage": "already", "before": "flash_lite", "after": "flash_lite"}
+  EXIT=0
+
+  $ py -3.10 -X utf8 src\scripts\gemini_use.py "只回复：GEM-07-LIVE-OK" --new --purpose test --timeout 150 --force
+  {"ok": true, "submission": "accepted", "sent": true, "stage": "answered",
+   "reply": "GEM-07-LIVE-OK", "basis": "tree_reply_bar_and_stable_text",
+   "criteria": "reply_bar+text_stable_3s", "elapsed": 8.8, "mode": "new"}
+  EXIT=0
+
+runlog（runs\20261102.jsonl）里同时落了两行——第二行是给"判据"单开的一条：
+  {"time":"2026-11-02T09:14:43+0800","endpoint":"gemini","ok":true,"result":"answered",...}
+  {"time":"2026-11-02T09:14:43+0800","endpoint":"gemini","ok":true,"result":"reply_criteria",
+   "criteria":"reply_bar+text_stable_3s","basis":"tree_reply_bar_and_stable_text","read_via":null}
+
+注：这一轮页面**有**回答动作条，所以走的是老判据（动作条 + 文本稳定 3s）；
+新写的那条（停止键消失 + 文本 2 轮不变 / DOM 全文兜底）这一轮没被触发，
+由 tests\test_card07.py 的 6 个用例覆盖（answer_without_action_bar / dom_text_*）。
+
+================================================================ 3. codex_use —— 最低档发一句 ping，找到 composer 并发送（卡面第 3 条）
+
+  $ py -3.10 -X utf8 src\scripts\codex_choose.py --model gpt6_luna --force
+  {"ok": true, "before": "gpt61_sol", "after": "gpt6_luna", "want": "gpt6_luna", "stage": "done"}
+  EXIT=0
+
+  $ py -3.10 -X utf8 src\scripts\codex_use.py "只回复两个字：收到" --purpose test --timeout 60 --force
+  {"ok": true, "submission": "accepted", "sent": true, "stage": "answered",
+   "reply": "收到", "basis": "new_user_message_and_reply_control", "elapsed": 44.2}
+  EXIT=0
+
+  · 窗口是这一轮才拉起来的（之前 ChatGPT.exe 只有隐藏窗口，find_window 看不见）：
+    输出首行 "启动 codex …"，随后 --list 读到 {"model":"gpt61_sol","effort":"max"}。
+  · 这一轮 **composer 是模板找到的**（结果里没有 composer_basis 字段），
+    也就是说新加的 UIA 兜底**没有被真机触发**——它只在模板失配时才会走。
+    UIA 兜底的顺序与落点由 tests\test_card07.py::CodexComposerTests 的 5 个用例覆盖
+    （找编辑框 / 点它获焦 / 重找模板 / 仍不认就用 UIA 落点 / 找不到就保持原结果）。
+
+收尾还原：codex_choose --model gpt61_sol → after=gpt61_sol；
+         codex_use --list → {"model": "gpt61_sol", "effort": "max", ...} EXIT=0
+
+================================================================ 4. gemini_choose --list 读回档位（卡面第 4 条）
+
+  $ py -3.10 -X utf8 src\scripts\gemini_choose.py --new --list --force
+  {"writer": "dialog", "model": "argon", "ink": {"flash_lite": 0, "flash": 0, "pro": 0, "argon": 30}}
+  EXIT=0
+
+菜单项定位（同一次运行的逐条打印）：
+  找到 <gem_item_flash_lite 1.000 中心(-402,220)>
+  找到 <gem_item_flash     1.000 中心(-402,283)>
+  找到 <gem_item_pro       1.000 中心(-402,346)>
+  找到 <gem_item_argon     1.000 中心(-402,409)>
+  找到 <gem_mic            1.000 中心(-309,166)>
+
+芯片模板（逐个切档后回读，切换由 gemini_choose.set_model 完成，最后还原成 Argon）：
+  flash_lite 选中 → gem_chip_flash_lite 1.000（其余 ≤0.784）
+  flash      选中 → gem_chip_flash      1.000（其余 ≤0.686）
+  pro        选中 → gem_chip_pro        1.000（其余 ≤0.662）
+  argon      选中 → gem_chip_argon      1.000（其余 ≤0.704）
+  阈值 0.85；`chip.read("gemini","model")` 在发送前也只认这一张（UIA_FALLBACK_WITH_TEMPLATES=False）。
+
+旧模板全部留档：src\assets\library\gem_*.png.bak-card07（11 张，见 tests 的备份用例）。
+gem_mic 的旧图是先从 git HEAD 取回再备份的——第一次重截时它被直接覆盖了，
+这里如实记一笔（其余 10 张都是"先 cp 成 .bak-card07 再覆盖"）。
+
+================================================================ 5. 施工途中撞上的两个真相（写下来免得下一个人重踩）
+
+1. **WorkBuddy 的回复动作条不是 ButtonControl。** 赞/踩/重试/复制那一排是
+   ImageControl，控件树里唯一叫「复制」的按钮挂在**提问气泡**的工具条上
+   （ToolBar[09:17, 复制]）。所以：
+     · 共享判据 `conversation.is_reply_copy` 在这个页面上恒为 0（它要找赞/踩这类兄弟按钮）；
+     · 点那个复制键，剪贴板里出来的是**提问本身**，不是回复。
+   本卡的做法：`reply_copy()` 认"工具条里的复制键"，`last_reply()` 从它往上爬
+   （reply_text 本来就有"爬过气泡边界"这条）拿到回复正文，并且**剔掉读回来等于提问的那条**。
+   这也解释了 06b/06c 那次"复制回复后剪贴板未更新"：不是没写剪贴板，是写进去的是别的东西。
+
+2. **提问气泡在树里是截断的**（实测长提问只留到第 60 字左右），
+   `prompt_nodes` 要求整串精确相等 → 永远认领不到 → accepted 一直是 False →
+   240 秒后报 no_reply，而页面早就答完了。本卡按前缀认领（`prompt_at`）。
+
+================================================================ 6. 未验 / 已知代价（如实记）
+
+- **codex 的 UIA composer 兜底没在真机触发**：这一版 Codex 的 cdx_composer 仍然匹得上
+  （模板路径直接通过）。兜底只在单测里验过。
+- **gemini 的新判据没在真机触发**：这一轮回答动作条正常出现，走的是老判据。
+  "停止键消失 + 2 轮不变"和 DOM 全文兜底都只有离线用例。
+- **gemini_use 两次真实失败**（09:09:43、09:12:17，EXIT=5，tier_unreadable）：
+  第一次是芯片模板截在"聚焦"状态（带蓝色胶囊边框）→ 发送前读不回；
+  第二次是输入框里还留着上一轮写进去的草稿（draft_present）。
+  两次都按 fail-closed 拒发，没有点发送；证据在 evidence\fail\gemini_20261102-09*.png。
+- **workbuddy 的复制路径实际不可用**：`copy_note` 每轮都是"复制到的仍是提问本身"，
+  正文一律由 UIA 给出。卡面要的"读到则标 read_via=uia"这次是真的 uia。
+- 为了取证，WorkBuddy 里多开了 3 个新任务（侧栏可见"回复 WB-07-LIVE-OK 确认"等），
+  Gemini 开过一个新对话页；模型档位已还原（gemini=Argon，codex=gpt61_sol/max，
+  workbuddy=DeepSeek-V4.1-Flash）。

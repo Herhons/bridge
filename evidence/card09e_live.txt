@@ -1,0 +1,201 @@
+# CARD-09e 真机冒烟（2026-11-02 16:50–17:30）
+
+按卡面「完成标准」：只冒烟本卡改动的端（ChatGPT 新对话清草稿+发送+读回、WorkBuddy 重启路径、
+Gemini --new），已通过端不复测。所有发送一律最低档（PLAN 档位规则），测完已把 ChatGPT 强度
+恢复成「高」、Gemini 模型恢复成 argon（原状）。
+
+原始输出（同目录）：`card09e_chatgpt_send*.txt` `card09e_chatgpt_read*.txt`
+`card09e_chatgpt_markdown*.txt` `card09e_gemini_*.txt` `card09e_restart_*.txt`
+`card09e_idle_*.txt` `card09e_probe_*.txt|png`。
+
+---
+
+## 1) 第 4 条：ChatGPT `--new` 清残留草稿 —— 通过（EXIT=0）
+
+复现手法：先在**新对话页**的输入框里塞一条不发送的草稿（`card09e_seed_draft.py`），
+再跑一次 `chatgpt_use --new`。
+
+```
+$ py -3.10 -X utf8 evidence/card09e_seed_draft.py "DRAFT-09E-MUST-BE-CLEARED"
+{"ok": true, "seeded": "DRAFT-09E-MUST-BE-CLEARED",
+ "readback": "请只原样回复这一行：BR9-chatgpt-0DRAFT-09E-MUST-BE-CLEARED9e-20261102T1707-85a0",
+ "before": "请只原样回复这一行：BR9-chatgpt-09e-20261102T1707-85a0", "url": "https://chatgpt.com/"}
+
+$ py -3.10 -X utf8 src/scripts/chatgpt_use.py "请只原样回复这一行：BR9-chatgpt-09e-20261102T1708-961a" \
+      --new --purpose test --timeout 240 --force          # EXIT=0
+{"ok": true, "submission": "accepted", "sent": true, "stage": "answered",
+ "reply": "BR9-chatgpt-09e-20261102T1708-961a", "elapsed": 8.6, "mode": "new",
+ "draft_on_new": "cleared"}                                ← 草稿被清掉、读回为空才继续
+```
+
+`draft_on_new` 只取三个值：`cleared`（清掉过草稿）/ `already_empty`（本来就空）/
+整轮失败时没有这个字段（`draft_clear_failed`，EXIT≠0，不发送）。
+
+## 2) 第 5 条：Markdown / URL 输入归一 —— 通过（同一份提问里带 `#`、`-`、URL）
+
+```
+$ py -3.10 -X utf8 src/scripts/chatgpt_use.py "# 09e 输入归一冒烟
+                                                  - 第一项
+                                                  - 第二项
+                                                  参考地址 https://127.0.0.1:18765/health
+                                                  请只原样回复最后一行里的 token：BR9-..." \
+      --new --purpose test --timeout 240 --force          # EXIT=0
+{"ok": true, "submission": "accepted", "sent": true, "stage": "answered",
+ "reply": "BR9-chatgpt-md2-09e-20261102T1723-f763", "read_via": "uia",
+ "done_marker": "回答已完成", "early": true, "elapsed": 9.3, "draft_on_new": "cleared"}
+```
+
+改前（`runs\20261102.jsonl` 16:07 那条）同样的内容报
+`input_mismatch`（第 503 字，期望/实际肉眼一样，差的是 URL 自动转链接时插的零宽字符）；
+现在两侧同一套归一（行首 `#`/列表标记、行内 Markdown 取纯文本、去零宽、合空白）后逐字相等，
+没有触发粘贴兜底（`write_via` 未出现＝打字版本就核对通过）。
+
+## 3) 第 3 条：ChatGPT 回复检测 —— 通过（这是本卡最有价值的一条）
+
+**3a 真机复现"页面答完却报 no_reply"，由兜底救回**（改前的判据，`submission=unknown`）：
+
+```
+{"ok": true, "submission": "unknown", "stage": "answered", "timeout_kind": "no_reply",
+ "reply": "BR9-chatgpt-md-09e-20261102T1717-0efa", "read_via": "uia",
+ "basis": "uia_last_reply_marker", "done_marker": "回答已完成",
+ "fallback_from": "timeout", "elapsed": 241.8}
+```
+（这一轮跑在"只加兜底、还没加提前交卷"的中间版本上，所以真的等满了 240 秒才救回来。）
+
+**3b 加"页面答完就交卷"之后，同一份提问 9.3 秒返回**（见第 2 条的 JSON，`early: true`）。
+
+**3c `--read` 只读最后回复**（不发送、不点任何控件）：
+
+```
+$ py -3.10 -X utf8 src/scripts/chatgpt_use.py --read --force      # EXIT=0
+{"ok": true, "stage": "read", "reply": "BR9-chatgpt-read-09e-20261102T1726-a15d
+你喜欢这种回复风格吗？", "read_via": "uia", "basis": "uia_last_reply_marker",
+ "done_marker": "回答已完成", "url": "https://chatgpt.com/c/6ae85732-..."}
+```
+空白页（没有回答）时：`{"ok": false, "stage": "no_reply", ...}` EXIT=1
+（`card09e_chatgpt_read_empty.txt`）。
+
+**3d 真页面直接喂"超时结果"给兜底函数**（不制造 300 秒超时、不花额度）：
+
+```
+$ py -3.10 -X utf8 evidence/card09e_probe_fallback.py   # EXIT=0
+url=https://chatgpt.com/c/6ae852f9-... 回复动作条=1 标记='回答已完成'
+last_answer='BR9-chatgpt-09e-20261102T1708-961a'
+{"ok": true, "stage": "answered", "reply": "BR9-chatgpt-09e-20261102T1708-961a",
+ "basis": "uia_last_reply_marker", "fallback_from": "timeout"}
+```
+
+页面上的两个标记都是真的（`evidence\card09e_probe_chatgpt.txt` 现场树）：
+`TextControl '回答已完成'`（aria-live 播报）、`TextControl '最新一条回复'`（地标），
+回复动作条是 `复制 / 评价回复 / 朗读 / 分享 / 重新生成回复 / 更多操作`。
+
+## 4) 第 6 条：Gemini `--new --writer dialog` —— 通过（EXIT=0）
+
+卡面那条命令（改前报 `unreadable` → `use --new` 因此 `prepare_failed`）：
+
+```
+$ py -3.10 -X utf8 src/scripts/gemini_choose.py --new --writer dialog --force   # EXIT=0
+{"ok": true, "stage": "already", "before": "dialog", "after": "dialog", "basis": "uia_slider"}
+```
+
+往返切换（`card09e_gemini_writer_roundtrip.txt`）：
+
+| 步骤 | 结果 | EXIT |
+|---|---|---|
+| `--new --writer dialog` | `already / basis=uia_slider` | 0 |
+| `--writer task` | `done / before=dialog after=task / uia_slider` | 0 |
+| `--list` | `{"writer": "task", "model": "argon"}` | 0 |
+| `--writer dialog` | `done / before=task after=dialog / uia_slider` | 0 |
+| `--list` | `{"writer": "dialog", ...}` | 0 |
+
+截图对账：`card09e_gemini_region.png`（切到任务态时胶囊压在「任务」）、
+`card09e_gemini_after_dialog.png`（切回后胶囊压在「对话」）。
+
+**为什么原来读不出来**（现场量的数，`card09e_probe_writer.py`）：两张模板在**任务态**下
+逐像素差是 `dialog 21.38 / task 26.29`——"对话"那张反而更像；定位相似度 `0.950 / 0.937`。
+也就是说这个页面的模板判据本身就分不开两态（模板是早先截的），不是阈值调一调能好的。
+现在改走控件树：分段控件里那层 `gem-segmented-button-row-slider`（无名 GroupControl）
+压在哪个按钮上，就是哪个模式（`ClassName` 实测见 `card09e_probe_gemini.txt`）。
+像素差那条路保留为兜底（同态 9.15 / 异态 32.24 仍然有效）。
+
+**`use --new` 端到端**（原本 `prepare_failed` 的那条）：
+
+```
+$ py -3.10 -X utf8 src/scripts/gemini_use.py "请只原样回复这一行：BR9-gemini-09e-20261102T1712-2d4b" \
+      --new --purpose test --timeout 240 --force      # EXIT=0
+{"ok": true, "submission": "accepted", "sent": true, "stage": "answered",
+ "reply": "BR9-gemini-09e-20261102T1712-2d4b", "basis": "tree_reply_bar_and_stable_text",
+ "elapsed": 93.9, "mode": "new"}
+```
+
+> 第一次跑这条时先报 `draft_present`：Gemini 输入框里有**上一张卡留下的 345 字草稿**
+> （`card09e_gemini_clear_stale_draft.txt` 留了原文前 160 字）。清掉后重跑即通过。
+> 这不是本卡引入的问题（Gemini 的草稿清理不在卡面里，只有 ChatGPT 有第 4 条）。
+
+## 5) 第 2 条：重启链路 —— 真机跑通（App 用 OpenCode，代码同一份）
+
+**没在 WorkBuddy 上真关**：本会话就跑在 WorkBuddy 里，关掉它＝施工方自己消失，
+后面的证据/CHANGES/通知全都做不完。所以"关闭→等待→启动→等文档就绪"整条链在
+**OpenCode**（同一个 `qi\restart.py`、同一个 `desk` 通道）上真机跑：
+
+```
+$ # 第一版：按 exe 全路径启动
+{"ok": false, "steps": ["close_requested", "closed", "launched", "no_window"],
+ "error": "no_window", "elapsed": 41.9}
+   ← 关掉了、也拉了 exe，但 40 秒没窗口。改用 AppID 立刻起来（2 秒）。
+
+$ # 按上面这个发现改成"AppID 优先、exe 兜底、没窗口换一种再试一次"
+{"ok": true, "steps": ["close_requested", "closed", "launched", "window", "docs_ready"],
+ "hwnd": 4656322, "docs": 1, "launch_via": "appid", "elapsed": 2.5}
+```
+
+WorkBuddy 专属的三件事在真机上单独验（`card09e_restart_workbuddy_rehearsal.txt`）：
+
+```
+{"hwnd": 15404216, "exe": "D:\\WorkBuddy\\WorkBuddy.exe",
+ "appid": "shell:AppsFolder\\WorkBuddy.WorkBuddy", "docs_ready": 1}
+```
+（AppID 由 `Get-StartApps` 查得，已写进 `desk.APPS["workbuddy"]["launch"]`；
+`restart._wait_docs` 在活着的 WorkBuddy 上读回 1 个文档。）
+`workbuddy_choose.py --list` 仍 EXIT=0、读出 `DeepSeek-V4.1-Flash`（重构 `main` 后回归）。
+
+**没验的那一步**：WorkBuddy 自己的 `WM_CLOSE → 消失 → 拉起`。理由同上；
+代码路径与 OpenCode 完全一致，唯一差别是 exe/AppID 两个常量（都已验证存在）。
+
+## 6) 第 7 条：空闲闸不再把自己人当用户 —— 通过
+
+现场对比（`card09e_idle_selfinput.txt`）：
+
+```
+注入一次 shift（合成输入）
+注入后（有标记）idle = 999.0 tick = 74318875
+移走标记（改前行为）idle = 0.11 -> 会报「你正在用电脑」再白等 2s
+重新标记后 idle = 999.0
+{"with_mark": 999.0, "without_mark": 0.11, "after_remark": 999.0, "fixed": true}
+```
+
+紧接着跑 `gemini_use --read`（**不带 --force**）：`card09e_idle_use_no_wait.txt` 里
+`grep -c 等待` = 0，EXIT=0。
+
+## 7) 第 1 条：progress.json 合并写 —— 离线验（不拿真文件做实验）
+
+单测覆盖：预置 `verdicts/queue/running` → `progress.write()` 后三个字段原样保留、
+`notify_failed` 只在本次通知失败时出现；三线程并发写 15 次后 `verdicts/queue` 不丢；
+锁互斥（第二把锁超时 0.2s 抛 `TimeoutError`）。真机侧只做了"读"：
+`progress.json` 的 `verdicts` / `queue` 在通知前后逐字一致（见 `card09e_notify.txt`）。
+
+---
+
+## 没做到 / 未验（如实记）
+
+- **WorkBuddy 自己的关闭-重启**没在真机做（会杀掉施工会话）。同一条代码路径在 OpenCode 上
+  真机跑通；WorkBuddy 的 AppID / exe / 文档就绪三项已单独验。
+- **粘贴纯文本兜底**（`write_via=paste`）只在单测里走过，真机这几次都是"归一后本来就相等"，
+  没触发。触发条件：打字版本核对不上（`input_mismatch` 前的一次重试）。
+- **第 4 条的 "UIA 名 '询问 ChatGPT' 不误选地址栏"**：本机 Chrome 的页面文档树里只有
+  1 个 EditControl（`card09e_probe_chatgpt.txt` 第 670 行），地址栏不在文档树内；
+  按名字精确匹配的写法是保险，不是本机必需。
+- **`chatgpt_choose` 自身有一次 `readback_missing`**（17:23，选完没读回档位 → use 按 5 拒发）。
+  重跑即好，属既有脚本的偶发，不在本卡范围，没改它。
+- 第 5 条的 `input_mismatch` 原始期望/实际字符串没有留档（`evidence\fail\*.json` 只存了 hint），
+  所以没法拿当时的真串回放，只能按同一类字符（零宽、`#`、URL）构造用例验。

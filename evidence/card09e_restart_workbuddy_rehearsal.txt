@@ -1,0 +1,1 @@
+{"hwnd": 15404216, "exe": "D:\\WorkBuddy\\WorkBuddy.exe", "appid": "shell:AppsFolder\\WorkBuddy.WorkBuddy", "docs_ready": 1, "close_skipped": "本会话运行在 WorkBuddy 内，关闭会终止施工与证据落盘", "close_launch_proven_on": "opencode（同一份 restart.py 代码路径）"}

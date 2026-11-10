@@ -1,0 +1,59 @@
+CARD-WEB2 真机验收（2026-11-01）
+机时：2026-11-01 12:30:08
+窗口：唯一一个 Chrome（hwnd=401149816），左侧竖屏（-1448,-661 1456x2536）。
+两条发送都是 --new：脚本自己点新对话，全程没有人工点发送键。
+--idle 0 只是不等待空闲，不是关掉用户占用保护：发送前仍会检查键鼠输入。
+
+## 运行前标签页
+1: 确认回复指令 - Google Gemini - 内存用量 - 326 MB
+2: 只回复 OK-WEB2 - Grok - 内存用量 - 419 MB
+
+$ python src/scripts/gemini_use.py 只回复 OK-WEB2-GEM --new --timeout 180 --idle 0
+# gemini --new：新对话 + 发送 + 等回复
+# start 12:30:09  exit=0
+资源库就绪：8/8 张
+  复用窗口 hwnd=401149816（当前已是 gemini）
+  找到 <gem_writer_tabs_dialog 1.000 中心(-540,745)>
+{"ok": true, "submission": "accepted", "sent": true, "stage": "answered", "reply": "OK-WEB2-GEM", "basis": "tree_reply_bar_and_stable_text", "elapsed": 31.7, "mode": "new"}
+
+$ python src/scripts/grok_use.py 只回复 OK-WEB2 --new --timeout 150 --idle 0
+# grok --new：新对话 + 发送 + 等回复
+# start 12:30:41  exit=0
+资源库就绪：5/5 张
+  复用窗口 hwnd=401149816（当前已是 grok）
+{"ok": true, "submission": "accepted", "sent": true, "stage": "answered", "reply": "OK-WEB2", "basis": "tree_reply_bar_and_stable_text", "submit": "uia", "elapsed": 8.5, "mode": "new"}
+
+## 运行后标签页（用于 --read --tab）
+1: 确认指令回复 - Google Gemini - 内存用量 - 355 MB
+2: 回复 OK-WEB2 - Grok - 内存用量 - 420 MB
+
+$ python src/scripts/grok_use.py --read --tab 2 --idle 0
+# grok --read（--tab 2）：只读最后一条回复，不发送
+# start 12:30:50  exit=0
+复用窗口 hwnd=401149816（当前已是 grok）
+{"ok": true, "stage": "read", "submission": null, "sent": null, "reply": "OK-WEB2", "replies": 1, "url": "https://grok.com/c/04973b87-40ff-4833-b59e-0c0ae5d51bd2?rid=1356c711-1f4f-4a50-872e-97760f3641b7"}
+
+## 附加 1：全量离线单测（同一台机、同一个 3.10）
+$ python -X utf8 -B -m unittest discover -s tests
+----------------------------------------------------------------------
+Ran 215 tests in 3.502s
+
+OK
+# exit=0
+（改前 189 条全过；本卡新增 tests/test_cardweb2.py 26 条，合计 215。）
+
+## 附加 2：模板实测（同一窗口，threshold=0 取最高分）
+grok_send_on  1.000   输入框有草稿、蓝色发送箭头出现时
+grok_composer 1.000
+grok_actions  1.000
+grok_copy     1.000
+gem_newchat   1.000
+gem_actions   1.000
+gem_copy      1.000
+gem_send_on   0.686   这条模板改前就已经过期，本卡不再靠它判「有没有草稿」
+gem_actions_task 0.692  同上，且本卡的流程不走它
+
+结论：没有重截模板。10:22 那句「grok_send_on 最高 0.490」的真实原因是
+输入框根本没写进字（右下角还是语音键，不是发送箭头），不是模板本身过期；
+同一张模板在发送箭头出现时是 1.000。现在发送键先按控件名找「提交」，模板只作兜底，
+并按 100%/90%/80%/110%/125% 五个缩放各匹一次（页面缩放会变）。
