@@ -401,6 +401,22 @@ def _choose_tier(site: str, purpose: str = "review") -> dict:
             "tail": (proc.stdout or "")[-200:]}
 
 
+def _refresh_tier(site: str) -> None:
+    """先关再开，强制写一条新的档位回执。"""
+    import subprocess
+
+    script = ROOT / "src" / "scripts" / f"{site}_choose.py"
+    if not script.is_file():
+        return
+    for flag in ("off", "on"):
+        try:
+            subprocess.run([sys.executable, str(script), "--think", flag],
+                           cwd=ROOT, capture_output=True, text=True,
+                           encoding="utf-8", timeout=120)
+        except Exception:                 # noqa: BLE001
+            pass
+
+
 def _ask_via_script(site: str, prompt: str, material_text: str, cfg) -> dict:
     """走各端自己的 `*_use.py`（它们管新会话、档位、粘贴保真）。
 
@@ -416,6 +432,10 @@ def _ask_via_script(site: str, prompt: str, material_text: str, cfg) -> dict:
         _clear_composer(_screen_for(site), site)      # 残草会让脚本直接拒发
     last = {"ok": False, "stage": "no_chunks"}
     for index, chunk in enumerate(chunks, start=1):
+        # 档位回执是**一次性**的：每发一段都要重新拿一条。
+        # deepseek 的 choose 检测到「已是 on」不会写新回执，必须 off→on 各跑一次。
+        if site == "deepseek":
+            _refresh_tier(site)
         budget = cfg["review_timeout"] if index == len(chunks) else int(
             cfg.get("chunk_timeout", 300))
         cmd = [sys.executable, str(script), chunk, "--purpose", "review",
