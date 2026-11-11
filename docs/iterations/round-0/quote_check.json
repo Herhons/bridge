@@ -1,0 +1,113 @@
+{
+  "summary": {
+    "sha": "unknown",
+    "valid_seats": [
+      "chatgpt"
+    ],
+    "valid_count": 1,
+    "meets_three_vendors": false,
+    "seats": {
+      "chatgpt": {
+        "chars": 1714,
+        "hits": 9,
+        "total": 10,
+        "rate": 0.9,
+        "core": true,
+        "verdict": "true_read"
+      },
+      "deepseek": {
+        "chars": 0,
+        "hits": 0,
+        "total": 0,
+        "rate": 0.0,
+        "core": false,
+        "verdict": "unread"
+      },
+      "gemini": {
+        "chars": 0,
+        "hits": 0,
+        "total": 0,
+        "rate": 0.0,
+        "core": false,
+        "verdict": "unread"
+      }
+    }
+  },
+  "detail": {
+    "chatgpt": {
+      "hits": 9,
+      "total": 10,
+      "rate": 0.9,
+      "core": true,
+      "verdict": "true_read",
+      "rows": [
+        {
+          "kind": "path",
+          "ref": "CALIBER.md",
+          "hit": true
+        },
+        {
+          "kind": "path",
+          "ref": "PLAN.md",
+          "hit": true
+        },
+        {
+          "kind": "path",
+          "ref": "docs/known_gaps.md",
+          "hit": true
+        },
+        {
+          "kind": "path",
+          "ref": "CALIBER.md",
+          "hit": true
+        },
+        {
+          "kind": "quote",
+          "ref": "No commit found",
+          "hit": false
+        },
+        {
+          "kind": "quote",
+          "ref": "修复 + 全量离线单测 + 本轮回归测试。",
+          "hit": true
+        },
+        {
+          "kind": "quote",
+          "ref": "计划必须在修复之前落盘。",
+          "hit": true
+        },
+        {
+          "kind": "quote",
+          "ref": "规格审可用章节号或行号对上快照文本。",
+          "hit": true
+        },
+        {
+          "kind": "quote",
+          "ref": "只允许处理行首 Markdown 标记、围栏的语言标签、以及确定不会出现在源码里",
+          "hit": true
+        },
+        {
+          "kind": "quote",
+          "ref": "同一张计划连续推 3 次没有可验证进展（单测仍红，或改动被回滚）。",
+          "hit": true
+        }
+      ]
+    },
+    "deepseek": {
+      "hits": 0,
+      "total": 0,
+      "rate": 0.0,
+      "core": false,
+      "verdict": "unread",
+      "rows": []
+    },
+    "gemini": {
+      "hits": 0,
+      "total": 0,
+      "rate": 0.0,
+      "core": false,
+      "verdict": "unread",
+      "rows": []
+    }
+  }
+}

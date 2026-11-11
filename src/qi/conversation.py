@@ -72,7 +72,14 @@ REGENERATE = {"重做", "重新生成", "重新生成回复", "重试", "Regener
 ACTION = RATING | REGENERATE | {"分享", "Share"}
 
 # 实测过的占位文字：控件名和它不是一个串，结构上又找不到对应文本节点时兜底。
-KNOWN_PLACEHOLDERS = {"今天帮你做些什么？@ 添加上下文，/调用技能与指令"}
+KNOWN_PLACEHOLDERS = {
+    "今天帮你做些什么？@ 添加上下文，/调用技能与指令",
+    # B26：gemini 的占位符。它不在这个表里时，空输入框会被当成 10 字草稿，
+    # 编排器直调 `Conversation.empty()` 就会永远判 draft_present。
+    "问问 Gemini",
+    # grok 的占位符（同样只在渲染层，控件值里会出现）。
+    "畅所欲问",
+}
 
 
 @dataclass

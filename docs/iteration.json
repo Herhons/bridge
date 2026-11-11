@@ -2,7 +2,7 @@
   "feed": {
     "chatgpt": "upload",
     "grok": "paste",
-    "gemini": "paste",
+    "gemini": "upload",
     "deepseek": "paste"
   },
   "chunk_chars": 3600,
@@ -21,5 +21,7 @@
   "single_line_sites": [
     "deepseek",
     "grok"
-  ]
+  ],
+  "harvest_wait": 90,
+  "upload_prompt": "附件是自迭代流程规格（docs/self_iteration_spec.md）。请审这份规格本身：首行写 可访问=是 或 可访问=否；给 5-8 条意见，按收益排序；每条必须先写规格章节号，再用「」逐字抄一句原文作依据；然后写清为什么是问题、会怎样失败、怎么改、没有真机怎么验收。不要泛泛而谈，不要复述提问，2000 字内。"
 }

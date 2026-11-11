@@ -1,12 +1,12 @@
 {
   "steps": {
     "review:chatgpt": {
-      "at": "2026-11-11T20:53:08+0800",
+      "at": "2026-11-11T22:12:44+0800",
       "ok": false,
-      "stage": "draft_present",
+      "stage": "timeout",
       "feed": "upload",
       "chars": 0,
-      "elapsed": 10.1
+      "elapsed": 913.4
     },
     "review:grok": {
       "at": "2026-11-11T20:03:22+0800",
@@ -17,12 +17,12 @@
       "elapsed": 6.5
     },
     "review:gemini": {
-      "at": "2026-11-11T20:35:55+0800",
+      "at": "2026-11-11T22:15:34+0800",
       "ok": false,
-      "stage": "input_mismatch",
-      "feed": "paste",
+      "stage": "conversation_changed",
+      "feed": "upload",
       "chars": 0,
-      "elapsed": 5.0
+      "elapsed": 37.2
     },
     "review:deepseek": {
       "at": "2026-11-11T20:32:27+0800",
@@ -31,6 +31,13 @@
       "feed": "paste",
       "chars": 0,
       "elapsed": 8.9
+    },
+    "verify": {
+      "at": "2026-11-11T22:13:23+0800",
+      "valid": [
+        "chatgpt"
+      ],
+      "count": 1
     }
   }
 }
