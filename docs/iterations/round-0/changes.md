@@ -71,3 +71,16 @@
 | 快照 SHA | 修正为已推送的 `4f1a848`（原记本地 `2348121`，远端不存在） |
 
 详细失败点见 `STOP_20261111_2145.md`。
+
+## 8. 第三次续跑（2026-11-11 23:40）
+
+代码级修复（6 处）：
+1. `_clear_composer` 改用 `Conversation.clear()`；
+2. 新增 `harvest_reply()`（停止键消失 + 复制内容稳定），upload/paste 两条路径都接；
+3. 菜单项类型放宽到 `ButtonControl + MenuItemControl`；
+4. 菜单 toggle：先查再点；
+5. 附件判据同时认完整文件名与主干（gemini 去扩展名）；
+6. 新增 `clear_attachments()`。
+
+环境级阻塞：前台长期停在 `WorkerW`，Chrome 抢不回前台；按红线不抢用户窗口，停机。
+详见 `STOP_20261111_2340.md`。

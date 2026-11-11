@@ -175,22 +175,61 @@ def start_new_chat(screen, site: str, timeout: float = 20.0) -> bool:
 
 
 def _clear_composer(screen, site: str) -> bool:
-    """清空输入框。上一次失败会把提问留在里面，下一次就会被判 draft_present。"""
-    from qi import ui
+    """清空输入框。复用 `Conversation.clear()`——它已经处理了 grok 的 ComboBox 兜底。"""
+    from qi import conversation
 
     try:
-        control, _url = ui.document(screen.target_hwnd, site)
-        root = ui.tree(control)
+        screen.focus()                 # 清框要用按键，必须先把窗口抢回前台
+        conv = conversation.Conversation(screen, site)
+        view = conv.read(attempts=1)
+        if conv.empty(view):
+            return True
+        conv.clear(view)
+        return True
     except Exception:                     # noqa: BLE001
         return False
-    editors = [n for n in root.walk()
-               if n.kind == "EditControl" and (n.name or "").strip()]
-    if not editors:
-        return False
-    editors[0].control.SetFocus()
-    screen.hotkey("ctrl", "a")
-    screen.press("delete")
-    return True
+
+
+def harvest_reply(screen, site: str, wait: float = 420.0) -> dict:
+    """等「停止」消失、最后一条消息可复制且内容稳定，再复制回来。
+
+    为什么需要它：`conversation.ask` 只看动作条上的复制键数量，
+    chatgpt 在长回答**仍在生成**时复制键是 0，于是判超时；等它真生成完，
+    这里按「停止键消失 + 复制内容两次相同」收卷。
+    """
+    from qi import ui
+
+    end = time.time() + wait
+    last_text, stable_since = "", None
+    while time.time() < end:
+        try:
+            control, _url = ui.document(screen.target_hwnd, site)
+            root = ui.tree(control)
+        except Exception:                 # noqa: BLE001
+            time.sleep(2.0)
+            continue
+        busy = any((n.name or "").strip() in ("停止", "Stop") for n in root.walk()
+                   if n.kind == "ButtonControl")
+        copies = [n for n in root.walk()
+                  if n.kind == "ButtonControl" and (n.name or "").strip() in ("复制", "Copy")]
+        if busy or not copies:
+            stable_since = None
+            time.sleep(2.0)
+            continue
+        rect = copies[-1].control.BoundingRectangle
+        try:
+            screen.focus()            # 长等待里焦点可能掉到桌面，先抢回来
+            screen.click_xy((rect.left + rect.right) // 2, (rect.top + rect.bottom) // 2)
+        except Exception:             # noqa: BLE001 - 焦点抢不回来就用裸点击
+            __import__("qi.upload", fromlist=["x"])._raw_click(
+                (rect.left + rect.right) // 2, (rect.top + rect.bottom) // 2)
+        time.sleep(0.6)
+        text = screen.clipboard() or ""
+        if text and text == last_text:
+            return {"ok": True, "stage": "harvested", "reply": text}
+        last_text, stable_since = text, time.time()
+        time.sleep(3.0)
+    return {"ok": False, "stage": "harvest_timeout", "reply": last_text}
 
 
 def _ask_upload(site: str, prompt: str, material: Path, cfg) -> dict:
@@ -206,31 +245,39 @@ def _ask_upload(site: str, prompt: str, material: Path, cfg) -> dict:
     conv = conversation.Conversation(screen, site)
     result = conversation.ask(conv, prompt, timeout=cfg["review_timeout"],
                               purpose="review")
+    if not result.get("ok") and result.get("stage") == "timeout":
+        harvested = harvest_reply(screen, site)
+        if harvested["ok"]:
+            result = harvested
     result["feed"] = "upload"
     result["upload"] = up.as_dict()
     return result
 
 
-def _ask_paste(site: str, prompt: str, material_text: str, cfg) -> dict:
-    """分段粘贴：第一段新开会话，其余续写同一会话。"""
-    from qi import conversation
+def _site_object(name: str):
+    """复用各端 `*_use.py` 里打磨过的 Site 配置（新会话、输入框、发送键）。"""
+    import importlib.util
 
+    path = ROOT / "src" / "scripts" / f"{name}_use.py"
+    spec = importlib.util.spec_from_file_location(f"{name}_use_mod", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.SITE
+
+
+def _ask_paste(site: str, prompt: str, material_text: str, cfg) -> dict:
+    """分段粘贴：第一段 `mode=new`（各端自己的新开会话），其余 `mode=continue`。"""
+    from qi import flow
+
+    site_obj = _site_object(site)
     limit = int((cfg.get("chunk_chars_by_site") or {}).get(site, cfg["chunk_chars"]))
     chunks = it.pack_chunks(material_text, limit, head=prompt)
     last = {"ok": False, "stage": "no_chunks"}
     for index, chunk in enumerate(chunks, start=1):
-        screen = _screen_for(site, new=(index == 1))
-        if index == 1:
-            _clear_composer(screen, site)     # 上一轮残留的草稿会判 draft_present
-        if index == 1 and not start_new_chat(screen, site):
-            # 新开会话没成功就绝不发：贴上旧会话等于拿旧上下文冒充本轮意见。
-            return {"ok": False, "stage": "new_chat_failed", "feed": "paste",
-                    "chunks": len(chunks)}
-        conv = conversation.Conversation(screen, site)
-        # 中间分段只是"读材料"，用短超时；最后一段要出意见，才用 review 档。
         budget = cfg["review_timeout"] if index == len(chunks) else int(
             cfg.get("chunk_timeout", 300))
-        last = conversation.ask(conv, chunk, timeout=budget, purpose="review")
+        last = flow.ask(site_obj, chunk, mode=("new" if index == 1 else "continue"),
+                        timeout=budget, purpose="review", verbose=False)
         if not last.get("ok"):
             return {**last, "feed": "paste", "chunks": len(chunks), "at": index}
     return {**last, "feed": "paste", "chunks": len(chunks)}

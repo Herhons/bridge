@@ -1,6 +1,6 @@
 {
   "feed": {
-    "chatgpt": "paste",
+    "chatgpt": "upload",
     "grok": "paste",
     "gemini": "paste",
     "deepseek": "paste"
@@ -12,10 +12,14 @@
     "gemini",
     "deepseek"
   ],
-  "review_timeout": 900,
+  "review_timeout": 480,
   "upload_timeout": 120,
   "chunk_chars_by_site": {
     "deepseek": 1400
   },
-  "chunk_timeout": 300
+  "chunk_timeout": 300,
+  "single_line_sites": [
+    "deepseek",
+    "grok"
+  ]
 }

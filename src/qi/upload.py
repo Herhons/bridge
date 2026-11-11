@@ -93,9 +93,10 @@ def _click_node(node) -> bool:
     return True
 
 
-def _find(root, kind: str, needles) -> object | None:
+def _find(root, kind, needles) -> object | None:
+    kinds = (kind,) if isinstance(kind, str) else tuple(kind)
     for node in root.walk():
-        if node.kind != kind or node.offscreen:
+        if node.kind not in kinds or node.offscreen:
             continue
         name = (node.name or "").strip()
         if name and any(needle in name for needle in needles):
@@ -160,6 +161,26 @@ def _dialog_open_button(root):
     return found[0] if found else None
 
 
+def clear_attachments(screen, site: str) -> int:
+    """移除输入框里已挂的附件。上一轮失败会留下它们，挡住下一次上传。"""
+    try:
+        control, _url = ui.document(screen.target_hwnd, site)
+        root = ui.tree(control)
+    except Exception:                             # noqa: BLE001
+        return 0
+    removed = 0
+    for node in list(root.walk()):
+        if node.kind != "ButtonControl" or node.offscreen:
+            continue
+        name = (node.name or "").strip()
+        if name.startswith("移除 ") or name.startswith("close ") or name.startswith("删除 "):
+            rect = node.control.BoundingRectangle
+            _raw_click((rect.left + rect.right) // 2, (rect.top + rect.bottom) // 2)
+            time.sleep(0.4)
+            removed += 1
+    return removed
+
+
 def upload(screen, site: str, path: str, *, timeout: float = 60.0,
            expect: str | None = None) -> UploadResult:
     """把 `path` 上传到当前页。成功判据：页面上出现该文件名（或 `expect` 子串）。"""
@@ -172,6 +193,7 @@ def upload(screen, site: str, path: str, *, timeout: float = 60.0,
     started = time.time()
 
     _close_stray_dialogs()
+    clear_attachments(screen, site)
     before = top_windows()
     try:
         control, _url = ui.document(screen.target_hwnd, site)
@@ -184,15 +206,26 @@ def upload(screen, site: str, path: str, *, timeout: float = 60.0,
     if button is None:
         return UploadResult(False, "attach_not_found", path=path,
                             detail={"wanted": list(spec["button"])})
-    if not _click_node(button):
-        return UploadResult(False, "attach_unclickable", path=path)
 
     if spec["menu"]:
-        item = _wait(lambda: _menu_item(screen, site, spec["menu"]), 8.0)
+        # 菜单是 toggle 语义：上一次失败可能把它留开着，再点一次反而关掉。
+        # 先看菜单项在不在，在就直接点。
+        item = _menu_item(screen, site, spec["menu"])
+        if item is None:
+            if not _click_node(button):
+                return UploadResult(False, "attach_unclickable", path=path)
+            item = _wait(lambda: _menu_item(screen, site, spec["menu"]), 8.0)
         if item is None:
             return UploadResult(False, "menu_item_not_found", path=path,
                                 detail={"wanted": list(spec["menu"])})
-        _click_node(item)
+        # 菜单项优先用 UIA 的 Click：它自己处理展开/滚动，坐标点击在浮层上常打空。
+        try:
+            getattr(item, "control", item).Click()
+        except Exception:                 # noqa: BLE001
+            _click_node(item)
+    else:
+        if not _click_node(button):
+            return UploadResult(False, "attach_unclickable", path=path)
 
     dialog = _wait(lambda: _new_dialog(before), 10.0)
     if dialog is None:
@@ -219,7 +252,10 @@ def upload(screen, site: str, path: str, *, timeout: float = 60.0,
         _close_stray_dialogs()
         return UploadResult(False, "dialog_stuck", path=path)
 
-    landed = _wait(lambda: _attachment_visible(screen, site, needle), timeout)
+    # 有的端会去掉扩展名（gemini 显示 upload_check 而不是 upload_check.md），
+    # 所以同时认完整文件名与主干。
+    stems = [needle, needle.rsplit(".", 1)[0]]
+    landed = _wait(lambda: _attachment_visible(screen, site, stems), timeout)
     return UploadResult(bool(landed), "ok" if landed else "attachment_not_visible",
                         path=path, filename=filename,
                         waited=time.time() - started,
@@ -232,7 +268,8 @@ def _menu_item(screen, site, needles):
         root = ui.tree(control)
     except Exception:                             # noqa: BLE001
         return None
-    return _find(root, "ButtonControl", needles)
+    # 菜单项在不同端叫法不同：chatgpt 是 ButtonControl，gemini 是 MenuItemControl。
+    return _find(root, ("ButtonControl", "MenuItemControl"), needles)
 
 
 def _new_dialog(before):
@@ -246,10 +283,10 @@ def _new_dialog(before):
     return None
 
 
-def _attachment_visible(screen, site, needle) -> bool:
+def _attachment_visible(screen, site, needles) -> bool:
     try:
         control, _url = ui.document(screen.target_hwnd, site)
         root = ui.tree(control)
     except Exception:                             # noqa: BLE001
         return False
-    return any(needle in (node.name or "") for node in root.walk())
+    return any(any(n in (node.name or "") for n in needles) for node in root.walk())
