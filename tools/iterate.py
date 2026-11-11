@@ -212,6 +212,20 @@ def read_answer_text(screen, site: str, prompt: str) -> str:
     return "\n".join(out).strip()
 
 
+#: 各端的输入框占位文字。`composer_empty` 的结构判据要求把它显式传进去，
+#: 否则空输入框会被当成草稿（gemini 实测：值就是「问问 Gemini」）。
+SITE_PLACEHOLDERS = {"gemini": ("问问 Gemini",), "grok": ("畅所欲问",)}
+
+
+def _conversation(screen, site: str):
+    from qi import conversation
+
+    return conversation.Conversation(
+        screen, site,
+        empty=lambda view: conversation.composer_empty(
+            view, placeholders=SITE_PLACEHOLDERS.get(site, ())))
+
+
 def _clear_composer(screen, site: str) -> bool:
     """点输入框 → Ctrl+A → Delete 清空。
 
@@ -341,7 +355,7 @@ def _ask_upload(site: str, prompt: str, material: Path, cfg) -> dict:
         return {"ok": False, "stage": "upload_not_settled", "upload": up.as_dict()}
     # 上传模式材料在附件里，提问用一句短指令即可：长多行提问在部分端会写不进去。
     ask_text = str(cfg.get("upload_prompt") or prompt)
-    conv = conversation.Conversation(screen, site)
+    conv = _conversation(screen, site)
     result = conversation.ask(conv, ask_text, timeout=cfg["review_timeout"],
                               purpose="review")
     if not result.get("ok") and result.get("stage") in ("timeout", "interrupted", "harvest_timeout"):
@@ -562,7 +576,7 @@ def cmd_upload_check(args, cfg) -> int:
                          ensure_ascii=False))
         return 1
     _upload_settled(site, screen)
-    conv = conversation.Conversation(screen, site)
+    conv = _conversation(screen, site)
     result = conversation.ask(conv, "附件里那行关键内容是什么？只回答那一行，不要解释。",
                               timeout=cfg["review_timeout"], purpose="review")
     reply = (result.get("reply") or "").strip()

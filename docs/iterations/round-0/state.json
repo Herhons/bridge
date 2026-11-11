@@ -17,12 +17,12 @@
       "elapsed": 6.5
     },
     "review:gemini": {
-      "at": "2026-11-11T22:15:34+0800",
+      "at": "2026-11-11T22:21:27+0800",
       "ok": false,
-      "stage": "conversation_changed",
+      "stage": "interrupted",
       "feed": "upload",
       "chars": 0,
-      "elapsed": 37.2
+      "elapsed": 112.1
     },
     "review:deepseek": {
       "at": "2026-11-11T20:32:27+0800",

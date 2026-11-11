@@ -91,3 +91,10 @@
 - 修 8 处（详见 `STOP_20261111_2350.md`）。
 - **拿到第 1 条真会审**：chatgpt 1714 字，9/10 命中，true_read。
 - 仍缺 2 席：gemini 发出但无答案；deepseek/grok 粘贴保真未解。
+
+## 10. 占位符判据（修正上一次的错误改法）
+
+一开始把「问问 Gemini」塞进 `KNOWN_PLACEHOLDERS` 全局表，被 `test_conversation` 挡下：
+占位符是**按位置**判的（值等于输入框框内的文本节点才算空），全局表会让"别处的同名字样"也当空。
+正确做法：给 `Conversation` 注入该端的 `empty=` 判据（`composer_empty(view, placeholders=...)`），
+核心文件恢复原样。gemini / chatgpt 现在都正确判空。
