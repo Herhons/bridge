@@ -6,7 +6,7 @@
 |---|---:|---:|---:|---:|---|---|
 | chatgpt | 1714 | 9 | 10 | 0.9 | 是 | true_read |
 | deepseek | 0 | 0 | 0 | 0.0 | 否 | unread |
-| gemini | 3896 | 25 | 45 | 0.56 | 是 | partial |
-| grok | 2319 | 15 | 33 | 0.45 | 是 | partial |
+| gemini | 3173 | 4 | 7 | 0.57 | 是 | partial |
+| grok | 2101 | 7 | 11 | 0.64 | 是 | partial |
 
 有效（真读）：chatgpt；门槛 3 家：未满足
