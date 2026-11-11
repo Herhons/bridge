@@ -42,9 +42,11 @@ def main(argv=None) -> int:
     ap.add_argument("--reason", required=True, help="解锁原因（写进审计）")
     ap.add_argument("--state", choices=(submissions.STATE_FAILED_TERMINAL,
                                         submissions.STATE_UNKNOWN,
-                                        submissions.STATE_SUBMITTING),
+                                        submissions.STATE_SUBMITTING,
+                                        submissions.STATE_ACCEPTED),
                     default=submissions.STATE_FAILED_TERMINAL,
-                    help="要解锁的状态；默认 failed_terminal（与旧版行为一致）")
+                    help="要解锁的状态；默认 failed_terminal（与旧版行为一致）。"
+                         "accepted 只用于「账本说发了、页面证明没发」的人工核对场景")
     ap.add_argument("--confirm", action="store_true", help="确认执行（必填）")
     ap.add_argument("--dry-run", action="store_true", help="只看会做什么，不写盘")
     args = ap.parse_args(argv)
@@ -84,8 +86,9 @@ def main(argv=None) -> int:
                           "hint": hint}, ensure_ascii=False))
         return 2
 
-    if before in (submissions.STATE_UNKNOWN, submissions.STATE_SUBMITTING) and not args.dry_run:
-        # unknown 的语义是"可能已经发出去了"，写盘前必须让人看清记录里有什么。
+    if before in (submissions.STATE_UNKNOWN, submissions.STATE_SUBMITTING,
+                  submissions.STATE_ACCEPTED) and not args.dry_run:
+        # unknown / accepted 的语义都是"可能已经发出去了"，写盘前必须让人看清记录里有什么。
         print(json.dumps({
             "summary": {"file": str(path), "v2_state": before,
                         "attempts": len(view.get("attempts") or []),

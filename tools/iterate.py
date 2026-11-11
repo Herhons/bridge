@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import subprocess
 import sys
 import time
@@ -177,37 +178,59 @@ def start_new_chat(screen, site: str, timeout: float = 20.0) -> bool:
 def read_answer_text(screen, site: str, prompt: str) -> str:
     """从控件树里按顺序读答案文本（复制键点不到时的兜底）。
 
-    为什么需要：动作条常在可见区外，`Click` 打不中；而答案本身就在
-    TextControl 里。这里过滤掉提问原文、侧栏标题与动作条字样。
+    两步，先准后广：
+
+    1. **锚在提问回声上**。树序常见形状是「侧栏标题 … 提问回声 … 答案 … 提问回声」，
+       取**第一个**回声之后、下一个回声（或「已完成回复」标记）之前的块。
+       grok 实测就是这样：0–6 是侧栏、7 是回声、8–49 是答案、50 是「Grok 已完成回复」、
+       51 又是回声。按关键字猜起点会把侧栏标题一起带进来。
+    2. 找不到回声时，退回按合同首行「可访问=…」找起点。
     """
     from qi import ui
 
-    sp = "".join(prompt.split())
+    squash = lambda x: "".join(x.split())          # noqa: E731
+    sp = squash(prompt)
+    key = sp[:36]
     try:
         control, _url = ui.document(screen.target_hwnd, site)
         root = ui.tree(control)
     except Exception:                     # noqa: BLE001
         return ""
+
     noise = {"回答已完成", "最新一条回复", "复制", "编辑", "朗读", "分享", "重新生成回复"}
-    seen, out, started = set(), [], False
+    done = re.compile(r"(已完成回复|回答已完成|已完成)$")
+    seen, blocks = set(), []
     for node in root.walk():
         if node.kind != "TextControl":
             continue
         text = (node.name or "").strip()
-        if len(text) < 12 or text in seen or text in noise:
+        if len(text) < 8 or text in seen or text in noise:
             continue
-        if "".join(text.split()) in sp:
+        seen.add(text)
+        blocks.append(text)
+
+    first = next((i for i, t in enumerate(blocks) if key and key in squash(t)), -1)
+    if first >= 0:
+        body = []
+        for text in blocks[first + 1:]:
+            if key and key in squash(text):
+                break                       # 末尾那条回声 = 已经走过答案了
+            if done.search(text):
+                break
+            body.append(text)
+        if body:
+            return "\n".join(body).strip()
+
+    # 退回：只认「可访问」开头的块（chatgpt 的答案就是这个形状）。
+    out, started = [], False
+    for text in blocks:
+        if key and key in squash(text):
             continue
-        # 答案的第一行按合同就是「可访问=是/否」。只认**以它开头**的块，
-        # 否则侧栏标题（“Bridge 仓库材料接收…”）会把整列标题带进来。
         if not started:
             if text.startswith("可访问") or text.startswith("NO_ACCESS"):
                 started = True
-            elif len(text) > 60 and any(k in text[:20] for k in ("附件", "材料")):
-                started = True
             else:
                 continue
-        seen.add(text)
         out.append(text)
     return "\n".join(out).strip()
 
@@ -355,6 +378,7 @@ def _ask_upload(site: str, prompt: str, material: Path, cfg) -> dict:
         return {"ok": False, "stage": "upload_not_settled", "upload": up.as_dict()}
     # 上传模式材料在附件里，提问用一句短指令即可：长多行提问在部分端会写不进去。
     ask_text = str(cfg.get("upload_prompt") or prompt)
+    _refresh_tier(site)                  # 回执一次性；上一次失败也会把它用掉
     conv = _conversation(screen, site)
     result = conversation.ask(conv, ask_text, timeout=cfg["review_timeout"],
                               purpose="review")
@@ -369,6 +393,58 @@ def _ask_upload(site: str, prompt: str, material: Path, cfg) -> dict:
                 result = {"ok": True, "stage": "text_extracted", "reply": text}
     result["feed"] = "upload"
     result["upload"] = up.as_dict()
+    return result
+
+
+def _ask_upload_script(site: str, prompt: str, material: Path, cfg) -> dict:
+    """上传附件，再用该端自己的 `*_use.py` 写短指令并发送。
+
+    为什么不用 `conversation.ask`：gemini 在 upload 模式下会把「写了字、根本没
+    发出去」判成 accepted（2026-11-12 两次实测：账本 accepted，但地址仍是 `/app`、
+    输入框里还留着提问、0 个消息块），随后永远被 `submission_pending` 拦住。
+    各端 `*_use.py` 自带落点校验（`submit_not_landed`）与收卷逻辑，更可靠。
+    """
+    from qi import upload
+
+    screen = _screen_for(site)
+    _clear_composer(screen, site)
+    if not start_new_chat(screen, site):
+        return {"ok": False, "stage": "new_chat_failed", "feed": "upload-script"}
+    up = upload.upload(screen, site, str(material), timeout=cfg["upload_timeout"])
+    if not up.ok:
+        return {"ok": False, "stage": "upload_failed", "feed": "upload-script",
+                **up.as_dict()}
+    if not _upload_settled(site, screen):
+        return {"ok": False, "stage": "upload_not_settled", "feed": "upload-script",
+                "upload": up.as_dict()}
+
+    ask_text = str(cfg.get("upload_prompt") or prompt)
+    _refresh_tier(site)                  # 回执一次性，发送前重拿一条
+    script = ROOT / "src" / "scripts" / f"{site}_use.py"
+    budget = int(cfg["review_timeout"])
+    proc = subprocess.run(
+        [sys.executable, str(script), ask_text, "--purpose", "review",
+         "--continue", "--timeout", str(budget)],
+        cwd=ROOT, capture_output=True, text=True, encoding="utf-8",
+        timeout=budget + 180)
+    parsed = None
+    for line in reversed((proc.stdout or "").splitlines()):
+        line = line.strip()
+        if line.startswith("{") and line.endswith("}"):
+            try:
+                parsed = json.loads(line)
+                break
+            except ValueError:
+                continue
+    result = dict(parsed or {"ok": False, "stage": "bad_output",
+                             "exit": proc.returncode})
+    result["feed"] = "upload-script"
+    result["upload"] = up.as_dict()
+    if not result.get("ok") and result.get("stage") in ("timeout", "interrupted"):
+        text = read_answer_text(screen, site, ask_text)
+        if len(text) >= 300:
+            result = {"ok": True, "stage": "text_extracted", "reply": text,
+                      "feed": "upload-script", "upload": up.as_dict()}
     return result
 
 
@@ -401,18 +477,30 @@ def _choose_tier(site: str, purpose: str = "review") -> dict:
             "tail": (proc.stdout or "")[-200:]}
 
 
+#: 各端 review 档位回执怎么刷新。回执**一次性**：发一条就作废，
+#: 第二条必须重新 choose，否则 `tier_unconfirmed`（deepseek/gemini 都实测到）。
+#: gemini 的 choose 不认 `--think`（文档写着"当前未实现"），只能重设模型；
+#: review 要最高档，gemini 的档位序是 flash_lite→flash→pro→argon。
+TIER_RECIPE = {"gemini": ("--model", "argon"), "deepseek": ("--think", None)}
+
+
 def _refresh_tier(site: str) -> None:
-    """先关再开，强制写一条新的档位回执。"""
+    """写一条新的档位回执。不支持的端直接跳过（它们不校验回执）。"""
     import subprocess
 
     script = ROOT / "src" / "scripts" / f"{site}_choose.py"
-    if not script.is_file():
+    if not script.is_file() or site not in TIER_RECIPE:
         return
-    for flag in ("off", "on"):
+    flag, value = TIER_RECIPE[site]
+    if value is None:                     # deepseek：先关再开，否则"已是 on"不写回执
+        rounds = [("--think", "off"), ("--think", "on")]
+    else:
+        rounds = [(flag, value)]
+    for key, val in rounds:
         try:
-            subprocess.run([sys.executable, str(script), "--think", flag],
+            subprocess.run([sys.executable, str(script), key, val],
                            cwd=ROOT, capture_output=True, text=True,
-                           encoding="utf-8", timeout=120)
+                           encoding="utf-8", timeout=180)
         except Exception:                 # noqa: BLE001
             pass
 
@@ -433,9 +521,7 @@ def _ask_via_script(site: str, prompt: str, material_text: str, cfg) -> dict:
     last = {"ok": False, "stage": "no_chunks"}
     for index, chunk in enumerate(chunks, start=1):
         # 档位回执是**一次性**的：每发一段都要重新拿一条。
-        # deepseek 的 choose 检测到「已是 on」不会写新回执，必须 off→on 各跑一次。
-        if site == "deepseek":
-            _refresh_tier(site)
+        _refresh_tier(site)
         budget = cfg["review_timeout"] if index == len(chunks) else int(
             cfg.get("chunk_timeout", 300))
         cmd = [sys.executable, str(script), chunk, "--purpose", "review",
@@ -505,11 +591,12 @@ def cmd_review(args, cfg) -> int:
     mode = str(cfg["feed"].get(args.site, "paste"))
 
     started = time.time()
-    if mode == "upload":
+    if mode in ("upload", "upload-script"):
         if not material.is_file():
             print(json.dumps({"ok": False, "error": "material_missing"}, ensure_ascii=False))
             return 2
-        result = _ask_upload(args.site, prompt, material, cfg)
+        ask = _ask_upload_script if mode == "upload-script" else _ask_upload
+        result = ask(args.site, prompt, material, cfg)
     else:
         text = material.read_text(encoding="utf-8") if material.is_file() else ""
         result = _ask_paste(args.site, prompt, text, cfg)

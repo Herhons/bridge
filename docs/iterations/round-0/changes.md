@@ -115,3 +115,50 @@
 
 - 补充：deepseek 对 9 段材料回 `可访问=否`（认为材料不完整、无法核对），不计有效席。
   结论：deepseek 必须走上传，否则拿不到可验真回复。
+
+## 13. 第七次续跑（2026-11-12 02:31 起）
+
+| 步骤 | 做法 | 结果 |
+|---|---|---|
+| STOP 归档 | `STOP_20261112_0300.md` → `STOP_handled_20261112_0231.md` | 已改名 |
+| gemini 落点误判 | `_new_chat_landed` 只认**带标签或带动作条**的块；侧栏会话标题是无标签长文本，以前被当成"上一轮消息" | 加回归用例 `test_sidebar_titles_are_not_messages` |
+| gemini 残草死锁 | 新增 `_drop_stale_draft()`：点「发起新对话」**之前**清掉上一轮失败留下的草稿（否则 `draft_present` 永远判"还在旧会话"） | 8 条用例全绿 |
+| 档位回执统一 | `_refresh_tier()` 按端处理：gemini 用 `--model argon` 重设最高档；deepseek 用 `--think off→on`；上传/粘贴两条路径发送前都调用 | — |
+
+**真机验证**：`gemini_use.py "只回复 OK" --purpose review --new` → `{"ok": true, "reply": "OK", "elapsed": 22.6, "stage": "answered"}`
+（此前同一命令报 `newchat_not_landed`，根因是框里残留着上一轮的「只回复 OK」）。
+
+### 13.1 gemini 走上上传（真机通过）
+
+`conversation.ask` 在 gemini 上会把「写了字、没发出去」判成 accepted（两次实测：账本 accepted，
+但地址仍 `/app`、输入框仍留 162 字提问、0 消息块），随后被 `submission_pending` 永久拦住。
+因此新增投喂方式 **`upload-script`**：先上传附件，再用该端 `*_use.py --continue` 写短指令并发送。
+
+| 修的东西 | 说明 |
+|---|---|
+| `gemini.draft_present` | 改成**优先读输入框真实文本**；挂附件时发送键本来就可点，旧判据永远说"有草稿" |
+| `iterate._refresh_tier` | 按端配方：gemini `--model argon`（review 最高档）、deepseek `--think off→on`；上传/粘贴发送前都调用 |
+| `submission_clear --state accepted` | 人工出口支持 accepted（仍强制 `--confirm` + `--reason`，写盘前打印记录摘要） |
+
+真机结果：gemini `answered` 3896 字 / 74.7s；验真 25/45 = **0.56 partial**（引句 20/34、路径 5/11）。
+
+### 13.2 grok 救活并跑通上传
+
+- 页面 0 按钮 → `Ctrl+L` 重新导航后恢复 17 个按钮；
+- 附件入口是 `MenuControl`「附件」→ 菜单项「上传文件」，补进 `ATTACH` 规格；
+- 菜单偶发不弹出（页面重排），加一次重试点击；
+- 附件关闭键叫「移除此附件」（**中间没有空格**），前缀改为裸「移除」。
+
+真机结果：发送 `accepted`，但 `conversation.ask` 判 `timeout/no_reply`（0 字）。
+页面上答案其实完整（34 段长文本），是**收卷判据**不认 grok。
+`read_answer_text` 改为「锚在第一个提问回声，取到下一个回声/『已完成回复』为止」，
+取回 2319 字；验真 15/33 = **0.45 partial**（引句 12/28、路径 3/5）。
+
+### 13.3 安全事件（必须记）
+
+`upload.clear_attachments` 原来会点名字以「删除 」开头的按钮。grok 页面上控件树混进了**桌面项**，
+按坐标一点就落到桌面上，弹出了 Windows 的「确实要从桌面上删除这些图标吗?」。
+**已用「否」取消，没有删除任何东西。** 两处立即收紧：
+
+1. 前缀只认「移除 / close / remove」，**永不点「删除」**；
+2. 只点**浏览器窗口矩形内**的控件。

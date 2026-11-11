@@ -1,8 +1,8 @@
 {
   "feed": {
     "chatgpt": "upload",
-    "grok": "paste",
-    "gemini": "upload",
+    "grok": "upload",
+    "gemini": "upload-script",
     "deepseek": "paste"
   },
   "chunk_chars": 3600,

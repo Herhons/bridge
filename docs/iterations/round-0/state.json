@@ -9,20 +9,20 @@
       "elapsed": 913.4
     },
     "review:grok": {
-      "at": "2026-11-11T20:03:22+0800",
+      "at": "2026-11-12T02:56:39+0800",
       "ok": false,
-      "stage": "input_mismatch",
-      "feed": "paste",
-      "chars": 0,
-      "elapsed": 6.5
-    },
-    "review:gemini": {
-      "at": "2026-11-11T22:21:27+0800",
-      "ok": false,
-      "stage": "interrupted",
+      "stage": "timeout",
       "feed": "upload",
       "chars": 0,
-      "elapsed": 112.1
+      "elapsed": 575.0
+    },
+    "review:gemini": {
+      "at": "2026-11-12T02:42:49+0800",
+      "ok": true,
+      "stage": "answered",
+      "feed": "upload-script",
+      "chars": 3896,
+      "elapsed": 74.7
     },
     "review:deepseek": {
       "at": "2026-11-11T22:34:26+0800",
@@ -33,7 +33,7 @@
       "elapsed": 4.5
     },
     "verify": {
-      "at": "2026-11-11T22:13:23+0800",
+      "at": "2026-11-12T02:57:37+0800",
       "valid": [
         "chatgpt"
       ],

@@ -131,7 +131,7 @@ class NewChatLandingTests(unittest.TestCase):
     class FakeScreen:
         target_hwnd = 1
 
-    def _run(self, url, tree_error=False, clicks=None):
+    def _run(self, url, tree_error=False, clicks=None, root_factory=None):
         screen = self.FakeScreen()
         clicks = clicks if clicks is not None else []
 
@@ -139,10 +139,11 @@ class NewChatLandingTests(unittest.TestCase):
 
         def tree(_control):
             calls["n"] += 1
-            # 第一次是"点之前找按钮"，必须正常；之后（落点校验）才模拟读不出来
-            if tree_error and calls["n"] >= 2:
+            # 只在**点完新对话之后**（落点校验）才模拟读不出来；
+            # 点之前还要读树找按钮，那一次必须正常。
+            if tree_error and clicks:
                 raise RuntimeError("树读不出来")
-            return _root()
+            return (root_factory or _root)()
 
         with mock.patch.object(gemini, "_ScreenClass", self.FakeScreen), \
                 mock.patch.object(gemini.ui, "document", return_value=(None, url)), \
@@ -169,6 +170,26 @@ class NewChatLandingTests(unittest.TestCase):
         result, clicks = self._run("https://gemini.google.com/app", tree_error=True)
         self.assertTrue(result["ok"], result)
         self.assertFalse(result.get("verified"))
+        self.assertEqual(len(clicks), 1)
+
+    def test_sidebar_titles_are_not_messages(self):
+        """侧栏会话标题是**无标签**长文本，不能被当成"上一轮消息"。
+
+        2026-11-12 实测：空的新会话页上有 13 条侧栏标题，`parse` 把它们切成
+        无标签块，`_new_chat_landed` 因此判"没落地"，两次点击后报
+        `newchat_not_landed`。真正的消息块必然带「你说/Gemini 说」标签或动作条。
+        """
+        def root_with_sidebar():
+            return Node("DocumentControl", "", [
+                Node("TextControl", "Bridge 仓库材料接收与自迭代会审流程梳理"),
+                Node("TextControl", "deepseek 九段材料发送与档位回执复盘"),
+            ])
+
+        result, clicks = self._run("https://gemini.google.com/app",
+                                   root_factory=root_with_sidebar)
+        self.assertTrue(result["ok"], result)
+        self.assertTrue(result.get("verified"),
+                        "侧栏标题不该让新会话判成没落地")
         self.assertEqual(len(clicks), 1)
 
 

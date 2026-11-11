@@ -24,12 +24,20 @@
         "verdict": "unread"
       },
       "gemini": {
-        "chars": 0,
-        "hits": 0,
-        "total": 0,
-        "rate": 0.0,
-        "core": false,
-        "verdict": "unread"
+        "chars": 3896,
+        "hits": 25,
+        "total": 45,
+        "rate": 0.56,
+        "core": true,
+        "verdict": "partial"
+      },
+      "grok": {
+        "chars": 2319,
+        "hits": 15,
+        "total": 33,
+        "rate": 0.45,
+        "core": true,
+        "verdict": "partial"
       }
     }
   },
@@ -102,12 +110,412 @@
       "rows": []
     },
     "gemini": {
-      "hits": 0,
-      "total": 0,
-      "rate": 0.0,
-      "core": false,
-      "verdict": "unread",
-      "rows": []
+      "hits": 25,
+      "total": 45,
+      "rate": 0.56,
+      "core": true,
+      "verdict": "partial",
+      "rows": [
+        {
+          "kind": "path",
+          "ref": "quote_check.py",
+          "hit": false
+        },
+        {
+          "kind": "path",
+          "ref": "docs/self_iteration_spec.md",
+          "hit": true
+        },
+        {
+          "kind": "path",
+          "ref": "quote_check.py",
+          "hit": false
+        },
+        {
+          "kind": "path",
+          "ref": "docs/REVIEW-20261111.md",
+          "hit": true
+        },
+        {
+          "kind": "path",
+          "ref": "plan.md",
+          "hit": false
+        },
+        {
+          "kind": "path",
+          "ref": "docs/self_iteration_spec.md",
+          "hit": true
+        },
+        {
+          "kind": "path",
+          "ref": "docs/self_iteration_spec.md",
+          "hit": true
+        },
+        {
+          "kind": "path",
+          "ref": "snapshot.json",
+          "hit": false
+        },
+        {
+          "kind": "path",
+          "ref": "PLAN.md",
+          "hit": true
+        },
+        {
+          "kind": "path",
+          "ref": "tests/test_x.py",
+          "hit": false
+        },
+        {
+          "kind": "path",
+          "ref": "quote_check.py",
+          "hit": false
+        },
+        {
+          "kind": "quote",
+          "ref": "每条必须引用本规格的章节号，并附一句从规格里逐字抄出的原句（验真按第 9.1 节",
+          "hit": true
+        },
+        {
+          "kind": "quote",
+          "ref": "章节号 + 逐字引句",
+          "hit": true
+        },
+        {
+          "kind": "quote",
+          "ref": "引用形态取决于该端本轮配置的投喂方式",
+          "hit": true
+        },
+        {
+          "kind": "quote",
+          "ref": "可用章节号或行号对上快照文本",
+          "hit": true
+        },
+        {
+          "kind": "quote",
+          "ref": "文件路径:行号",
+          "hit": false
+        },
+        {
+          "kind": "quote",
+          "ref": "章节号 +「引句",
+          "hit": false
+        },
+        {
+          "kind": "quote",
+          "ref": "章节号 + 逐字引句",
+          "hit": true
+        },
+        {
+          "kind": "quote",
+          "ref": "文件路径 + 行号",
+          "hit": true
+        },
+        {
+          "kind": "quote",
+          "ref": "第 5.2 节 + 逐字引句",
+          "hit": false
+        },
+        {
+          "kind": "quote",
+          "ref": "对匿名汇总后的每条意见（含「汇总者新增",
+          "hit": true
+        },
+        {
+          "kind": "quote",
+          "ref": "程序（复用现有 bridge_server / live_job / 账本 / ",
+          "hit": false
+        },
+        {
+          "kind": "quote",
+          "ref": "不让施工方模型同时担任本轮唯一核实人或唯一验收人",
+          "hit": true
+        },
+        {
+          "kind": "quote",
+          "ref": "对着快照读码或读规格",
+          "hit": true
+        },
+        {
+          "kind": "quote",
+          "ref": "核实与生成 plan.md 这一步到底调用哪个非 DeepSeek 模型席位、走",
+          "hit": false
+        },
+        {
+          "kind": "quote",
+          "ref": "只要 quote_check 命中就自动标为成立",
+          "hit": false
+        },
+        {
+          "kind": "quote",
+          "ref": "计划闸门核实人",
+          "hit": false
+        },
+        {
+          "kind": "quote",
+          "ref": "仅当某家读不了仓库（NO_ACCESS、未读、或明确要文件）时使用。",
+          "hit": false
+        },
+        {
+          "kind": "quote",
+          "ref": "网页端上传是循环的必备能力，须在 Round 0 修通，并有一次通过的自检验证",
+          "hit": true
+        },
+        {
+          "kind": "quote",
+          "ref": "1. 冻结快照并推送。",
+          "hit": true
+        },
+        {
+          "kind": "quote",
+          "ref": "修复 + 全量离线单测 + 本轮回归测试",
+          "hit": true
+        },
+        {
+          "kind": "quote",
+          "ref": "否则进入下一轮",
+          "hit": true
+        },
+        {
+          "kind": "quote",
+          "ref": "向主线合并须 Herhons 点头",
+          "hit": true
+        },
+        {
+          "kind": "quote",
+          "ref": "小改由 WorkBuddy 按计划执行",
+          "hit": true
+        },
+        {
+          "kind": "quote",
+          "ref": "向主线合并须 Herhons 点头",
+          "hit": true
+        },
+        {
+          "kind": "quote",
+          "ref": "严格串行：上一席发出并读完回复（或失败退出）后，才开下一席。全程持 runs/u",
+          "hit": false
+        },
+        {
+          "kind": "quote",
+          "ref": "全程持 runs/ui.lock",
+          "hit": false
+        },
+        {
+          "kind": "quote",
+          "ref": "大改停下等 Herhons",
+          "hit": true
+        },
+        {
+          "kind": "quote",
+          "ref": "进程被杀后能从本轮已完成的步骤续跑",
+          "hit": true
+        },
+        {
+          "kind": "quote",
+          "ref": "锁冲突无法完成",
+          "hit": true
+        },
+        {
+          "kind": "quote",
+          "ref": "单次 UI 席位交互（含发送与读回）",
+          "hit": false
+        },
+        {
+          "kind": "quote",
+          "ref": "真读 = 命中 ≥ 3 且命中率 ≥ 0.7，且至少一条落在 src/qi/ 或",
+          "hit": false
+        },
+        {
+          "kind": "quote",
+          "ref": "全文正则匹配到的所有疑似路径/引号总数",
+          "hit": false
+        },
+        {
+          "kind": "quote",
+          "ref": "给 5 到 8 条意见",
+          "hit": true
+        },
+        {
+          "kind": "quote",
+          "ref": "结构化意见条数（N）",
+          "hit": false
+        }
+      ]
+    },
+    "grok": {
+      "hits": 15,
+      "total": 33,
+      "rate": 0.45,
+      "core": true,
+      "verdict": "partial",
+      "rows": [
+        {
+          "kind": "path",
+          "ref": "docs/self_iteration_spec.md",
+          "hit": true
+        },
+        {
+          "kind": "path",
+          "ref": "docs/self_iteration_spec.md",
+          "hit": true
+        },
+        {
+          "kind": "path",
+          "ref": "quote_check.py",
+          "hit": false
+        },
+        {
+          "kind": "path",
+          "ref": "PLAN.md",
+          "hit": true
+        },
+        {
+          "kind": "path",
+          "ref": "known_gaps.md",
+          "hit": false
+        },
+        {
+          "kind": "quote",
+          "ref": "网页端上传是循环的必备能力，须在 Round 0 修通，并有一次通过的自检验证「",
+          "hit": true
+        },
+        {
+          "kind": "quote",
+          "ref": "用完整管道审本规格",
+          "hit": true
+        },
+        {
+          "kind": "quote",
+          "ref": "必须证明上传可用",
+          "hit": true
+        },
+        {
+          "kind": "quote",
+          "ref": "不强制真机一次跑完四席",
+          "hit": true
+        },
+        {
+          "kind": "quote",
+          "ref": "上传自检通过",
+          "hit": false
+        },
+        {
+          "kind": "quote",
+          "ref": "upload 配置且自检未通过时拒绝开 Round 0",
+          "hit": false
+        },
+        {
+          "kind": "quote",
+          "ref": "真读 = 命中 ≥ 3 且命中率 ≥ 0.7，且至少一条落在 docs/self",
+          "hit": false
+        },
+        {
+          "kind": "quote",
+          "ref": "只引了 2 个章节",
+          "hit": false
+        },
+        {
+          "kind": "quote",
+          "ref": "章节号或行号对上快照文本",
+          "hit": true
+        },
+        {
+          "kind": "quote",
+          "ref": "规格核心路径",
+          "hit": false
+        },
+        {
+          "kind": "quote",
+          "ref": "代码核心路径",
+          "hit": false
+        },
+        {
+          "kind": "quote",
+          "ref": "若意见要求改变轮次合同（阶段、闸门、停机条件、评审厂商集合、匿名规则、授权边界）",
+          "hit": true
+        },
+        {
+          "kind": "quote",
+          "ref": "修订规格 + 同步编排器",
+          "hit": false
+        },
+        {
+          "kind": "quote",
+          "ref": "Round 0 内对规格文本的修订（含合同条款澄清）默认小改，除非触碰 PLAN",
+          "hit": false
+        },
+        {
+          "kind": "quote",
+          "ref": "改停机条件措辞",
+          "hit": false
+        },
+        {
+          "kind": "quote",
+          "ref": "改四审厂商集合",
+          "hit": false
+        },
+        {
+          "kind": "quote",
+          "ref": "会审齐了，验真后没有任何「真读",
+          "hit": true
+        },
+        {
+          "kind": "quote",
+          "ref": "至少 3 家不同厂商给出「真读",
+          "hit": true
+        },
+        {
+          "kind": "quote",
+          "ref": "Round 0 允许重试一次",
+          "hit": false
+        },
+        {
+          "kind": "quote",
+          "ref": "最多再跑一轮 Round 0",
+          "hit": true
+        },
+        {
+          "kind": "quote",
+          "ref": "匿名包必须做到：去掉厂商名、模型名……",
+          "hit": false
+        },
+        {
+          "kind": "quote",
+          "ref": "汇总本身走 Gemini 网页端",
+          "hit": true
+        },
+        {
+          "kind": "quote",
+          "ref": "汇总 Gemini 不得与四审 Gemini 同会话/同窗口",
+          "hit": false
+        },
+        {
+          "kind": "quote",
+          "ref": "禁止根据措辞猜测来源",
+          "hit": false
+        },
+        {
+          "kind": "quote",
+          "ref": "状态机落盘。进程被杀后能从本轮已完成的步骤续跑，且不违反防重发",
+          "hit": true
+        },
+        {
+          "kind": "quote",
+          "ref": "已 accepted 的提问",
+          "hit": false
+        },
+        {
+          "kind": "quote",
+          "ref": "不要再复制一套发送栈",
+          "hit": true
+        },
+        {
+          "kind": "quote",
+          "ref": "步骤完成标记 + 已 accepted 的 job id",
+          "hit": false
+        }
+      ]
     }
   }
 }

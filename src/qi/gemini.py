@@ -282,11 +282,35 @@ def busy(root) -> bool:
                for n in root.walk())
 
 
-def draft_present(root) -> bool:
-    """输入框里有草稿。判据是「有名字叫发送的可点按钮」——空输入框只有麦克风。
+def _composer_text(root) -> str | None:
+    """读输入框里的真实文本；读不出来返回 None（交给调用方回退到旧判据）。"""
+    for node in root.walk():
+        if node.kind != "EditControl" or getattr(node, "offscreen", False):
+            continue
+        try:
+            value = node.control.GetValuePattern().Value
+        except (AttributeError, COMError, RuntimeError):
+            return None
+        if not isinstance(value, str):
+            return None
+        text = value.strip()
+        return "" if text in PLACEHOLDERS else text
+    return None
 
-    模板不参与：`gem_send_on.png` 对现在的页面最高 0.652，拿它判会一直说"空"。
+
+def draft_present(root) -> bool:
+    """输入框里有草稿。
+
+    优先看**输入框真实文本**：挂了附件时发送键本来就可点（可以只发文件），
+    拿"有没有发送键"当草稿证据会一直说"有草稿"——2026-11-12 实测：
+    输入框只有占位符「问问 Gemini」、附件 chip 在，`draft_present` 仍返回 True，
+    `gemini_use --continue` 因此拒发（draft_present），上传后的发送永远走不出去。
+
+    读不出文本（离线桩/控件不可读）时回退到旧判据：有可点的「发送」就算有草稿。
     """
+    text = _composer_text(root)
+    if text is not None:
+        return bool(text)
     return any(n.kind == "ButtonControl" and n.name in SEND and _enabled(n)
                for n in root.walk())
 
@@ -341,9 +365,33 @@ def _new_chat_landed(screen, site):
         return False                       # 还挂在旧会话上
     if draft_present(root):
         return False                       # 输入框里还有上一轮的草稿
-    if scan(root).blocks:
+    # 只认真正的消息块：带「你说/Gemini 说」标签，或带动作条。
+    # 侧栏的会话标题也是长文本叶子，`parse` 会把它们切成一堆**无标签**块，
+    # 2026-11-12 实测因此把空的新会话误判成「仍有上一轮消息」（13 条全是标题）。
+    if [b for b in scan(root).blocks if b.label or b.bars]:
         return False                       # 页面上还有上一轮的消息
     return True
+
+
+def _drop_stale_draft(screen, site) -> None:
+    """开新对话之前，清掉上一轮失败留在输入框里的草稿。
+
+    为什么必须在这里清：`_new_chat_landed` 把「输入框里有草稿」当作
+    「还停在旧会话」的证据，而我们自己上一次失败的发送（如 tier_unconfirmed
+    发生在写入之后）就会把提问留在框里 —— 于是下一轮永远判 not_landed。
+    2026-11-12 实测：框里就是上一轮的「只回复 OK」，两次点击后报
+    `newchat_not_landed`，而地址其实早就是 `/app`。
+    开新会话时旧草稿本来就作废，先清掉再点。清不掉就照原路走，不判死。
+    """
+    try:
+        control, _url = ui.document(screen.target_hwnd, site.name)
+        if not draft_present(ui.tree(control)):
+            return
+        screen.focus()
+        conv = Conversation(screen, site.name)
+        _clear_draft(conv, conv.read())
+    except Exception:                     # noqa: BLE001 - 清不掉不影响主流程
+        return
 
 
 def open_new_chat(screen, site, *, tries: int = 8, pause: float = 0.5) -> dict:
@@ -358,6 +406,8 @@ def open_new_chat(screen, site, *, tries: int = 8, pause: float = 0.5) -> dict:
     """
     last = None
     attempts = 2 if isinstance(screen, _ScreenClass) else 1
+    if isinstance(screen, _ScreenClass):
+        _drop_stale_draft(screen, site)   # 残草会被判成"还在旧会话"
     for _round in range(attempts):
         result = _open_new_chat_once(screen, site, tries=tries, pause=pause)
         if not result.get("ok"):

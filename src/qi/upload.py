@@ -29,7 +29,7 @@ user32.GetClassNameW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
 #: `menu` 是点开之后菜单里的条目名（没有就是直接弹对话框）。
 ATTACH = {
     "chatgpt": {"button": ("添加文件等内容",), "menu": ("添加照片和文件",)},
-    "grok": {"button": ("附件",), "menu": ()},
+    "grok": {"button": ("附件",), "menu": ("上传文件",)},   # 附件是 MenuControl，带二级菜单
     "gemini": {"button": ("上传和工具",), "menu": ("上传文件", "从计算机")},
     "deepseek": {"button": ("附件", "上传"), "menu": ()},
 }
@@ -161,11 +161,25 @@ def _dialog_open_button(root):
     return found[0] if found else None
 
 
+#: 附件 chip 的关闭键前缀。**绝不包含「删除 …」**：
+#: 桌面上也有叫「删除」的按钮，2026-11-12 就是这条把点击打到了桌面，
+#: 弹出系统的「确实要从桌面上删除这些图标吗?」——差一点删掉用户的东西。
+#: 注意「移除此附件」中间没有空格，所以按裸前缀「移除」匹配。
+ATTACH_CLOSE_PREFIXES = ("移除", "close ", "remove ")
+
+
 def clear_attachments(screen, site: str) -> int:
-    """移除输入框里已挂的附件。上一轮失败会留下它们，挡住下一次上传。"""
+    """移除输入框里已挂的附件。上一轮失败会留下它们，挡住下一次上传。
+
+    安全边界（两条都必须遵守）：
+      1. 名字只认「移除/close/remove」，**不碰「删除」**；
+      2. 只点**浏览器窗口矩形内**的控件——控件树偶尔会混进桌面项，
+         按坐标点击就会点到桌面上。
+    """
     try:
         control, _url = ui.document(screen.target_hwnd, site)
         root = ui.tree(control)
+        win = auto.ControlFromHandle(screen.target_hwnd).BoundingRectangle
     except Exception:                             # noqa: BLE001
         return 0
     removed = 0
@@ -173,11 +187,15 @@ def clear_attachments(screen, site: str) -> int:
         if node.kind != "ButtonControl" or node.offscreen:
             continue
         name = (node.name or "").strip()
-        if name.startswith("移除 ") or name.startswith("close ") or name.startswith("删除 "):
-            rect = node.control.BoundingRectangle
-            _raw_click((rect.left + rect.right) // 2, (rect.top + rect.bottom) // 2)
-            time.sleep(0.4)
-            removed += 1
+        if not any(name.startswith(p) for p in ATTACH_CLOSE_PREFIXES):
+            continue
+        rect = node.control.BoundingRectangle
+        cx, cy = (rect.left + rect.right) // 2, (rect.top + rect.bottom) // 2
+        if not (win.left <= cx <= win.right and win.top <= cy <= win.bottom):
+            continue
+        _raw_click(cx, cy)
+        time.sleep(0.4)
+        removed += 1
     return removed
 
 
@@ -202,7 +220,8 @@ def upload(screen, site: str, path: str, *, timeout: float = 60.0,
         return UploadResult(False, "page_unreadable", path=path,
                             detail={"error": type(exc).__name__})
 
-    button = _find(root, "ButtonControl", spec["button"])
+    # 附件入口在不同端是 Button 或 Menu（grok 实测是 MenuControl）。
+    button = _find(root, ("ButtonControl", "MenuControl"), spec["button"])
     if button is None:
         return UploadResult(False, "attach_not_found", path=path,
                             detail={"wanted": list(spec["button"])})
@@ -215,6 +234,11 @@ def upload(screen, site: str, path: str, *, timeout: float = 60.0,
             if not _click_node(button):
                 return UploadResult(False, "attach_unclickable", path=path)
             item = _wait(lambda: _menu_item(screen, site, spec["menu"]), 8.0)
+        if item is None:
+            # 刚新开会话时页面还在重排，第一点可能打空（或把已经开的菜单点关）。
+            # 再点一次、多等一会儿——grok 实测第一点偶发不弹菜单。
+            _click_node(button)
+            item = _wait(lambda: _menu_item(screen, site, spec["menu"]), 12.0)
         if item is None:
             return UploadResult(False, "menu_item_not_found", path=path,
                                 detail={"wanted": list(spec["menu"])})
