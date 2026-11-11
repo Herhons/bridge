@@ -25,12 +25,12 @@
       "elapsed": 112.1
     },
     "review:deepseek": {
-      "at": "2026-11-11T20:32:27+0800",
+      "at": "2026-11-11T22:34:26+0800",
       "ok": false,
-      "stage": "input_mismatch",
+      "stage": "tier_unconfirmed",
       "feed": "paste",
       "chars": 0,
-      "elapsed": 8.9
+      "elapsed": 4.5
     },
     "verify": {
       "at": "2026-11-11T22:13:23+0800",

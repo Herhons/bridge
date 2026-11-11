@@ -383,14 +383,81 @@ def _site_object(name: str):
     return module.SITE
 
 
+def _choose_tier(site: str, purpose: str = "review") -> dict:
+    """跑该端的 `*_choose.py` 选档位。
+
+    `purpose=review` 需要档位回执，否则 `conversation.ask` 直接 `tier_unconfirmed`
+    （deepseek 实测）。这一步本来就是会审流程的一部分。
+    """
+    import subprocess
+
+    script = ROOT / "src" / "scripts" / f"{site}_choose.py"
+    if not script.is_file():
+        return {"ok": False, "reason": "no_choose_script"}
+    proc = subprocess.run([sys.executable, str(script), "--purpose", purpose],
+                          cwd=ROOT, capture_output=True, text=True,
+                          encoding="utf-8", timeout=180)
+    return {"ok": proc.returncode == 0, "exit": proc.returncode,
+            "tail": (proc.stdout or "")[-200:]}
+
+
+def _ask_via_script(site: str, prompt: str, material_text: str, cfg) -> dict:
+    """走各端自己的 `*_use.py`（它们管新会话、档位、粘贴保真）。
+
+    为什么不自己拼 `flow.ask`：deepseek 的 review 档位回执由 **use 脚本**内部
+    `tier_guard.gate` 处理，`*_choose.py` 只认 `--think/--search`，接不上。
+    """
+    import subprocess
+
+    script = ROOT / "src" / "scripts" / f"{site}_use.py"
+    limit = int((cfg.get("chunk_chars_by_site") or {}).get(site, cfg["chunk_chars"]))
+    chunks = it.pack_chunks(material_text, limit, head=prompt)
+    if chunks:
+        _clear_composer(_screen_for(site), site)      # 残草会让脚本直接拒发
+    last = {"ok": False, "stage": "no_chunks"}
+    for index, chunk in enumerate(chunks, start=1):
+        budget = cfg["review_timeout"] if index == len(chunks) else int(
+            cfg.get("chunk_timeout", 300))
+        cmd = [sys.executable, str(script), chunk, "--purpose", "review",
+               "--timeout", str(int(budget))]
+        if index > 1:
+            cmd.append("--continue")
+        proc = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True,
+                              encoding="utf-8", timeout=budget + 120)
+        parsed = it and None
+        import json as _json
+        for line in reversed((proc.stdout or "").splitlines()):
+            line = line.strip()
+            if line.startswith("{") and line.endswith("}"):
+                try:
+                    parsed = _json.loads(line)
+                    break
+                except ValueError:
+                    continue
+        last = parsed or {"ok": False, "stage": "bad_output", "exit": proc.returncode}
+        if not last.get("ok"):
+            return {**last, "feed": "paste", "chunks": len(chunks), "at": index,
+                    "stderr": (proc.stderr or "")[-300:]}
+    return {**last, "feed": "paste", "chunks": len(chunks)}
+
+
 def _ask_paste(site: str, prompt: str, material_text: str, cfg) -> dict:
-    """分段粘贴：第一段 `mode=new`（各端自己的新开会话），其余 `mode=continue`。"""
+    """分段粘贴：优先走各端 `*_use.py`。"""
+    if (ROOT / "src" / "scripts" / f"{site}_use.py").is_file():
+        return _ask_via_script(site, prompt, material_text, cfg)
     from qi import flow
 
     site_obj = _site_object(site)
+    chosen = _choose_tier(site)
     limit = int((cfg.get("chunk_chars_by_site") or {}).get(site, cfg["chunk_chars"]))
+    if site in (cfg.get("single_line_sites") or []):
+        # deepseek / grok 的输入框折叠换行，读回必然 input_mismatch。
+        material_text = material_text.replace("\n", " ⏎ ")
+        prompt = prompt.replace("\n", " ⏎ ")
     chunks = it.pack_chunks(material_text, limit, head=prompt)
     last = {"ok": False, "stage": "no_chunks"}
+    if chunks:
+        _clear_composer(_screen_for(site), site)      # 上一轮残草会判 draft_present
     for index, chunk in enumerate(chunks, start=1):
         budget = cfg["review_timeout"] if index == len(chunks) else int(
             cfg.get("chunk_timeout", 300))
@@ -398,7 +465,7 @@ def _ask_paste(site: str, prompt: str, material_text: str, cfg) -> dict:
                         timeout=budget, purpose="review", verbose=False)
         if not last.get("ok"):
             return {**last, "feed": "paste", "chunks": len(chunks), "at": index}
-    return {**last, "feed": "paste", "chunks": len(chunks)}
+    return {**last, "feed": "paste", "chunks": len(chunks), "choose": chosen}
 
 
 def cmd_review(args, cfg) -> int:

@@ -19,7 +19,6 @@
   },
   "chunk_timeout": 300,
   "single_line_sites": [
-    "deepseek",
     "grok"
   ],
   "harvest_wait": 90,

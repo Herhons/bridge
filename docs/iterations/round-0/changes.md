@@ -98,3 +98,10 @@
 占位符是**按位置**判的（值等于输入框框内的文本节点才算空），全局表会让"别处的同名字样"也当空。
 正确做法：给 `Conversation` 注入该端的 `empty=` 判据（`composer_empty(view, placeholders=...)`），
 核心文件恢复原样。gemini / chatgpt 现在都正确判空。
+
+## 11. 第五次续跑（2026-11-12 00:30）
+
+- 改用各端 `*_use.py` 发问（不自己拼 flow.ask）：deepseek 单发**成功**（review 档，6.9s）。
+- 发现三个硬事实：档位回执一次性、失败必留草稿、`submission` 字段不可单独作证据。
+- gemini 今天这次没到 reserve（旧账本 46.9h），页面回 `/app`，判定未落地。
+- 详见 `STOP_20261111_0030.md`。
