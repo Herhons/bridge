@@ -363,7 +363,33 @@ def harvest_reply(screen, site: str, wait: float = 420.0) -> dict:
     return {"ok": False, "stage": "harvest_timeout", "reply": last_text}
 
 
+def _clear_stale_lock(state=None) -> dict:
+    """开跑前清掉「持有者已死」的残留锁，并把结果记进 state。
+
+    只改写**确认已死**的元数据；活着的锁一律不动（真并发时这里只会返回 held/alive）。
+    """
+    from qi import uilock
+
+    info = uilock.clear_stale()
+    if state is not None:
+        state.set("lock", {"checked_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+                           **{k: info.get(k) for k in ("cleared", "reason", "pid", "owner")}})
+    return info
+
+
 def _ask_upload(site: str, prompt: str, material: Path, cfg) -> dict:
+    """上传 + 短提问。**整段持 UI 锁**：这段时间全是网页端动作。
+
+    离线步骤（验真、匿名、归档）一律不取锁——锁只在"要动网页"的时候存在。
+    """
+    from qi import uilock
+
+    with uilock.hold(f"iterate:upload:{site}",
+                     timeout=float(cfg.get("ui_lock_timeout", 180))):
+        return _ask_upload_body(site, prompt, material, cfg)
+
+
+def _ask_upload_body(site: str, prompt: str, material: Path, cfg) -> dict:
     from qi import conversation, upload
 
     screen = _screen_for(site)
@@ -410,11 +436,18 @@ def _ask_upload_script(site: str, prompt: str, material: Path, cfg) -> dict:
     _clear_composer(screen, site)
     if not start_new_chat(screen, site):
         return {"ok": False, "stage": "new_chat_failed", "feed": "upload-script"}
-    up = upload.upload(screen, site, str(material), timeout=cfg["upload_timeout"])
+    from qi import uilock
+
+    # 只包上传这一段：后面的 `*_use.py` 是子进程，它自己会 uilock.run，
+    # 父进程若也持锁就直接自锁死（2026-11-12 设计时排除）。
+    with uilock.hold(f"iterate:upload:{site}",
+                     timeout=float(cfg.get("ui_lock_timeout", 180))):
+        up = upload.upload(screen, site, str(material), timeout=cfg["upload_timeout"])
+        settled = _upload_settled(site, screen)
     if not up.ok:
         return {"ok": False, "stage": "upload_failed", "feed": "upload-script",
                 **up.as_dict()}
-    if not _upload_settled(site, screen):
+    if not settled:
         return {"ok": False, "stage": "upload_not_settled", "feed": "upload-script",
                 "upload": up.as_dict()}
 
@@ -576,6 +609,7 @@ def _ask_paste(site: str, prompt: str, material_text: str, cfg) -> dict:
 
 def cmd_review(args, cfg) -> int:
     state = it.State.load(ROOT, args.round)
+    _clear_stale_lock(state)             # 续跑前先处理上一条命令的死进程残留
     done = state.done(f"review:{args.site}")
     if done and not args.force:
         print(json.dumps({"skipped": "already_done", **done}, ensure_ascii=False))

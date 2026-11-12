@@ -281,6 +281,50 @@ def _holder_dead(meta: dict) -> bool:
     return False
 
 
+def _stale_marker(meta: dict) -> dict:
+    """把「持有者已死」的元数据改写成一个可读的墓碑，供事后追查。"""
+    return {"pid": None, "owner": "stale", "stale_pid": meta.get("pid"),
+            "stale_owner": meta.get("owner"), "released_at": _now(),
+            "updated_at": _now(), "released_by": "stale"}
+
+
+def clear_stale(*, root: str | Path | None = None) -> dict:
+    """清掉「持有者已死」的残留锁。续跑/开跑前调用。
+
+    为什么需要：字节锁由内核在进程退出时释放，所以死进程**不会真的挡住**下一次
+    加锁；但元数据里还留着它的 pid/owner，现场看上去像"前台被占"，排查时会误导。
+    这里只在**确认持有者已死**时改写元数据；活着的一律不动。
+
+    返回 `{"cleared": bool, "reason": absent|held|alive|no_meta|stale", ...}`。
+    """
+    path = lock_path(root).resolve()
+    if not path.exists():
+        return {"cleared": False, "reason": "absent", "path": str(path)}
+    handle = _open(path)
+    locked = False
+    try:
+        try:
+            _try_lock(handle)
+            locked = True
+        except OSError:
+            meta = _read_meta(handle) or {}
+            return {"cleared": False, "reason": "held", "path": str(path),
+                    "pid": meta.get("pid"), "owner": meta.get("owner")}
+        meta = _read_meta(handle) or {}
+        if not meta:
+            return {"cleared": False, "reason": "no_meta", "path": str(path)}
+        if not _holder_dead(meta):
+            return {"cleared": False, "reason": "alive", "path": str(path),
+                    "pid": meta.get("pid"), "owner": meta.get("owner")}
+        _write_meta(handle, _stale_marker(meta))
+        return {"cleared": True, "reason": "stale", "path": str(path),
+                "pid": meta.get("pid"), "owner": meta.get("owner")}
+    finally:
+        if locked:
+            _unlock(handle)
+        handle.close()
+
+
 # ---------------------------------------------------------------- 父子代持
 def _aux_lock(handle, *, shared=False):
     """Shared lifetime lease or exclusive child-entry lock (separate files)."""
@@ -505,6 +549,7 @@ def hold(owner: str, *, timeout: float = DEFAULT_TIMEOUT, root: str | Path | Non
     handle = _open(path)
     lease = _open(path.with_name(path.name + ".lease"))
     locked = leased = False
+    stale_retries = 0
     announced = False
     try:
         while True:
@@ -523,6 +568,12 @@ def hold(owner: str, *, timeout: float = DEFAULT_TIMEOUT, root: str | Path | Non
                     announced = True
                     print(f"[lock] UI busy: owner={meta.get('owner')} pid={meta.get('pid')}",
                           flush=True)
+                if _holder_dead(meta) and stale_retries < 3:
+                    # 持有者已死：内核早该释放字节锁，这里把墓碑写好并**立刻重试**，
+                    # 不再空等到 timeout（续跑时最常见：上一条命令被 kill）。
+                    _write_meta(handle, _stale_marker(meta))
+                    stale_retries += 1
+                    continue
                 if time.monotonic() >= deadline:
                     raise Busy(f"ui lock busy: owner={meta.get('owner')} pid={meta.get('pid')}")
                 time.sleep(poll)

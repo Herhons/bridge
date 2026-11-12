@@ -211,3 +211,17 @@ Herhons 的决定：§5.3 阈值与逐字口径**都不改**，按 §12 停机�
 | chatgpt | 9/10 = 0.90 true_read | **7/9 = 0.78 true_read** |
 | grok | 7/11 = 0.64 partial | 4/6 = 0.67 partial |
 | gemini | 4/7 = 0.57 partial | 3/6 = 0.50 partial |
+
+## 16. 修复第 3 项：UI 锁范围与残留清理（2026-11-12 10:20）
+
+| 改动 | 文件 | 说明 |
+|---|---|---|
+| `clear_stale(root)` | `src/qi/uilock.py` | 只在**确认持有者已死**时把元数据改写成墓碑（`owner=stale` / `stale_pid` / `released_by=stale`）；活着的一律不动 |
+| 等锁时识别死持有者 | `src/qi/uilock.py` | `hold()` 忙等里若 `_holder_dead(meta)`，写墓碑并**立刻重试**，不再空等到 timeout（最多 3 次，避免狂转） |
+| 锁只在动网页时持有 | `tools/iterate.py` | `_ask_upload` 整段持锁；`_ask_upload_script` **只包上传段**（后面的 `*_use.py` 是子进程，它自己会 `uilock.run`，父进程再持锁会自锁死） |
+| 验真等离线步骤不取锁 | `tools/iterate.py` | 已有行为，本次加用例**锁住**：`verify` 跑完不许出现 `runs/ui.lock` |
+| 续跑前清残留 | `tools/iterate.py` | `cmd_review` 开头 `_clear_stale_lock(state)`，结果记进 `state.json` 的 `lock` 键 |
+
+新增 `tests/test_b27_uilock_scope.py`（5 条）：
+死持有者被清、活持有者不动、`hold` 遇死元数据 3 秒内拿到锁、无锁文件时返回 absent、**验真全程不取锁且不建 lock 文件**。
+连带跑 `test_b13_lock` / `test_b14_choose_lock` / `test_r3_choose_use_lockstep` / `test_rework09a_lock` 全绿。
