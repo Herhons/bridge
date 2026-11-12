@@ -736,3 +736,59 @@ AssertionError: [TimeoutError('等 progress.json 的文件锁超过 5.0s')] is n
 （`workflow.move` 里的持锁是毫秒级），这次是**机器被别的任务压住**导致的调度饥饿。
 **没有**改这个常量，也**没有**给这条用例加容差 —— 那是拿产品语义去迁就测试环境。
 记在这里是为了下次再看到它时不用重新排查。
+
+## 32. R3-6 第一步：气泡认领与取回复收成一处（18:30 起）
+
+R3-6 在 Round 3 判「成立」，处置是"部分完成：AST 检查已做，实现迁移留下一轮"。
+本轮做**安全的那个子集**：两端逐字相同的纯函数先收口，控制流一律不动。
+
+### 32.1 收口了什么
+
+`qi/gemini.py` 与 `src/scripts/grok_use.py` 原来各自带着**逐字相同**的：
+
+| 项 | 原来 | 现在 |
+|---|---|---|
+| `TAIL_MARKS` / `MIN_PREFIX` | 两份同名常量 | `qi/bubble.py` |
+| `_squash`（气泡整段重复两遍收一遍） | 两份 | `bubble.squash` |
+| `prompt_matches`（前缀认领 + 折叠截断 + 行首列表标记归一） | 两份 | `bubble.prompt_matches` |
+| `_pick_reply`（该读哪条回复） | 两份 | `bubble.pick_reply` |
+| `_already_answered`（发送前是否已答完） | 两份 | `bubble.already_answered` |
+
+两端保留原函数名（一行委托），调用方与既有测试不用改。`qi/bubble.py` 是纯函数模块：
+不碰 UI、不读环境、不依赖 `conversation`。
+
+这不是洁癖。Round 3 已经吃过一次同类亏：`iteration._squash` 只改一处，三轮会审的
+"逐字引用"结论全错。而 gemini / grok 这两份一旦分叉，表现还不一样 —— 一个报
+`no_reply` 白等 300s，一个报 `prompt_gone` 早退。
+
+### 32.2 收口时差点写出的回归
+
+`pick_reply` 第一版我写成"认领到提问但 `reply_after` 返回 None 时，继续走
+'比基线多出来的最新一条'的兜底"。**这是错的**，而且是会读错答案的那种错：
+
+```
+blocks = [回复: "上一轮的旧答案", 提问: 我们的提问]     at=1, baseline=0
+```
+
+认领到提问（at=1）但本轮回复还没出来时，兜底会返回 `replies[-1]` —— **上一轮的旧答案**。
+原两端的实现都是直接 `return page.reply_after(at)`，不兜底。已还原，并加了一条用例
+`test_claimed_prompt_without_reply_returns_none` 钉住它；把错误版本放回去该用例会红
+（实测：`AssertionError: namespace(label='reply', text='上一轮的旧答案') is not None`）。
+
+### 32.3 用例
+
+`tests/test_b37_bubble_shared.py` 14 条：
+- 两端拿到的是**同一个函数对象**（`assertIs`），常量也是同一个对象；
+- **扫源码**：`src/` 下除 `bubble.py` 外不许再出现 `def prompt_matches` / 气泡版
+  `TAIL_MARKS` / "整段重复两遍"；
+- 行为：全等、折叠省略号、重复两遍、太短前缀不认领、无关文本不认领、行首列表标记；
+- `pick_reply` / `already_answered` 两端结果一致，且"认领到但没回复"返回 None。
+
+全量 **1756 用例 OK**（14 条新用例）。
+
+### 32.4 没做的（仍是 R3-6 的剩余部分）
+
+- `Scan` 类本身没合并（两端的 `Block`/`parse` 解析不同的 DOM，合并等于重写解析）；
+- `scan()` / `_page_text` / `_text_after_prompt` 各端保留自己的；
+- `grok_use.ask()` 的独立等待循环没并到 `conversation.ask` —— 会审走的是后者
+  （`feed=grok:upload`），前者只在 CLI 直调时用，两条路径的收卷判据仍不同。

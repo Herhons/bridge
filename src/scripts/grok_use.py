@@ -59,6 +59,9 @@ if _SRC not in sys.path:
 from qi import Library, console, failure, guard, heartbeat, human, sendgate, textcmp, tier_guard, ui, uilock  # noqa: E402
 from qi import zoom as zoom_mod  # noqa: E402
 from qi.browser import ensure_site  # noqa: E402
+# 2026-11-12（R3-6）：气泡认领规则与 gemini 共用一处实现，见 qi/bubble.py
+from qi.bubble import (MIN_PREFIX, TAIL_MARKS, already_answered as _already,  # noqa: E402
+                       pick_reply as _pick, prompt_matches)
 from qi.conversation import SEND, Conversation, UserTookOver  # noqa: E402
 from qi.flow import Site  # noqa: E402
 from qi.screen import ForegroundLost, Screen  # noqa: E402
@@ -99,8 +102,7 @@ NEWCHAT_NAMES = ("聊天", "新聊天", "新对话", "New chat", "New Chat")
 TEMPLATE_SCALES = zoom_mod.SCALES
 
 SETTLE = 3.0        # 回复文本稳定 3 秒才算收完
-TAIL_MARKS = ("…", "...")
-MIN_PREFIX = 12
+# 折叠气泡的截断标记与最短认领前缀：定义在 `qi/bubble.py`（与 gemini 共用）。
 
 
 @dataclass
@@ -188,29 +190,8 @@ def parse(root):
     return blocks
 
 
-def _squash(text: str) -> str:
-    """整段重复两遍的收紧成一遍（真机上用户气泡会挂内外两层节点）。"""
-    half = len(text) // 2
-    if len(text) % 2 == 0 and half and text[:half] == text[half:]:
-        return text[:half]
-    return text
-
-
-def prompt_matches(text: str, prompt: str) -> bool:
-    """控件树里的这段文字是不是我们发出去的那条提问（容忍折叠截断）。"""
-    # 归一后再比：页面会把行首「1.」吃掉，用 ui.canonical 会认领不到
-    got, want = _squash(textcmp.normalize(text)), textcmp.normalize(prompt)
-    if not got or not want:
-        return False
-    if got == want:
-        return True
-    for mark in TAIL_MARKS:
-        if got.endswith(mark):
-            got = got[: -len(mark)]
-            break
-    if len(got) < min(MIN_PREFIX, len(want)):
-        return False
-    return want.startswith(got)
+# `prompt_matches` 与 `_squash` 已移到 `qi/bubble.py`，与 gemini 共用同一份实现
+# （2026-11-12 R3-6：两边原来逐字相同）。这里保留名字，调用方与测试不用改。
 
 
 @dataclass
@@ -366,13 +347,8 @@ def write_prompt(screen, conv, view, prompt: str, *, tries: int = 3):
 
 
 def _pick_reply(page: Scan, at, baseline: int):
-    """本轮该读哪条回复：认领到提问就取它后面那条，否则只认「比发送前多出来的最新一条」。"""
-    if at is not None:
-        return page.reply_after(at)
-    replies = page.replies()
-    if len(replies) > baseline:
-        return replies[-1]
-    return None
+    """本轮该读哪条回复（实现见 `qi/bubble.pick_reply`，与 gemini 共用）。"""
+    return _pick(page, at, baseline)
 
 
 def _already_answered(root, prompt: str):
@@ -380,14 +356,7 @@ def _already_answered(root, prompt: str):
 
     CARD-09f 第 6 条：中断后重跑、页面其实已答完时，绝不重发，只读已有回复。
     """
-    page = scan(root)
-    at = page.prompt_at(prompt)
-    if at is None:
-        return None
-    reply = page.reply_after(at)
-    if reply is not None and reply.text.strip():
-        return reply.text.strip()
-    return None
+    return _already(scan(root), prompt)
 
 
 def _clear_draft(conv, view) -> bool:

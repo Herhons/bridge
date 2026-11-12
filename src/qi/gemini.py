@@ -51,6 +51,9 @@ from . import exit_codes as ec
 from . import chip, failure, guard, heartbeat, human, sendgate, textcmp, tier_guard, ui, uilock
 from . import zoom as zoom_mod
 from .browser import ensure_site
+# 2026-11-12（R3-6）：气泡认领规则与 grok 共用一处实现，见 qi/bubble.py
+from .bubble import (MIN_PREFIX, TAIL_MARKS, already_answered as _already,
+                     pick_reply as _pick, prompt_matches)
 from .conversation import SEND, STOP, Conversation, UserTookOver, session_id_of
 from .screen import ForegroundLost, Screen
 
@@ -84,9 +87,7 @@ NEWCHAT_NAMES = ("发起新对话", "新对话", "新聊天", "New chat", "New C
 # 只按 1.0 匹配会稳定失配。
 TEMPLATE_SCALES = (1.0, 0.9, 0.8, 1.1, 1.25)
 
-# 折叠气泡用省略号截断。两种写法都见过。
-TAIL_MARKS = ("…", "...")
-MIN_PREFIX = 12         # 短于这个字数的前缀不足以认领一条提问
+# 折叠气泡的截断标记与最短认领前缀：定义在 `qi/bubble.py`（与 grok 共用）。
 SETTLE = 3.0            # 卡面要求：回复文本稳定 3 秒
 STABLE_READS = 2        # CARD-07 第 2 条：文本连续 2 次不变就算答完
 # B19：点了发送之后，最多等这么久就要看到"落点"（提问块 / 新回复 / 生成中 / 会话 id）。
@@ -207,37 +208,9 @@ def parse(root) -> tuple[list[Block], int]:
     return blocks, bar
 
 
-def _squash(text: str) -> str:
-    """整段重复两遍的收紧成一遍。
-
-    真机上用户气泡会同时挂"内层文本"和"外层容器"，两者文本一样、不相邻，
-    `parse` 的相邻去重挡不住。这里再兜一次：只有前后半段完全相同时才收。
-    """
-    half = len(text) // 2
-    if len(text) % 2 == 0 and half and text[:half] == text[half:]:
-        return text[:half]
-    return text
-
-
-def prompt_matches(text: str, prompt: str) -> bool:
-    """控件树里的这段文字，是不是我们发出去的那条提问。
-
-    折叠气泡只留开头一段，所以比的是「前缀」而不是全等：去掉尾部省略号后，
-    只要我们这串够长、且提问以它开头，就算同一条。
-    """
-    # 比对走归一：页面会把行首「1.」吃掉，用 ui.canonical 会永远认领不到
-    got, want = _squash(textcmp.normalize(text)), textcmp.normalize(prompt)
-    if not got or not want:
-        return False
-    if got == want:
-        return True
-    for mark in TAIL_MARKS:
-        if got.endswith(mark):
-            got = got[: -len(mark)]
-            break
-    if len(got) < min(MIN_PREFIX, len(want)):
-        return False
-    return want.startswith(got)
+# `prompt_matches` 与 `_squash` 已移到 `qi/bubble.py`，与 grok 共用同一份实现
+# （2026-11-12 R3-6：两边原来逐字相同，改一边忘另一边就会出现"这端认领得到、
+# 那端认不出"）。这里保留 `prompt_matches` 这个名字，调用方与测试不用改。
 
 
 @dataclass
@@ -603,17 +576,8 @@ def _text_after_prompt(text: str, prompt: str) -> str:
 
 
 def _pick_reply(page: Scan, at: int | None, baseline: int) -> Block | None:
-    """本轮该读哪条回复。
-
-    认领到提问就用它后面那条；认领不到时，只认「比发送前多出来的最新一条」。
-    10:35 那次就是认领一直失败，回复其实早就在树里，脚本却白等到 300s。
-    """
-    if at is not None:
-        return page.reply_after(at)
-    replies = page.replies()
-    if len(replies) > baseline:
-        return replies[-1]
-    return None
+    """本轮该读哪条回复（实现见 `qi/bubble.pick_reply`，与 grok 共用）。"""
+    return _pick(page, at, baseline)
 
 
 def _already_answered(root, prompt: str):
@@ -624,14 +588,7 @@ def _already_answered(root, prompt: str):
     R9：**它只回答"页面上有没有"**。调用方必须先证明这是本事务、同一会话
     （见 `_prior_answer_proof`），证明不了就不能拿这串文字当本轮答案。
     """
-    page = scan(root)
-    at = page.prompt_at(prompt)
-    if at is None:
-        return None
-    reply = page.reply_after(at)
-    if reply is not None and reply.text.strip():
-        return reply.text.strip()
-    return None
+    return _already(scan(root), prompt)
 
 
 def _prior_answer_proof(site_name: str, prompt: str, view):

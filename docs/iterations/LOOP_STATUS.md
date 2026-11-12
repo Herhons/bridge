@@ -1,6 +1,6 @@
 # 自迭代循环状态（Herhons 10:42 新规后）
 
-更新时间：2026-11-12 18:05
+更新时间：2026-11-12 18:45
 规则：计划闸门已关闭（规格 §10）；停机只分 A 类（花钱/登录/删数据/动 v0.0.8）与 B 类（技术性）。
 本文不是"等批准"的 STOP，而是**交接与续跑用的状态**。
 
@@ -82,6 +82,18 @@ py -3.10 -B tools/iterate.py review --round round-3 --site gemini --force
   把 `uilock.ROOT` patch 到临时目录。
 - 全量 **1742 用例 OK**（另有一次 `progress.json` 5s 锁超时，单独重跑 3 次全绿，
   属负载抖动，未改常量）。
+
+## Round 6：R3-6 第一步（18:30 起）
+
+Round 3 判「成立」但只做了 AST 检查的那条，本轮做安全的子集：把 gemini / grok
+**逐字相同**的纯函数收成一处 —— `TAIL_MARKS`、`MIN_PREFIX`、`_squash`、
+`prompt_matches`、`_pick_reply`、`_already_answered` 全部移到 `qi/bubble.py`，
+两端保留原名做一行委托。控制流一律不动。
+
+收口时差点写出会读错答案的回归（`pick_reply` 认领到提问但回复未出时滑到
+"最新一条"→ 读到上一轮旧答案），已还原并加用例钉住。全量 **1756 用例 OK**。
+
+`Scan` / `scan()` / `grok_use.ask()` 的独立循环仍未合并（R3-6 剩余部分）。
 
 ## Round 4 会审：归档失败（3 家凑不齐）
 
