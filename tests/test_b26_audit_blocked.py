@@ -54,6 +54,12 @@ class AuditBlockedTests(unittest.TestCase):
         self.assertGreater(entry["age_hours"], 9)
 
     def test_submitting_is_listed_without_a_command(self):
+        """`submitting` 默认不给解锁命令 —— 这条约束**仍然有效**。
+
+        2026-11-12（B38）把它精细化了：只有"写账进程已死 + 没写过 scope_after +
+        超过 1 小时"三条全中的孤儿才给 `--state submitting` 的命令。
+        这里构造的记录不是孤儿，所以照旧没有 `command` 字段。
+        """
         self.put("codex-def.json", _record(submissions.STATE_SUBMITTING))
         report = self.run_audit()
         self.assertEqual(report["blocked_total"], 1)
