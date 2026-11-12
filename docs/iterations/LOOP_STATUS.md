@@ -1,6 +1,6 @@
 # 自迭代循环状态（Herhons 10:42 新规后）
 
-更新时间：2026-11-12 16:45
+更新时间：2026-11-12 17:00
 规则：计划闸门已关闭（规格 §10）；停机只分 A 类（花钱/登录/删数据/动 v0.0.8）与 B 类（技术性）。
 本文不是"等批准"的 STOP，而是**交接与续跑用的状态**。
 
@@ -62,7 +62,18 @@ py -3.10 -B tools/iterate.py review --round round-3 --site gemini --force
   窗口级判据（只比 site/hwnd）——按 `reconcile` 那套逐字段比会把正常首发全拒（已用旧用例验证）。
 - **R3-5 匹配规则统一**：`conversation.merged_blocks/prompt_span` 为唯一实现，tools 只委托。
 - **兜底保留证据**：`ask_failure`（stage/timeout_kind/reason/diagnostics/warnings）。
-- 全量 **1716 用例 OK**。下一轮：以这批改动为对象开 Round 4 会审。
+- 全量 **1716 用例 OK**。
+
+## Round 4 会审：暂停（A 类停点：chatgpt 额度）
+
+材料与快照已就绪（`round-4/`，快照 `820609ac`）。chatgpt 一席 582s/0 字，
+页面提示「升级订阅或添加额度…明天 20:36 重置」——`Work` 用量耗尽，**需要花钱**，
+按 §12 A1 停轮。未升级、未购买、未换账号。
+
+续跑三选一（都需要 Herhons 决定）：
+1. 等明天 20:36 额度重置后继续；
+2. 换 grok/deepseek 两席成轮（不足 3 家，属 §7.3 偏离，需记录）；
+3. 由 Herhons 提供其他可用端。
 
 ## 近期已修（2026-11-12 14:31 起，STOP_handled_20261112_1431 的未决清单）
 

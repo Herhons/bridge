@@ -1,0 +1,36 @@
+{
+  "schema": "round-state/2",
+  "materials": {
+    "prompt:f273f423e2b32536": {
+      "status": "unknown",
+      "at": "2026-11-12T16:51:53+0800",
+      "chars": 0
+    }
+  },
+  "lock": {
+    "checked_at": "2026-11-12T16:43:41+0800",
+    "cleared": true,
+    "reason": "stale",
+    "pid": 30628,
+    "owner": "iterate:upload:chatgpt"
+  },
+  "anchors": {
+    "chatgpt": {
+      "site": "chatgpt",
+      "round_name": "round-4",
+      "url": "https://chatgpt.com/c/6af57c3f-95c4-83e9-8fa5-5e65f48aa9f4",
+      "prompt_hash": "prompt:f273f423e2b32536",
+      "accepted": true
+    }
+  },
+  "steps": {
+    "review:chatgpt": {
+      "at": "2026-11-12T16:53:24+0800",
+      "ok": false,
+      "stage": "timeout",
+      "feed": "upload",
+      "chars": 0,
+      "elapsed": 582.5
+    }
+  }
+}
