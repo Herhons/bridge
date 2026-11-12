@@ -31,7 +31,10 @@ ATTACH = {
     "chatgpt": {"button": ("添加文件等内容",), "menu": ("添加照片和文件",)},
     "grok": {"button": ("附件",), "menu": ("上传文件",)},   # 附件是 MenuControl，带二级菜单
     "gemini": {"button": ("上传和工具",), "menu": ("上传文件", "从计算机")},
-    "deepseek": {"button": ("附件", "上传"), "menu": ()},
+    # deepseek 的附件是**没有名字的图标**（UIA 里是空名 ButtonControl），
+    # 只能按"输入框矩形"的相对位置点。比例是 2026-11-12 实测标定的：
+    # 输入框 (-1008,102)-(-231,226)，图标中心 (-305,196)。
+    "deepseek": {"button": ("附件", "上传"), "menu": (), "point": (0.906, 1.48)},
 }
 
 #: 文件对话框里「文件名」输入框与「打开」按钮的稳定 AutomationId。
@@ -168,6 +171,16 @@ def _dialog_open_button(root):
 ATTACH_CLOSE_PREFIXES = ("移除", "close ", "remove ")
 
 
+def _composer_rect(root):
+    """输入框矩形（用来算无名图标的相对位置）。找不到返回 None。"""
+    for node in root.walk():
+        if node.kind == "EditControl" and not node.offscreen:
+            rect = node.control.BoundingRectangle
+            if rect.right > rect.left and rect.bottom > rect.top:
+                return rect
+    return None
+
+
 def clear_attachments(screen, site: str) -> int:
     """移除输入框里已挂的附件。上一轮失败会留下它们，挡住下一次上传。
 
@@ -220,13 +233,20 @@ def upload(screen, site: str, path: str, *, timeout: float = 60.0,
         return UploadResult(False, "page_unreadable", path=path,
                             detail={"error": type(exc).__name__})
 
-    # 附件入口在不同端是 Button 或 Menu（grok 实测是 MenuControl）。
-    button = _find(root, ("ButtonControl", "MenuControl"), spec["button"])
-    if button is None:
-        return UploadResult(False, "attach_not_found", path=path,
-                            detail={"wanted": list(spec["button"])})
-
-    if spec["menu"]:
+    point = spec.get("point")
+    if point:
+        # 无名图标：按输入框矩形的相对位置点。比例随窗口缩放走，不写死屏幕坐标。
+        rect = _composer_rect(root)
+        if rect is None:
+            return UploadResult(False, "composer_not_found", path=path)
+        x = int(rect.left + (rect.right - rect.left) * point[0])
+        y = int(rect.top + (rect.bottom - rect.top) * point[1])
+        _raw_click(x, y)
+    elif spec["menu"]:
+        button = _find(root, ("ButtonControl", "MenuControl"), spec["button"])
+        if button is None:
+            return UploadResult(False, "attach_not_found", path=path,
+                                detail={"wanted": list(spec["button"])})
         # 菜单是 toggle 语义：上一次失败可能把它留开着，再点一次反而关掉。
         # 先看菜单项在不在，在就直接点。
         item = _menu_item(screen, site, spec["menu"])
@@ -248,6 +268,10 @@ def upload(screen, site: str, path: str, *, timeout: float = 60.0,
         except Exception:                 # noqa: BLE001
             _click_node(item)
     else:
+        button = _find(root, "ButtonControl", spec["button"])
+        if button is None:
+            return UploadResult(False, "attach_not_found", path=path,
+                                detail={"wanted": list(spec["button"])})
         if not _click_node(button):
             return UploadResult(False, "attach_unclickable", path=path)
 

@@ -281,6 +281,14 @@ def _clear_composer(screen, site: str) -> bool:
         y = (top + bottom) // 2
         _raw_click(x, y)
         time.sleep(0.3)
+        # **安全闸门**：点完之后焦点必须真的在浏览器窗口上，否则后面的
+        # Ctrl+A / Delete 会发给桌面——2026-11-12 就这样选中了桌面上 155 个图标
+        # 并弹出"移到回收站"的确认框（已取消，未删除任何东西）。
+        import ctypes
+
+        foreground = ctypes.windll.user32.GetForegroundWindow()
+        if screen.target_hwnd and foreground != screen.target_hwnd:
+            return False
         screen.hotkey("ctrl", "a")
         time.sleep(0.1)
         screen.press("delete")
@@ -449,7 +457,10 @@ def _ask_upload_body(site: str, prompt: str, material: Path, cfg, state=None) ->
     if not _upload_settled(site, screen):
         return {"ok": False, "stage": "upload_not_settled", "upload": up.as_dict()}
     # 上传模式材料在附件里，提问用一句短指令即可：长多行提问在部分端会写不进去。
-    ask_text = str(cfg.get("upload_prompt") or prompt)
+    # 每端可覆盖提问：deepseek 看到 `docs/...` 会去仓库找，然后回 NO_ACCESS
+    # （2026-11-12 实测），所以给它一条明确「只读附件」的提问。
+    ask_text = str((cfg.get("upload_prompt_by_site") or {}).get(site)
+                   or cfg.get("upload_prompt") or prompt)
     # 账本优先：已有 accepted/submitting/unknown 就先只读对账，**不重发**。
     gated = _reconcile_gate(screen, site, ask_text)
     if gated is not None:
@@ -509,7 +520,8 @@ def _ask_upload_script(site: str, prompt: str, material: Path, cfg, state=None) 
         return {"ok": False, "stage": "upload_not_settled", "feed": "upload-script",
                 "upload": up.as_dict()}
 
-    ask_text = str(cfg.get("upload_prompt") or prompt)
+    ask_text = str((cfg.get("upload_prompt_by_site") or {}).get(site)
+                   or cfg.get("upload_prompt") or prompt)
     gated = _reconcile_gate(screen, site, ask_text)   # 账本优先，只对账不重发
     if gated is not None:
         gated["upload"] = up.as_dict()

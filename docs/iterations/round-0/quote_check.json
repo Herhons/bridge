@@ -2,9 +2,10 @@
   "summary": {
     "sha": "unknown",
     "valid_seats": [
-      "chatgpt"
+      "chatgpt",
+      "deepseek"
     ],
-    "valid_count": 1,
+    "valid_count": 2,
     "meets_three_vendors": false,
     "seats": {
       "chatgpt": {
@@ -12,6 +13,14 @@
         "hits": 7,
         "total": 9,
         "rate": 0.78,
+        "core": true,
+        "verdict": "true_read"
+      },
+      "deepseek": {
+        "chars": 2183,
+        "hits": 3,
+        "total": 4,
+        "rate": 0.75,
         "core": true,
         "verdict": "true_read"
       },
@@ -179,6 +188,179 @@
         }
       ],
       "few_opinions": false
+    },
+    "deepseek": {
+      "hits": 3,
+      "total": 4,
+      "rate": 0.75,
+      "core": true,
+      "verdict": "true_read",
+      "rows": [
+        {
+          "index": 1,
+          "sections": [
+            "5.3",
+            "14",
+            "8",
+            "5.1",
+            "14.3",
+            "12.5",
+            "12.3"
+          ],
+          "hit": true,
+          "quotes": [
+            {
+              "ref": "未读的回复不进入匿名汇总，也不进入计划。",
+              "hit": true
+            },
+            {
+              "ref": "步骤缺口/停机漏洞",
+              "hit": false
+            },
+            {
+              "ref": "引句多但价值低",
+              "hit": false
+            },
+            {
+              "ref": "章节号 + 概括",
+              "hit": false
+            },
+            {
+              "ref": "2 条精引 + 1 条高价值结构性意见",
+              "hit": false
+            },
+            {
+              "ref": "网页端上传是循环的必备能力，须在 Round 0 修通，并有一次通过的自检验证",
+              "hit": true
+            },
+            {
+              "ref": "上传能力修通",
+              "hit": false
+            },
+            {
+              "ref": "编排器离线单测通过",
+              "hit": false
+            },
+            {
+              "ref": "回退到 paste 继续本轮",
+              "hit": false
+            },
+            {
+              "ref": "正式模式、不是自动降级",
+              "hit": false
+            },
+            {
+              "ref": "上传自检已通过（单席、低风险）",
+              "hit": false
+            },
+            {
+              "ref": "上传自检失败时本轮可显式改配置为 paste 重跑该席，归档记录原因",
+              "hit": false
+            },
+            {
+              "ref": "会审 / 汇总因额度、窗口、锁冲突无法完成，且无法在不违反红线的前提下恢复。",
+              "hit": true
+            },
+            {
+              "ref": "同一张计划推 3 次",
+              "hit": false
+            },
+            {
+              "ref": "同一席发送连续失败",
+              "hit": false
+            },
+            {
+              "ref": "重开该席/重取锁",
+              "hit": false
+            }
+          ],
+          "paths": [
+            {
+              "ref": "STOP.md",
+              "hit": false,
+              "with_line": false
+            }
+          ]
+        },
+        {
+          "index": 2,
+          "sections": [
+            "9.2",
+            "1"
+          ],
+          "hit": true,
+          "quotes": [
+            {
+              "ref": "可以保留验真结果（真读 / 命中率），但不写是谁的意见。",
+              "hit": true
+            },
+            {
+              "ref": "真读/partial",
+              "hit": true
+            }
+          ],
+          "paths": []
+        },
+        {
+          "index": 3,
+          "sections": [
+            "10",
+            "8",
+            "5.3"
+          ],
+          "hit": false,
+          "quotes": [
+            {
+              "ref": "核实必须引用\n问题：Round 0 的核实对象是规格，规格没有稳定行号（修订即变",
+              "hit": false
+            },
+            {
+              "ref": "章节号 + 逐字引句 + 该引句在快照中的偏移/段落序号",
+              "hit": false
+            }
+          ],
+          "paths": [
+            {
+              "ref": "snapshot.json",
+              "hit": false,
+              "with_line": false
+            },
+            {
+              "ref": "plan.md",
+              "hit": false,
+              "with_line": false
+            }
+          ]
+        },
+        {
+          "index": 4,
+          "sections": [
+            "7.3",
+            "1"
+          ],
+          "hit": true,
+          "quotes": [
+            {
+              "ref": "至少 3 家不同厂商给出「真读",
+              "hit": true
+            },
+            {
+              "ref": "3 家不同厂商",
+              "hit": true
+            },
+            {
+              "ref": "3 家中有 DeepSeek 且另 2 家为同一厂商的不同入口",
+              "hit": false
+            },
+            {
+              "ref": "chatgpt + 同源入口 + deepseek",
+              "hit": false
+            }
+          ],
+          "paths": []
+        }
+      ],
+      "few_opinions": true
     },
     "gemini": {
       "hits": 3,

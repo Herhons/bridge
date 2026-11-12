@@ -253,3 +253,22 @@ Herhons 的决定：§5.3 阈值与逐字口径**都不改**，按 §12 停机�
 
 新增 `tests/test_b27_summary_isolation.py`（3 条）：新对话失败则不发送、会话 ID 落到归档、
 无会话 ID 时判 `summary_not_isolated` 且如实记 `None`。
+
+## 19. 修复第 1 项：DeepSeek 真读（2026-11-12 11:00）
+
+**根因**：deepseek 的附件入口在 UIA 里是**空名 ButtonControl**，按名字永远找不到；
+它的位置固定在输入框右下 35×34 图标处。
+
+| 改动 | 文件 | 说明 |
+|---|---|---|
+| 按点位点附件 | `src/qi/upload.py` | `ATTACH["deepseek"]` 增 `point=(0.906, 1.48)`，按**输入框矩形**算（不写死屏幕坐标）；新增 `_composer_rect()` |
+| 每端提问覆盖 | `tools/iterate.py` | `upload_prompt_by_site`：deepseek 看到 `docs/...` 会去仓库找再回 `NO_ACCESS`，给它一条「只读附件」的提问 |
+| **安全闸门** | `tools/iterate.py` | `_clear_composer` 点完必须确认 `GetForegroundWindow()==target_hwnd`，否则**不发** Ctrl+A/Delete |
+
+**安全事件**：定位点位时焦点落到桌面，`Ctrl+A/Delete` 选中了桌面 155 个图标并弹出「移到回收站」确认框。
+**已按「否」取消；回收站近 40 分钟新增 0 条，没有删除任何东西。** 随即加上上面的焦点闸门。
+
+**真机结果**：
+- 上传：`ok 2.7s`；§8 自检 `token_found=true`（答案正是 `BRIDGE-UPLOAD-CHECK-20261111`）；
+- 正式一席：`answered` → 文本兜底取回 2183 字；
+- 验真：**3/4 = 0.75，core=true → true_read**（第 2 家真读）。
