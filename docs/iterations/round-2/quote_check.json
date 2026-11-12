@@ -2,20 +2,21 @@
   "summary": {
     "sha": "unknown",
     "valid_seats": [
+      "chatgpt",
       "deepseek",
       "gemini",
       "grok"
     ],
-    "valid_count": 3,
+    "valid_count": 4,
     "meets_three_vendors": true,
     "seats": {
       "chatgpt": {
         "chars": 2137,
-        "hits": 1,
+        "hits": 6,
         "total": 7,
-        "rate": 0.14,
-        "core": false,
-        "verdict": "unread"
+        "rate": 0.86,
+        "core": true,
+        "verdict": "true_read"
       },
       "deepseek": {
         "chars": 3934,
@@ -27,17 +28,17 @@
       },
       "gemini": {
         "chars": 6114,
-        "hits": 5,
+        "hits": 6,
         "total": 6,
-        "rate": 0.83,
+        "rate": 1.0,
         "core": true,
         "verdict": "true_read"
       },
       "grok": {
         "chars": 2238,
-        "hits": 5,
+        "hits": 6,
         "total": 6,
-        "rate": 0.83,
+        "rate": 1.0,
         "core": true,
         "verdict": "true_read"
       }
@@ -45,11 +46,11 @@
   },
   "detail": {
     "chatgpt": {
-      "hits": 1,
+      "hits": 6,
       "total": 7,
-      "rate": 0.14,
-      "core": false,
-      "verdict": "unread",
+      "rate": 0.86,
+      "core": true,
+      "verdict": "true_read",
       "rows": [
         {
           "index": 1,
@@ -61,11 +62,11 @@
         {
           "index": 2,
           "sections": [],
-          "hit": false,
+          "hit": true,
           "quotes": [
             {
               "ref": "根因不是某个 if 写漏了，而是默认允许盲点盲按。",
-              "hit": false,
+              "hit": true,
               "core": false
             }
           ],
@@ -82,12 +83,12 @@
           "sections": [
             "13"
           ],
-          "hit": false,
+          "hit": true,
           "quotes": [
             {
               "ref": "进程被杀后能从本轮已完成的步骤续跑，且不违反防重发（同一提问已accepted不",
-              "hit": false,
-              "core": false
+              "hit": true,
+              "core": true
             }
           ],
           "paths": []
@@ -95,11 +96,11 @@
         {
           "index": 4,
           "sections": [],
-          "hit": false,
+          "hit": true,
           "quotes": [
             {
               "ref": "_ask_upload_body仍在发送前直接start_new_chat，没有",
-              "hit": false,
+              "hit": true,
               "core": false
             }
           ],
@@ -116,12 +117,12 @@
           "sections": [
             "13"
           ],
-          "hit": false,
+          "hit": true,
           "quotes": [
             {
               "ref": "允许复用现有bridge_server、`tools/live_job.py`、",
-              "hit": false,
-              "core": false
+              "hit": true,
+              "core": true
             }
           ],
           "paths": [
@@ -151,11 +152,11 @@
             "10",
             "12"
           ],
-          "hit": false,
+          "hit": true,
           "quotes": [
             {
               "ref": "tools/sisyphus.py读plan.md条目、按 ID 断点续跑、命中",
-              "hit": false,
+              "hit": true,
               "core": false
             }
           ],
@@ -402,9 +403,9 @@
       "few_opinions": false
     },
     "gemini": {
-      "hits": 5,
+      "hits": 6,
       "total": 6,
-      "rate": 0.83,
+      "rate": 1.0,
       "core": true,
       "verdict": "true_read",
       "rows": [
@@ -413,11 +414,11 @@
           "sections": [
             "15"
           ],
-          "hit": false,
+          "hit": true,
           "quotes": [
             {
               "ref": "现在 submissions.py 只有 draft/submitting/ac",
-              "hit": false,
+              "hit": true,
               "core": false
             },
             {
@@ -458,7 +459,7 @@
           "quotes": [
             {
               "ref": "尚未接线：_ask_upload_body 仍在发送前直接 start_new_",
-              "hit": false,
+              "hit": true,
               "core": false
             },
             {
@@ -517,7 +518,7 @@
           "quotes": [
             {
               "ref": "decide_point(...)：点之前，目标点必须落在目标窗口的客户区内、命",
-              "hit": false,
+              "hit": true,
               "core": false
             },
             {
@@ -548,7 +549,7 @@
           "quotes": [
             {
               "ref": "只定义了 SiteDriver 协议（ensure_session/choose",
-              "hit": false,
+              "hit": true,
               "core": false
             },
             {
@@ -681,7 +682,7 @@
           "quotes": [
             {
               "ref": "tools/sisyphus.py 读 plan.md 条目、按 ID 断点续跑",
-              "hit": false,
+              "hit": true,
               "core": false
             },
             {
@@ -817,9 +818,9 @@
       "few_opinions": false
     },
     "grok": {
-      "hits": 5,
+      "hits": 6,
       "total": 6,
-      "rate": 0.83,
+      "rate": 1.0,
       "core": true,
       "verdict": "true_read",
       "rows": [
@@ -937,12 +938,12 @@
           "sections": [
             "13"
           ],
-          "hit": false,
+          "hit": true,
           "quotes": [
             {
               "ref": "状态机落盘。进程被杀后能从本轮已完成的步骤续跑，且不违反防重发（同一提问已acc",
-              "hit": false,
-              "core": false
+              "hit": true,
+              "core": true
             }
           ],
           "paths": [

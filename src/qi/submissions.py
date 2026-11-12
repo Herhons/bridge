@@ -637,6 +637,68 @@ def finish(endpoint, prompt, result, *, root=None, scope=None, now=None):
         _write(path, record)
 
 
+#: 允许降级的证据键。三项里 `page_empty` 必填，另两项至少一项——
+#: 单凭"页面空白"不足以降级（可能只是还没渲染），必须再有"身份/证据不支持"的旁证。
+DEMOTE_REQUIRED = "page_empty"
+DEMOTE_SUPPORT = ("scope_mismatch", "no_l3")
+
+
+def demote(endpoint, prompt, *, reason: str, evidence: dict, root=None, now=None) -> dict:
+    """`accepted` → `unknown`：**只降一级、只降一次、留审计**。
+
+    为什么需要：accepted 在 `BLOCKING_STATES` 里，一旦记录与页面事实不符
+    （2026-11-12 gemini 汇总：消息上屏后页面被重置，账本仍是 accepted），
+    该提问就永久发不出去，只能人工清账。会审三方一致要求：允许降级，但**不得**
+    降成 draft、不得自动放行重发——`unknown` 仍然拦截，把决定权留给人。
+
+    门槛（缺一不可）：
+      · 记录存在且当前就是 accepted；
+      · 从未降级过（`demotions` 为空）；
+      · `page_empty=True`（页面确实找不到这条消息）；
+      · `scope_mismatch` 或 `no_l3` 至少一条（身份或证据不支持"已提交"）；
+      · `reason` 非空。
+    原 `level` / `scope` / `accepted_at` 全部保留——降级是加一条事实，不是抹掉历史。
+    """
+    path = path_for(endpoint, prompt, root=root)
+    record = read(endpoint, prompt, root=root)
+    view = normalize(record)
+    if not view:
+        return {"ok": False, "reason": "no_record", "path": str(path)}
+    # 先判「降过没有」：降级之后状态已经变成 unknown，先判状态就永远报 not_accepted，
+    # 分不清"本来就不是 accepted"和"已经降过一次"。
+    if record.get("demotions"):
+        return {"ok": False, "reason": "already_demoted",
+                "demotions": len(record.get("demotions") or []), "path": str(path)}
+    current = view.get("v2_state")
+    if current != STATE_ACCEPTED:
+        return {"ok": False, "reason": "not_accepted", "state": current,
+                "path": str(path)}
+    evidence = dict(evidence or {})
+    if not evidence.get(DEMOTE_REQUIRED):
+        return {"ok": False, "reason": "evidence_missing:page_empty", "path": str(path)}
+    if not any(evidence.get(key) for key in DEMOTE_SUPPORT):
+        return {"ok": False, "reason": "evidence_missing:scope_mismatch|no_l3",
+                "path": str(path)}
+    reason = str(reason or "").strip()
+    if not reason:
+        return {"ok": False, "reason": "reason_required", "path": str(path)}
+
+    stamp = now if now is not None else time.time()
+    before = {"state": record.get("state"), "v2_state": current,
+              "level": record.get("level")}
+    record.update({"state": _v1_name(STATE_UNKNOWN), "v2_state": STATE_UNKNOWN,
+                   "submission_count": 1,          # unknown 仍按"可能已发"占位
+                   "demoted_at": stamp, "demote_reason": reason})
+    record.setdefault("demotions", []).append(
+        {"at": stamp, "reason": reason, "evidence": evidence,
+         "from": current, "to": STATE_UNKNOWN})
+    _write(path, record)
+    after = {"state": record.get("state"), "v2_state": record.get("v2_state")}
+    return {"ok": True, "path": str(path), "before": before, "after": after,
+            "blocking": after["v2_state"] in BLOCKING_STATES,
+            "hint": "仍被拦截；确需重发请人工核对后走 submission_clear --state unknown"}
+
+
 def refusal(value):
     """对"不允许发车"的记录给一份统一的拒发结果。"""
     view = normalize(value) or {}

@@ -212,7 +212,14 @@ def normalize_path(raw: str) -> str:
 
 
 def _squash(text: str) -> str:
-    return re.sub(r"\s+", "", text)
+    """判「逐字」前的归一：去掉空白**与 markdown 强调标记**。
+
+    为什么连 `` ` `` 和 `*` 一起去掉：会审方抄写时会丢掉行内代码的反引号
+    （2026-11-12 Round 3 实测 6 条里 5 条只差这个；Round 2 的 chatgpt 也有 2 条），
+    这属于**格式差**，不是改写。`_squash` 原来只去空白，于是逐字正确的引句判不中。
+    下划线不去掉——它是文件名的一部分（`*_use.py`）。
+    """
+    return re.sub(r"[\s`*]+", "", text)
 
 
 def _sections(text: str) -> list[str]:
@@ -441,6 +448,43 @@ VENDORS = ("chatgpt", "grok", "gemini", "deepseek")
 MODEL_WORDS = ("gpt-4", "gpt-5", "claude", "llama", "qwen", "glm", "sonnet", "opus")
 
 
+#: 提取时留在正文里的界面残渣：说话人标签、耗时、附件名标题、占位符。
+RESIDUE_LINE = re.compile(
+    r"^\s*(?:[^\n]{0,12}说[：:]\s*$|用时[^\n]*$|可访问\s*=\s*[是否]\s*$"
+    r"|附件[^\n]{0,40}(?:全文|如下)\s*$|畅所欲问\s*$|问问\s*Gemini\s*$)")
+
+
+def strip_ui_residue(text: str) -> str:
+    """去掉回复开头/结尾的界面残渣（不是意见内容）。
+
+    会审方指出匿名包里出现「ChatGPT说：」「用时 4分钟 41秒」这类东西：
+    它们既暴露来源，又把汇总带偏（2026-11-12 Round 3）。
+    """
+    # 说话人标签可能和正文同一行（`ChatGPT说：可访问=是`），先剥前缀再按行过滤。
+    body = re.sub(r"(?m)^\s*[^\n]{0,12}说[：:]\s*", "", text or "")
+    lines = [line for line in body.splitlines() if not RESIDUE_LINE.match(line)]
+    return "\n".join(line for line in lines if line.strip()).strip()
+
+
+#: 泄漏自检用的名字表：比 `VENDORS + MODEL_WORDS` 宽——替换只处理已知的四端，
+#: 自检要能抓住"我们没列进替换表"的名字（Copilot/Mistral 之类）。
+LEAK_WORDS = (*VENDORS, *MODEL_WORDS,
+              "copilot", "mistral", "kimi", "doubao", "文心", "通义", "豆包")
+
+
+def assert_anonymous(pack: str) -> None:
+    """匿名包发出前自检：仍能看出是哪一端就**拒绝发送**，不靠人眼。"""
+    lowered = (pack or "").lower()
+    leaked = [name for name in LEAK_WORDS
+              if name and re.search(rf"(?i){re.escape(name)}", lowered)]
+    if leaked:
+        raise AnonymityLeak(f"匿名包仍含来源标记：{sorted(set(leaked))}")
+
+
+class AnonymityLeak(RuntimeError):
+    """匿名包没洗干净。宁可整轮失败，也不能把来源带进汇总。"""
+
+
 def anonymize(replies: dict, *, verdicts: dict | None = None) -> str:
     """把四家原文压成匿名包：中性编号 + 去来源 + 只保留真读/部分成立。
 
@@ -455,14 +499,18 @@ def anonymize(replies: dict, *, verdicts: dict | None = None) -> str:
         if verdict not in ("true_read", "partial"):
             continue
         index += 1
-        body = text
+        body = strip_ui_residue(text)
         for vendor in VENDORS:
-            body = re.sub(rf"(?i)\b{vendor}\b", "某端", body)
+            # **不能加 \b**：`ChatGPT说：` 里 T 与「说」都是 \w，`\b` 不成立，
+            # 于是来源署名原样留在匿名包里（2026-11-12 汇总者指出、实测确认）。
+            body = re.sub(rf"(?i){re.escape(vendor)}", "某端", body)
         for word in MODEL_WORDS:
-            body = re.sub(rf"(?i)\b{re.escape(word)}\b", "某模型", body)
+            body = re.sub(rf"(?i){re.escape(word)}", "某模型", body)
         body = re.sub(r"(?i)(我作为|作为)(某模型|某端|AI|助手)", "作为审查者", body)
         blocks.append(f"## F{index}（验真：{verdict}）\n\n{body.strip()}\n")
-    return "\n".join(blocks)
+    pack = "\n".join(blocks)
+    assert_anonymous(pack)
+    return pack
 
 
 def anonymize_prompt(pack: str) -> str:

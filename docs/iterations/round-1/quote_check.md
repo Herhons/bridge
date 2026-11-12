@@ -4,9 +4,9 @@
 
 | 端 | 字数 | 命中 | 总数 | 命中率 | 核心命中 | 判定 |
 |---|---:|---:|---:|---:|---|---|
-| chatgpt | 2087 | 3 | 7 | 0.43 | 是 | partial |
+| chatgpt | 2087 | 6 | 7 | 0.86 | 是 | true_read |
 | deepseek | 3147 | 5 | 5 | 1.0 | 是 | true_read |
 | gemini | 6392 | 5 | 5 | 1.0 | 是 | true_read |
-| grok | 1875 | 3 | 5 | 0.6 | 否 | partial |
+| grok | 1875 | 4 | 5 | 0.8 | 是 | true_read |
 
-有效（真读）：deepseek, gemini；门槛 3 家：未满足
+有效（真读）：chatgpt, deepseek, gemini, grok；门槛 3 家：满足

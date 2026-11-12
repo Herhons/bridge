@@ -41,7 +41,11 @@ def _clock():
 
 def _make(verify=True):
     screen = mock.Mock()
-    screen.clipboard.return_value = "旧剪贴板"
+    # 假剪贴板要能"写进去再读出来"：B30 起粘贴前会读回核对内容，
+    # 固定返回旧值会让它正确地判成"内容不是我们的"。
+    board = {"text": "旧剪贴板"}
+    screen.clipboard.side_effect = lambda: board["text"]
+    screen.set_clipboard.side_effect = lambda value: board.__setitem__("text", value)
     # 每次粘贴读两次序列号（前/后）：必须依次是 100 → 101，否则就是"剪贴板没更新"
     screen.clipboard_seq.side_effect = itertools.cycle([100, 101])
     conv = Conversation(screen, "deepseek", write_verify=verify)

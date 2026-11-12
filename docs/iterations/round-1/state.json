@@ -63,12 +63,14 @@
       "elapsed": 696.7
     },
     "verify": {
-      "at": "2026-11-12T13:54:49+0800",
+      "at": "2026-11-12T15:54:22+0800",
       "valid": [
+        "chatgpt",
         "deepseek",
-        "gemini"
+        "gemini",
+        "grok"
       ],
-      "count": 2
+      "count": 4
     },
     "anonymize": {
       "at": "2026-11-12T12:30:22+0800",

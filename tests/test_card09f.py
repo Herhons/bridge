@@ -99,7 +99,11 @@ class UiLock09f(unittest.TestCase):
 class PasteViaClipboard(unittest.TestCase):
     def make_conv(self):
         screen = mock.Mock()
-        screen.clipboard.return_value = "旧剪贴板"
+        # B30：粘贴前会读回核对内容、恢复前会确认"还是我们写的那一份"，
+        # 所以假剪贴板必须能"写进去再读出来"（固定返回旧值会正确地判成不匹配）。
+        board = {"text": "旧剪贴板"}
+        screen.clipboard.side_effect = lambda: board["text"]
+        screen.set_clipboard.side_effect = lambda value: board.__setitem__("text", value)
         screen.clipboard_seq.return_value = 100
         return Conversation(screen, "test"), screen
 
@@ -135,15 +139,19 @@ class PasteViaClipboard(unittest.TestCase):
             conv._paste_via_clipboard("内容")
         screen.set_clipboard.assert_any_call("旧剪贴板")
 
-    def test_set_clipboard_error_still_restores(self):
-        """第 5 条：连 set_clipboard 都抛异常，恢复路径也要走（尽力恢复）。"""
+    def test_set_clipboard_error_does_not_touch_the_board(self):
+        """写剪贴板就失败了 → 没有"我们的内容"要撤，**不许**再写一次。
+
+        B30 起恢复是"按归属恢复"：只有当前剪贴板仍是我们写进去的那一份才写回旧值。
+        写入本身失败时，剪贴板还是用户原来那份，再写一次等于多此一举、还可能覆盖
+        用户在这一瞬间复制的东西。
+        """
         conv, screen = self.make_conv()
         screen.clipboard_seq.side_effect = [100, 101]
         screen.set_clipboard.side_effect = [RuntimeError("write boom"), None]
         with self.assertRaises(RuntimeError):
             conv._paste_via_clipboard("内容")
-        # 第一次 set_clipboard(text) 抛了，finally 仍再调一次 set_clipboard(previous)
-        self.assertGreaterEqual(screen.set_clipboard.call_count, 2)
+        self.assertEqual(screen.set_clipboard.call_count, 1)
 
 
 # ================================================================ 3/6. 发送逻辑

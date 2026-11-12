@@ -78,6 +78,12 @@ class ResumeTests(unittest.TestCase):
         with mock.patch("sys.stdout"):
             self.assertEqual(sisyphus.main(["next", "--round", "round-1"]), 5)
 
+    def test_status_reports_lock_housekeeping(self):
+        with mock.patch("sys.stdout"):
+            code = sisyphus.main(["status", "--round", "round-1"])
+        self.assertEqual(code, 0)
+        self.assertIn("lock_housekeeping", dir(sisyphus))
+
     def test_hard_stop_blocks_next(self):
         (self.root / "docs/iterations/round-1/plan.md").write_text(
             PLAN + "| S3 | 要登录账号 | x | y |\n", encoding="utf-8")

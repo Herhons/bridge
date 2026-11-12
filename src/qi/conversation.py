@@ -432,6 +432,13 @@ class Conversation:
             raise RuntimeError("输入框不见了")
         return ui.edit_value(editor.control) or ""
 
+    def _clipboard_now(self):
+        """读当前剪贴板；测试用的假 screen 没有这个方法时返回 None（不阻断）。"""
+        try:
+            return self.screen.clipboard()
+        except Exception:                       # noqa: BLE001
+            return None
+
     def _paste_via_clipboard(self, text, *, attempts: int = 0, expect=None):
         """把 text 写入剪贴板（用序列号确认确实更新）再 Ctrl+V；结束恢复原剪贴板。
 
@@ -469,6 +476,13 @@ class Conversation:
             if (seq_before is not None and seq_after is not None
                     and seq_after == seq_before):
                 raise RuntimeError("剪贴板序列号没变：剪贴板未更新，不粘贴")
+            # 序列号变了不等于内容是我们的（别的进程可能同时写剪贴板）。
+            # 读回逐字比一次；不一致就再写一次，仍不一致才拒发——绝不把
+            # 别人的内容 Ctrl+V 进提问框。
+            if not clipboard_matches(text, self._clipboard_now()):
+                self.screen.set_clipboard(text)
+                if not clipboard_matches(text, self._clipboard_now()):
+                    raise RuntimeError("剪贴板内容与写入不一致：不粘贴")
             self.screen.hotkey("ctrl", "v")
             # 等编辑器真的吃掉这次粘贴再还原（见 PASTE_SETTLE）：还原早了等于把
             # 用户剪贴板换回去的同时把这次粘贴打断。
@@ -484,7 +498,10 @@ class Conversation:
                     break
         finally:
             try:
-                self.screen.set_clipboard(previous)
+                # **只恢复自己写进去的那一份**：粘贴期间用户可能已经复制了别的东西，
+                # 无条件写回会把他的新内容冲掉（2026-11-12 会审：按归属恢复）。
+                if clipboard_matches(text, self._clipboard_now()):
+                    self.screen.set_clipboard(previous)
             except Exception:                # noqa: BLE001 - 恢复失败也要尽力吞掉
                 pass
         if self.write_verify and not landed:
@@ -686,6 +703,29 @@ def prompt_nodes(view, prompt):
 
     visit(view.root)
     return found
+
+
+def prompt_fragments(view, prompt, *, min_chars: int = 12, limit: int = 12):
+    """提问被渲染成多块时，找出属于它的叶子文本节点。
+
+    grok 实测：一条提问 = 9~10 个节点（`**`、`只依据第一章`、`**` 各自成块），
+    `prompt_nodes()` 按整段相等匹配会返回 0，于是 5 次读不到就判 `prompt_gone`，
+    明明答案还在生成中就中止了（2026-11-12 两轮都这样）。
+    这里按「整块是提问的连续片段、且 ≥12 字」认领，**只用于判断提问还在不在**。
+    """
+    wanted = "".join(textcmp.normalize(prompt).split())
+    if not wanted:
+        return []
+    out = []
+    for node in view.root.walk():
+        if node.children or node.kind not in ("TextControl", "HyperlinkControl"):
+            continue
+        squashed = "".join(textcmp.normalize(ui.text_of(node)).split())
+        if len(squashed) >= min_chars and squashed in wanted:
+            out.append(node)
+            if len(out) >= limit:
+                break
+    return out
 
 
 def composer_empty(view, placeholders=()) -> bool:
@@ -973,6 +1013,19 @@ def rect_in_window(node, window) -> bool:
         wl, wt, wr, wb = window.left, window.top, window.right, window.bottom
     # 只要求「有一部分在窗口内」：完全在窗口外的才判不可达
     return not (right < wl or left > wr or bottom < wt or top > wb)
+
+
+def clipboard_matches(written: str, actual) -> bool:
+    """剪贴板内容是不是我们刚写进去的那一段。
+
+    读不出来（None）时按"无法核对"放行——不能因为环境不提供读取就拒发；
+    能读到时按归一化文本比（不同应用会把 `\r\n` 换成 `\n`）。
+    """
+    if actual is None:
+        return True
+    left = "\n".join((written or "").replace("\r\n", "\n").split("\n"))
+    right = "\n".join((actual or "").replace("\r\n", "\n").split("\n"))
+    return left == right
 
 
 def _prompt_indices(ordered, prompts, editor) -> tuple[list[int], int]:
@@ -1606,6 +1659,12 @@ def _ask_impl(conversation, prompt, timeout=180.0, pre_send=None, plain=False,
                                 accepted=accepted, baseline=baseline,
                                 composer_len=len(view.value or ""))
             prompts = prompt_nodes(view, prompt)
+            if not prompts:
+                # 整段匹配失败时退回「碎片认领」：只影响"提问还在不在"的判断，
+                # 不会把碎片当身份证据（身份仍由会话 id / 标题戳负责）。
+                fragments = prompt_fragments(view, prompt)
+                if len(fragments) >= 2:
+                    prompts = fragments
             ident = _collection_identity(view)
             stamp = session_stamp(view)
             sid = session_id_of(view.url)

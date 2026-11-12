@@ -87,7 +87,8 @@ def cmd_status(args) -> int:
     for item in items:
         item["status"] = (state["items"].get(item["id"]) or {}).get("status", "pending")
     print(json.dumps({"ok": True, "items": items,
-                      "done": sum(1 for i in items if i["status"] == "done")},
+                      "done": sum(1 for i in items if i["status"] == "done"),
+                      "lock": {k: args.lock.get(k) for k in ("cleared", "reason")}},
                      ensure_ascii=False, indent=2))
     return 0
 
@@ -169,6 +170,27 @@ def cmd_done(args) -> int:
     return 0
 
 
+def lock_housekeeping() -> dict:
+    """开跑前处理「持有者已死」的残留 UI 锁。
+
+    为什么挂在推进器入口：它是每轮第一个被人工/自动化调用的命令，孤儿锁在这里
+    清一次，后面 review / use 脚本就不会先撞一次 Busy 再自愈。
+    **清理失败不阻断**：推进器自己不动网页，清不掉只影响提示，不影响交接。
+    """
+    try:
+        from qi import uilock
+    except Exception as exc:              # noqa: BLE001 - 导入失败只记录
+        return {"cleared": False, "reason": f"import_failed:{type(exc).__name__}"}
+    try:
+        info = uilock.clear_stale()
+    except Exception as exc:              # noqa: BLE001
+        return {"cleared": False, "reason": f"failed:{type(exc).__name__}"}
+    if info.get("cleared"):
+        print(f"[sisyphus] 清掉残留 UI 锁（pid={info.get('pid')} owner={info.get('owner')}）",
+              file=__import__("sys").stderr)
+    return info
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="推进器：只做交接与续跑")
     ap.add_argument("command", choices=("status", "next", "done"))
@@ -176,6 +198,7 @@ def main(argv=None) -> int:
     ap.add_argument("--id")
     ap.add_argument("--note")
     args = ap.parse_args(argv)
+    args.lock = lock_housekeeping()
     if args.command == "status":
         return cmd_status(args)
     if args.command == "next":

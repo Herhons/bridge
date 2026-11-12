@@ -2,19 +2,21 @@
   "summary": {
     "sha": "unknown",
     "valid_seats": [
+      "chatgpt",
       "deepseek",
-      "gemini"
+      "gemini",
+      "grok"
     ],
-    "valid_count": 2,
-    "meets_three_vendors": false,
+    "valid_count": 4,
+    "meets_three_vendors": true,
     "seats": {
       "chatgpt": {
         "chars": 2087,
-        "hits": 3,
+        "hits": 6,
         "total": 7,
-        "rate": 0.43,
+        "rate": 0.86,
         "core": true,
-        "verdict": "partial"
+        "verdict": "true_read"
       },
       "deepseek": {
         "chars": 3147,
@@ -34,21 +36,21 @@
       },
       "grok": {
         "chars": 1875,
-        "hits": 3,
+        "hits": 4,
         "total": 5,
-        "rate": 0.6,
-        "core": false,
-        "verdict": "partial"
+        "rate": 0.8,
+        "core": true,
+        "verdict": "true_read"
       }
     }
   },
   "detail": {
     "chatgpt": {
-      "hits": 3,
+      "hits": 6,
       "total": 7,
-      "rate": 0.43,
+      "rate": 0.86,
       "core": true,
-      "verdict": "partial",
+      "verdict": "true_read",
       "rows": [
         {
           "index": 1,
@@ -62,11 +64,11 @@
           "sections": [
             "3.1"
           ],
-          "hit": false,
+          "hit": true,
           "quotes": [
             {
               "ref": "现已加闸门：点击后必须确认\nGetForegroundWindow()==目标窗",
-              "hit": false,
+              "hit": true,
               "core": false
             }
           ],
@@ -78,12 +80,12 @@
             "7.1",
             "3.2"
           ],
-          "hit": false,
+          "hit": true,
           "quotes": [
             {
               "ref": "遵守防重发：同一提问在该端已\naccepted\n，只读不重发。",
-              "hit": false,
-              "core": false
+              "hit": true,
+              "core": true
             }
           ],
           "paths": []
@@ -97,7 +99,7 @@
           "quotes": [
             {
               "ref": "\nensure_site\n复用已有标签页；页面可能停在上一次的会话（URL 带 ",
-              "hit": false,
+              "hit": true,
               "core": false
             },
             {
@@ -144,12 +146,12 @@
           "sections": [
             "9.1"
           ],
-          "hit": false,
+          "hit": true,
           "quotes": [
             {
               "ref": "\nupload（上传）\n：代码轮从回复中抽取文件路径与行号，以\ngit ls-t",
-              "hit": false,
-              "core": false
+              "hit": true,
+              "core": true
             }
           ],
           "paths": []
@@ -179,7 +181,7 @@
             },
             {
               "ref": "根因是整套流程用「屏幕坐标 + 全局按键",
-              "hit": false,
+              "hit": true,
               "core": false
             },
             {
@@ -238,7 +240,7 @@
           "quotes": [
             {
               "ref": "\nensure_site\n复用已有标签页；页面可能停在上一次的会话（URL 带 ",
-              "hit": false,
+              "hit": true,
               "core": false
             },
             {
@@ -284,7 +286,7 @@
             },
             {
               "ref": "\n_clear_composer\n/ 发送键在多条路径里各点一次；失败重试时会再",
-              "hit": false,
+              "hit": true,
               "core": false
             },
             {
@@ -333,8 +335,8 @@
             },
             {
               "ref": "推进器默认自跑，不逐轮等 Herhons。",
-              "hit": false,
-              "core": false
+              "hit": true,
+              "core": true
             },
             {
               "ref": "除这四种之外，不得以「等批准",
@@ -394,7 +396,7 @@
           "quotes": [
             {
               "ref": "但根因是整套流程用「屏幕坐标 + 全局按键",
-              "hit": false,
+              "hit": true,
               "core": false
             }
           ],
@@ -418,7 +420,7 @@
           "quotes": [
             {
               "ref": "conversation.ask 超时后，重试路径会重新 start_new_c",
-              "hit": false,
+              "hit": true,
               "core": false
             },
             {
@@ -457,7 +459,7 @@
           "quotes": [
             {
               "ref": "ensure_site 复用已有标签页；页面可能停在上一次的会话（URL 带 s",
-              "hit": false,
+              "hit": true,
               "core": false
             },
             {
@@ -508,7 +510,7 @@
             },
             {
               "ref": "四端各有 *_use.py / *_choose.py，qi/ 下有 39 个模",
-              "hit": false,
+              "hit": true,
               "core": false
             },
             {
@@ -570,8 +572,8 @@
             },
             {
               "ref": "闸门已关闭（2026-11-12 10:42，Herhons 批准）：核实通过即",
-              "hit": false,
-              "core": false
+              "hit": true,
+              "core": true
             },
             {
               "ref": "推进器只负责交接与续跑、按 Gemini 汇总的计划推进",
@@ -620,8 +622,8 @@
             },
             {
               "ref": "upload（上传）：代码轮从回复中抽取文件路径与行号，以 git ls-tre",
-              "hit": false,
-              "core": false
+              "hit": true,
+              "core": true
             },
             {
               "ref": "文件路径+行号",
@@ -766,20 +768,20 @@
       "few_opinions": false
     },
     "grok": {
-      "hits": 3,
+      "hits": 4,
       "total": 5,
-      "rate": 0.6,
-      "core": false,
-      "verdict": "partial",
+      "rate": 0.8,
+      "core": true,
+      "verdict": "true_read",
       "rows": [
         {
           "index": 1,
           "sections": [],
-          "hit": false,
+          "hit": true,
           "quotes": [
             {
               "ref": "根因是整套流程用「屏幕坐标 + 全局按键",
-              "hit": false,
+              "hit": true,
               "core": false
             }
           ],
@@ -830,8 +832,8 @@
             },
             {
               "ref": "编排器 | 本规格要求 WorkBuddy 建成的程序（复用现有 bridge_",
-              "hit": false,
-              "core": false
+              "hit": true,
+              "core": true
             }
           ],
           "paths": []

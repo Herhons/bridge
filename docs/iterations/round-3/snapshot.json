@@ -1,0 +1,8 @@
+{
+  "repo": "https://github.com/Herhons/bridge",
+  "branch": "public",
+  "sha": "f67fd8d28275fba3d8c1e1037cab93ad81dd7889",
+  "round": "round-3",
+  "date": "2026-11-12T15:05:00+08:00",
+  "note": "Round 3：账本降级、驱动适配、孤儿锁、剪贴板"
+}

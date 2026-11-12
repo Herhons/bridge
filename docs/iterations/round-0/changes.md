@@ -463,3 +463,74 @@ after  clear: 10 (回到占位符)
 
 - `conversation.rect_in_window` + 新增 `tests/test_b29_offscreen_actions.py`（7 条）；
 - 未改任何阈值、未改规格；`docs/self_iteration_spec.md` 零改动。
+
+## 25. Round 3（2026-11-12 15:05–16:15）
+
+### 25.1 会审：gemini 全程拒答，三席成轮
+
+| 端 | 字数 | 结果 |
+|---|---:|---|
+| chatgpt | 2097 | `answered`（出屏兜底在流程内生效） |
+| deepseek | 4528 | `text_extracted` |
+| grok | 2308 | `text_extracted`（`prompt_gone` 老问题） |
+| gemini | 20 | **拒答**：「我是一个语言模型，这超出了我的设计用途」 |
+
+gemini 的排查记录（都做了，不是没试）：
+- 换措辞（中性「文档评审」）→ 同一句拒答；
+- 换小文件（5 行、无害内容）→ 仍拒答；
+- 换档位 `pro` → 被 `tier_guard` 挡回（review 只认 argon）；
+- 新会话问「1+1 等于几」→ 发送挂住，30s 内无回复，页面停在 `/app`（0 消息）。
+结论：该账号/模型进入拒答状态，**不是附件或措辞问题**。按 §7.3 用三席成轮。
+
+### 25.2 验真口径又一处失真（这次影响三轮）
+
+`_squash` 只去空白，而模型抄写时会**丢掉行内代码的反引号**：
+`「现在的后果：`accepted`属于拦截集合…只能人工`submission_clear`。」` → 抄成
+`…只能人工submission_clear。」`（其余逐字一致）。于是逐字正确的引句判不中。
+
+修法：`_squash` 同时忽略 `` ` `` 与 `*`（**不动下划线**，那是文件名的一部分）。
+三轮复算：
+
+| 轮 | 端 | 旧 | 新 |
+|---|---|---|---|
+| Round 1 | chatgpt / deepseek / gemini / grok | 3/7 / 5/5 / 5/5 / 3/5 | **6/7 / 5/5 / 5/5 / 4/5** |
+| Round 2 | chatgpt / deepseek / gemini / grok | 1/7 / 4/5 / 5/6 / 5/6 | **6/7 / 4/5 / 6/6 / 6/6** |
+| Round 3 | chatgpt / deepseek / grok | 2/7 / 4/6 / 3/7 | **6/7 / 6/6 / 6/7** |
+
+**必须更正我之前的判断**：Round 2 我说「chatgpt 在转述、判不中是诚实的」——**那是错的**。
+当时用的是被截断的取回文本；重取后再叠加反引号问题，才得出错误结论。
+两轮都只有 2 家真读的"事实"，其实一部分是测量造成的。
+
+### 25.3 汇总：gemini 不可用，改由 chatgpt 代汇总（偏离已记录）
+
+`cmd_summarize` 新增 `--site`：非 gemini 时走「附件 + 短指令」，同样**强制新开对话**、
+同样把 `session_id` 与 `summarizer` 写进 `gemini_summary.json`。
+
+- 第一次：`session_id=6af56c00-ef48-83ea-93c9-4f1b29366dd4`，1093 字；
+- 第二次（清洗后重跑）：**复用了同一个会话**（session_id 未变）→ 修 `force_new`：
+  汇总不允许走会话锚点；
+- 第三/四次（强制新会话）：`user_took_over` / `interrupted`（用户开始使用机器，前台被抢），
+  0 字。因此**保留第一次输出**，并在 `gemini_summary.json` 标 `pack_dirty=true`
+  说明"该次附件含残渣，已在之后修掉"。
+
+### 25.4 施工（P1–P7）
+
+| ID | 内容 | 位置 |
+|---|---|---|
+| P1 | `accepted→unknown` 一次性降级：`page_empty` 必填 + `scope_mismatch`/`no_l3` 之一；保留原证据；仍拦截 | `src/qi/submissions.py::demote`、`tools/submission_demote.py` |
+| P2 | 剪贴板写后**内容**核对 + **按归属**恢复（用户中途复制的新内容不被冲掉） | `src/qi/conversation.py` |
+| P3 | 推进器入口清孤儿锁（失败只告警，不阻断——它不动 UI） | `tools/sisyphus.py` |
+| P4 | 驱动边界 AST 检查：禁 import 发送栈/账本/锁，禁 `ask/reserve/pending` | `tests/test_b30_driver_boundary.py` |
+| P5 | 提问碎片认领（grok 9~10 节点）：仅用于"提问还在不在" | `src/qi/conversation.py::prompt_fragments` |
+| P6 | 匿名包去来源：`\b` 对中文边界失效 → 去掉边界；去说话人/残渣；`assert_anonymous` 泄漏即抛 | `src/qi/iteration.py` |
+| P7 | 上传前校验文件存在（不存在时不要弹对话框） | `src/qi/upload.py` |
+
+新增用例 24 条（demote 7 / clipboard 6 / driver 3 / fragments 4 / anonymity 4）；
+同时把 `test_card09f`、`test_b19_ds_write` 里的假剪贴板改成"能写能读"（旧假实现无法表达真实剪贴板）。
+
+### 25.5 遗留（Round 4）
+
+1. R3-2 写账所有权（reservation_id）——会审三方都点了，但要动 `_Ledger` 与门禁接口；
+2. R3-5 收卷主路径统一到 `_prompt_span`（现在只有取回侧用）；
+3. R3-6 驱动实现迁移（第一步只抽 gemini upload）；
+4. gemini 账号的拒答状态需要人工确认（这是唯一需要人看一眼的点，但不属于四种停机）。

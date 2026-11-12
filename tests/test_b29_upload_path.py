@@ -26,6 +26,12 @@ class AbsolutePathTests(unittest.TestCase):
         src = str(Path(ROOT / "docs" / "x.md"))
         self.assertEqual(upload._absolute(src), str(Path(src).resolve()))
 
+    def test_missing_file_is_refused_before_dialog(self):
+        # 路径不存在时不要点附件、不要弹对话框（否则会被误记成 dialog_stuck）
+        source = (ROOT / "src" / "qi" / "upload.py").read_text(encoding="utf-8-sig")
+        self.assertIn('return UploadResult(False, "file_not_found", path=path)', source)
+        self.assertIn("if not Path(path).is_file():", source)
+
     def test_wiring_happens_before_dialog(self):
         source = (ROOT / "src" / "qi" / "upload.py").read_text(encoding="utf-8-sig")
         self.assertIn("path = _absolute(path)", source)

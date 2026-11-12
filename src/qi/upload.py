@@ -231,6 +231,10 @@ def upload(screen, site: str, path: str, *, timeout: float = 60.0,
     # 文件对话框按**它自己的**当前目录解析路径：传相对路径时永远打不开，
     # 表现为「点了打开、对话框不关」（2026-11-12 实测 dialog_stuck）。
     path = _absolute(path)
+    # 路径不存在时对话框同样不关，且会被误记成 dialog_stuck（真的错因是文件没有）。
+    # 先在这里拦住：不开对话框、不留残窗。
+    if not Path(path).is_file():
+        return UploadResult(False, "file_not_found", path=path)
     filename = path.replace("\\", "/").rsplit("/", 1)[-1]
     needle = filename if expect is None else expect
     started = time.time()

@@ -731,7 +731,8 @@ def _clear_stale_lock(state=None) -> dict:
     return info
 
 
-def _ask_upload(site: str, prompt: str, material: Path, cfg, state=None) -> dict:
+def _ask_upload(site: str, prompt: str, material: Path, cfg, state=None,
+                force_new: bool = False) -> dict:
     """上传 + 短提问。**整段持 UI 锁**：这段时间全是网页端动作。
 
     离线步骤（验真、匿名、归档）一律不取锁——锁只在"要动网页"的时候存在。
@@ -740,16 +741,21 @@ def _ask_upload(site: str, prompt: str, material: Path, cfg, state=None) -> dict
 
     with uilock.hold(f"iterate:upload:{site}",
                      timeout=float(cfg.get("ui_lock_timeout", 180))):
-        return _ask_upload_body(site, prompt, material, cfg, state)
+        return _ask_upload_body(site, prompt, material, cfg, state, force_new)
 
 
-def _ask_upload_body(site: str, prompt: str, material: Path, cfg, state=None) -> dict:
+def _ask_upload_body(site: str, prompt: str, material: Path, cfg, state=None,
+                     force_new: bool = False) -> dict:
     from qi import conversation, upload
 
     screen = _screen_for(site)
     _clear_composer(screen, site)
     # S3：先看锚点再决定要不要新开。漂移就回跳；已 accepted 还漂移就硬停，绝不新建。
-    plan = _session_plan(screen, site, state)
+    # 汇总必须**每次**新开对话：同一个会话里既有原意见又有汇总，匿名就白做了。
+    # 锚点机制是为"续跑同一次会审"设计的，不能用在汇总上（2026-11-12 实测：
+    # 第二次汇总复用了第一次的会话，session_id 完全没变）。
+    plan = ({"action": "new_allowed", "url": ""} if force_new
+            else _session_plan(screen, site, state))
     if plan["action"] == "session_lost":
         return {"ok": False, "stage": "session_lost", "feed": "upload",
                 "hint": "锚点漂移且已 accepted；按 §10 不新建、不重发，保留账本"}
@@ -1161,6 +1167,39 @@ def cmd_anonymize(args, cfg) -> int:
     return 0
 
 
+def _summarize_via_site(args, cfg, state, site: str) -> int:
+    """用非 Gemini 的端做汇总（附件 + 短指令），并归档会话 id 与汇总方。"""
+    pack_file = round_dir(args.round) / "anonymous_pack.md"
+    ask = str((cfg.get("summary_prompt_by_site") or {}).get(site)
+              or cfg.get("summary_prompt")
+              or "附件是匿名审查意见。请按四点汇总：1) 按主题聚类并注明合并了哪几条；"
+                 "2) 标出冲突；3) 按对本项目的好处排序；4) 你要补充的新缺陷单独列在「汇总者新增」。"
+                 "不要猜来源，1500 字内。")
+    local = dict(cfg)
+    local.pop("upload_prompt", None)
+    local["upload_prompt_by_site"] = {}
+    result = _ask_upload(site, ask, pack_file, local, state, force_new=True)
+    reply = result.get("reply") or ""
+    url = _url_now(_screen_for(site), site)
+    session_id = conversation_session_id(url) if url else None
+    payload = {"summarizer": site, "session_id": session_id, "url": url,
+               "chars": len(reply), "stage": result.get("stage"),
+               "at": time.strftime("%Y-%m-%dT%H:%M:%S%z")}
+    (round_dir(args.round) / "gemini_summary.json").write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    (round_dir(args.round) / "gemini_summary.md").write_text(reply, encoding="utf-8")
+    state.mark("summarize", {"chars": len(reply), "session_id": session_id,
+                             "summarizer": site})
+    if not result.get("ok") or session_id is None:
+        print(json.dumps({"ok": False, "stage": result.get("stage") or "summary_not_isolated",
+                          "summarizer": site, "session_id": session_id,
+                          "chars": len(reply)}, ensure_ascii=False))
+        return 1
+    print(json.dumps({"ok": True, "summarizer": site, "chars": len(reply),
+                      "session_id": session_id}, ensure_ascii=False))
+    return 0
+
+
 def cmd_summarize(args, cfg) -> int:
     """匿名包 → Gemini 汇总。**必须先开新对话**，并把会话 ID 记进归档。
 
@@ -1172,6 +1211,11 @@ def cmd_summarize(args, cfg) -> int:
 
     state = it.State.load(ROOT, args.round)
     _clear_stale_lock(state)
+    site = (getattr(args, "site", None) or "gemini").strip().lower()
+    if site != "gemini":
+        # 换汇总方（规格默认 Gemini）。gemini 拒答时的退路：同样必须新开对话、
+        # 同样把会话 id 写进归档，只把"谁来汇总"如实记下来。
+        return _summarize_via_site(args, cfg, state, site)
     pack = (round_dir(args.round) / "anonymous_pack.md").read_text(encoding="utf-8")
     prompt = it.anonymize_prompt(pack)
     screen = _screen_for("gemini")
