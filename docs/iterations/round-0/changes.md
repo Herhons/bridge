@@ -240,3 +240,16 @@ Herhons 的决定：§5.3 阈值与逐字口径**都不改**，按 §12 停机�
 新增 `tests/test_b27_resume.py`（12 条）：身份稳定/可区分、`pack_chunks_with_ids`、schema 落盘、
 老状态兼容、跳过已发、账本三种状态的闸门、**杀进程模拟**（`sending` 段在页面上→不重发；不在→补发；
 全发过→只读不发）。
+
+## 18. 修复第 5 项：Gemini 汇总新对话 + 会话 ID（2026-11-12 10:45）
+
+`cmd_summarize` 改成：
+1. 先 `start_new_chat(screen, "gemini")`，**没开成就不发**（返回 `new_chat_failed`）；
+2. 发送段纳入 UI 锁（`iterate:summarize:gemini`）；
+3. 收卷后读页面 URL，`session_id_of()` 存进两处：
+   - `gemini_summary.json`：`{session_id, url, chars, stage, at}`
+   - `state.json` 的 `steps.summarize.session_id`
+4. 页面没有会话 id → `summary_not_isolated`（退出码 1），归档仍写但标记为不可信。
+
+新增 `tests/test_b27_summary_isolation.py`（3 条）：新对话失败则不发送、会话 ID 落到归档、
+无会话 ID 时判 `summary_not_isolated` 且如实记 `None`。

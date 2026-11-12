@@ -833,21 +833,57 @@ def cmd_anonymize(args, cfg) -> int:
 
 
 def cmd_summarize(args, cfg) -> int:
-    from qi import conversation
+    """匿名包 → Gemini 汇总。**必须先开新对话**，并把会话 ID 记进归档。
 
+    为什么必须新开：汇总者与四审里都有 gemini，同一个会话等于让它"认出自己"，
+    匿名就白做了（规格 §9.2，chatgpt/grok 都点过这条）。
+    会话 ID 是"确实换了会话"的唯一客观证据——只写"我开了新对话"不算。
+    """
+    from qi import conversation, ui, uilock
+
+    state = it.State.load(ROOT, args.round)
+    _clear_stale_lock(state)
     pack = (round_dir(args.round) / "anonymous_pack.md").read_text(encoding="utf-8")
     prompt = it.anonymize_prompt(pack)
     screen = _screen_for("gemini")
-    conv = conversation.Conversation(screen, "gemini")
-    result = conversation.ask(conv, prompt, timeout=cfg["review_timeout"],
-                              purpose="review")
+    _clear_composer(screen, "gemini")
+    with uilock.hold("iterate:summarize:gemini",
+                     timeout=float(cfg.get("ui_lock_timeout", 180))):
+        if not start_new_chat(screen, "gemini"):
+            print(json.dumps({"ok": False, "stage": "new_chat_failed",
+                              "hint": "汇总必须新开对话；没开成就不发"},
+                             ensure_ascii=False))
+            return 1
+        _refresh_tier("gemini")          # 回执一次性
+        conv = _conversation(screen, "gemini")
+        result = conversation.ask(conv, prompt, timeout=cfg["review_timeout"],
+                                  purpose="review")
+
+    url = ""
+    try:
+        _control, url = ui.document(screen.target_hwnd, "gemini")
+    except Exception:                     # noqa: BLE001 - 读不到就记 None，由判定兜底
+        pass
+    session_id = conversation_session_id(url) if url else None
+    reply = result.get("reply") or ""
+    payload = {"session_id": session_id, "url": url, "chars": len(reply),
+               "stage": result.get("stage"), "at": time.strftime("%Y-%m-%dT%H:%M:%S%z")}
+    (round_dir(args.round) / "gemini_summary.json").write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    (round_dir(args.round) / "gemini_summary.md").write_text(reply, encoding="utf-8")
+    state.mark("summarize", {"chars": len(reply), "session_id": session_id})
+
     if not result.get("ok"):
-        print(json.dumps({"ok": False, "stage": result.get("stage")}, ensure_ascii=False))
+        print(json.dumps({"ok": False, "stage": result.get("stage"),
+                          "session_id": session_id}, ensure_ascii=False))
         return 1
-    (round_dir(args.round) / "gemini_summary.md").write_text(
-        result.get("reply") or "", encoding="utf-8")
-    it.State.load(ROOT, args.round).mark("summarize", {"chars": len(result.get("reply") or "")})
-    print(json.dumps({"ok": True, "chars": len(result.get("reply") or "")}, ensure_ascii=False))
+    if session_id is None:
+        # 页面没带会话 id = 没有真正进入新会话，汇总结果不可信。
+        print(json.dumps({"ok": False, "stage": "summary_not_isolated",
+                          "session_id": None, "chars": len(reply)}, ensure_ascii=False))
+        return 1
+    print(json.dumps({"ok": True, "chars": len(reply), "session_id": session_id},
+                     ensure_ascii=False))
     return 0
 
 
