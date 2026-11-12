@@ -1,6 +1,6 @@
 # 自迭代循环状态（Herhons 10:42 新规后）
 
-更新时间：2026-11-12 17:55
+更新时间：2026-11-12 18:05
 规则：计划闸门已关闭（规格 §10）；停机只分 A 类（花钱/登录/删数据/动 v0.0.8）与 B 类（技术性）。
 本文不是"等批准"的 STOP，而是**交接与续跑用的状态**。
 
@@ -77,7 +77,11 @@ py -3.10 -B tools/iterate.py review --round round-3 --site gemini --force
   不再留下永久拦住的 unknown 假账。真机 `stage=send_unavailable`、12.1s 返回。
 - **B35 子进程超时**：4 处 `subprocess.run(timeout=…)` 没接 `TimeoutExpired`，
   卡住时整个命令以 traceback 收场、归档无结果。新增 `_run_or_timeout()` 统一接住。
-- 全量 **1742 用例 OK**。
+- **B36 锁用例隔离**：`test_b13_lock.TurnTests` 没隔离全局 `runs/turn/*.lock`，
+  `started.wait(2)` 偶发超时，会**随机挡住 pre-push**（已实测撞到一次）。setUp 里
+  把 `uilock.ROOT` patch 到临时目录。
+- 全量 **1742 用例 OK**（另有一次 `progress.json` 5s 锁超时，单独重跑 3 次全绿，
+  属负载抖动，未改常量）。
 
 ## Round 4 会审：归档失败（3 家凑不齐）
 

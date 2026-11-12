@@ -699,3 +699,40 @@ hint = `发送键不可用（1 个存在 / 0 个可用），且页面提示用�
 新增 3 条用例（`test_b33_review_budget.py` 的 `SubprocessTimeout`）：
 超时变结构化结果、正常路径原样透传、**扫源码**禁止再出现裸的
 `subprocess.run(... timeout=...)`。全量 **1742 用例 OK**。
+
+## 31. B36：锁用例的全局文件没隔离，会随机挡住推送（18:00 起）
+
+推送 `efaa83f` 时 pre-push 报 `FAILED (failures=1)`：
+
+```
+FAIL: test_same_endpoint_excludes_but_does_not_block_the_ui_lock (test_b13_lock.TurnTests)
+  self.assertTrue(started.wait(2))
+AssertionError: False is not true
+```
+
+同一份代码在本地跑全量是绿的，日志开头是 `[lock] UI busy: owner=holder pid=…`。
+根因不是并发逻辑，是**测试没隔离全局锁文件**：`uilock.lock_path()` 落在
+`tier_guard.ROOT/runs`，上一条用例（或别的进程）留下的 `runs/turn/*.lock`
+会让 holder 线程卡在 `turn(timeout=5)` 里，2 秒的 `started.wait(2)` 自然超时。
+机器负载高时必现 —— 这条会**随机拦截每一次推送**。
+
+改法：`TurnTests.setUp` 把 `uilock.ROOT` patch 到临时目录（`addCleanup` 清理）。
+10 条用例全绿。
+
+顺带说明：pre-push 里 `Ran 1666 tests` 比本地少 76 条，是因为钩子在 `public`
+分支上跑，而 `git checkout <wip> -- tests` **只覆盖同名文件、不删除** public 独有
+的测试。这个差异不影响判据（失败的是 public 也有的那条），但读数字时会困惑。
+
+### 31.1 另一条环境性抖动（观察，未改）
+
+同一次排查里还撞到一次：
+
+```
+FAIL: test_workflow_cli_mutation_shares_notify_lock_too
+AssertionError: [TimeoutError('等 progress.json 的文件锁超过 5.0s')] is not false
+```
+
+单独连跑 3 次全绿，重跑全量也绿。`progress.LOCK_TIMEOUT = 5.0` 对真实场景是够的
+（`workflow.move` 里的持锁是毫秒级），这次是**机器被别的任务压住**导致的调度饥饿。
+**没有**改这个常量，也**没有**给这条用例加容差 —— 那是拿产品语义去迁就测试环境。
+记在这里是为了下次再看到它时不用重新排查。

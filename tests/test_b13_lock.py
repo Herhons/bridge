@@ -110,6 +110,25 @@ class SectionTests(unittest.TestCase):
 
 
 class TurnTests(unittest.TestCase):
+    def setUp(self):
+        """把锁文件根目录挪到临时目录。
+
+        不隔离的话，`runs/turn/*.lock`、`runs/ui.lock` 是**全局**文件：上一条用例
+        或别的进程留下的锁会让 holder 线程卡在 `turn(timeout=5)` 里，于是
+        `started.wait(2)` 偶发失败。2026-11-12 就是这样误拦了一次推送
+        （`test_same_endpoint_excludes_but_does_not_block_the_ui_lock`，
+        `AssertionError: False is not true`，日志开头是 `[lock] UI busy: owner=…`）。
+        """
+        import shutil
+        import tempfile
+        from unittest.mock import patch
+
+        self._tmp = tempfile.mkdtemp(prefix="b13-lock-")
+        self.addCleanup(shutil.rmtree, self._tmp, True)
+        patcher = patch.object(uilock, "ROOT", Path(self._tmp))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_turn_uses_its_own_file(self):
         self.assertEqual(uilock.lock_path(name="gemini").name, "gemini.lock")
         self.assertNotEqual(uilock.lock_path(name="gemini"), uilock.lock_path())
