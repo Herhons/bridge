@@ -265,36 +265,17 @@ def _join_by_lines(items) -> str:
 
 
 def _merged_blocks(texts):
-    """把所有块拼成一整串，并记录每块占的字符区间。
+    """委托：实现只在 `qi.conversation.merged_blocks`（定位与取回共用一套规则）。"""
+    from qi import conversation
 
-    为什么要拼：grok 把一条提问拆成 9~10 个节点（`**`、`只依据第一章`、`**`…），
-    任何"单块匹配"的判据都会在气泡中间断掉。拼起来才能确定气泡的**起止块**。
-    """
-    parts, spans, offset = [], [], 0
-    for text in texts:
-        # 去掉 markdown 强调符号：grok 把 `**` 渲染成**独立节点**，
-        # 留在拼接串里会把提问切成两半，needle 永远匹配不上（2026-11-12 实测）。
-        squashed = "".join(text.split()).replace("*", "")
-        parts.append(squashed)
-        spans.append((offset, offset + len(squashed)))
-        offset += len(squashed)
-    return "".join(parts), spans
+    return conversation.merged_blocks(texts)
 
 
 def _prompt_span(texts, needle: str, start_at: int = 0):
-    """在拼接文本里找 `needle`，返回 `(首块, 末块, 结束偏移)`；找不到返回 None。"""
-    if not needle:
-        return None
-    merged, spans = _merged_blocks(texts)
-    pos = merged.find(needle, start_at)
-    if pos < 0:
-        return None
-    end = pos + len(needle)
-    first = next((i for i, (_a, b) in enumerate(spans) if b > pos), None)
-    last = next((i for i, (_a, b) in enumerate(spans) if b >= end), None)
-    if first is None or last is None:
-        return None
-    return first, last, end
+    """委托：实现只在 `qi.conversation.prompt_span`。"""
+    from qi import conversation
+
+    return conversation.prompt_span(texts, needle, start_at=start_at)
 
 
 def is_progress_noise(text: str) -> bool:
@@ -795,14 +776,20 @@ def _ask_upload_body(site: str, prompt: str, material: Path, cfg, state=None,
                      prompt_id, accepted=bool(result.get("ok")
                                               or result.get("submission") == "accepted"))
     if not result.get("ok") and result.get("stage") in ("timeout", "interrupted", "harvest_timeout"):
+        # 兜底会**覆盖** result：把 ask 的失败细节先留一份，否则事后完全看不出
+        # 为什么这一席要走兜底（Round 3 的 grok 就是这样丢掉了 timeout_kind）。
+        failure = {key: result.get(key) for key in
+                   ("stage", "timeout_kind", "reason", "diagnostics", "warnings")
+                   if result.get(key) is not None}
         harvested = harvest_reply(screen, site, wait=float(cfg.get("harvest_wait", 420)))
         if harvested["ok"]:
-            result = harvested
+            result = {**harvested, "ask_failure": failure}
         else:
             # 复制键点不到时，直接从控件树读（答案确实在，只是动作条不可点）。
             text = read_answer_text(screen, site, ask_text)
             if len(text) >= 300:
-                result = {"ok": True, "stage": "text_extracted", "reply": text}
+                result = {"ok": True, "stage": "text_extracted", "reply": text,
+                          "ask_failure": failure}
     result["feed"] = "upload"
     result["upload"] = up.as_dict()
     return result

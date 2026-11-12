@@ -637,6 +637,36 @@ def finish(endpoint, prompt, result, *, root=None, scope=None, now=None):
         _write(path, record)
 
 
+def adopt_owned(endpoint, prompt, *, scope=None, root=None) -> dict:
+    """这次调用能不能"认领"门禁事先写好的那条预约。
+
+    为什么需要：`_Ledger.adopt()` 原来只把 `reserved` 置 True，等于"门禁说预约过，
+    我就信"。过期回执（上一轮/别的会话留下的）于是会被当成本次预约，后续终态写账
+    就会改掉旧记录（2026-11-12 Round 3 会审三方都点了这条）。
+
+    判据只到「同一个窗口、同一个站」这一层：
+      · 记录不存在            -> reservation_missing
+      · 站点不同              -> site_mismatch
+      · 两边都有 hwnd 且不同  -> hwnd_mismatch
+    为什么不逐字段比 `reconcile` 那一套：发送时新会话还没生成 session_id，
+    doc_rid 也会因为新开对话而变；按那里比会把**每一次正常首发**都拒掉。
+    adopt 只需要挡住"上一轮/别的窗口留下的过期回执"，窗口级身份足够，
+    真正的严格比对在恢复阶段由 `reconcile()` 做。
+    """
+    record = read(endpoint, prompt, root=root)
+    if not record:
+        return {"ok": False, "reason": "reservation_missing"}
+    stored = clean_scope(record.get("scope"))
+    now = clean_scope(scope)
+    if stored and now:
+        if stored.get("site") and now.get("site") and stored["site"] != now["site"]:
+            return {"ok": False, "reason": "site_mismatch"}
+        if stored.get("hwnd") is not None and now.get("hwnd") is not None \
+                and stored["hwnd"] != now["hwnd"]:
+            return {"ok": False, "reason": "hwnd_mismatch"}
+    return {"ok": True, "v2_state": (normalize(record) or {}).get("v2_state")}
+
+
 #: 允许降级的证据键。三项里 `page_empty` 必填，另两项至少一项——
 #: 单凭"页面空白"不足以降级（可能只是还没渲染），必须再有"身份/证据不支持"的旁证。
 DEMOTE_REQUIRED = "page_empty"

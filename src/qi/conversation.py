@@ -705,6 +705,38 @@ def prompt_nodes(view, prompt):
     return found
 
 
+def merged_blocks(texts):
+    """把所有块拼成一整串，并记录每块占的字符区间。
+
+    **提问定位与答案取回共用这一处**（2026-11-12 Round 3 会审：两边各写一套，
+    改一边忘另一边）。markdown 强调符号要去掉——grok 把 `**` 渲染成独立节点，
+    留在串里会把提问切成两半。
+    """
+    parts, spans, offset = [], [], 0
+    for text in texts:
+        squashed = "".join(str(text or "").split()).replace("*", "")
+        parts.append(squashed)
+        spans.append((offset, offset + len(squashed)))
+        offset += len(squashed)
+    return "".join(parts), spans
+
+
+def prompt_span(texts, needle: str, start_at: int = 0):
+    """在拼接文本里找 `needle`，返回 `(首块, 末块, 结束偏移)`；找不到返回 None。"""
+    if not needle:
+        return None
+    merged, spans = merged_blocks(texts)
+    pos = merged.find(needle, start_at)
+    if pos < 0:
+        return None
+    end = pos + len(needle)
+    first = next((i for i, (_a, b) in enumerate(spans) if b > pos), None)
+    last = next((i for i, (_a, b) in enumerate(spans) if b >= end), None)
+    if first is None or last is None:
+        return None
+    return first, last, end
+
+
 def prompt_fragments(view, prompt, *, min_chars: int = 12, limit: int = 12):
     """提问被渲染成多块时，找出属于它的叶子文本节点。
 
@@ -1522,7 +1554,9 @@ def _ask_impl(conversation, prompt, timeout=180.0, pre_send=None, plain=False,
             # 这段完全跳过，老调用方行为不变。
             if ledger is not None:
                 if reserved_by_door:
-                    ledger.adopt()
+                    refused = ledger.adopt(written)
+                    if refused is not None:
+                        return refused
                 else:
                     refused = ledger.reserve(written)
                     if refused is not None:
@@ -2130,13 +2164,27 @@ class _Ledger:
         self.request_id = (os.environ.get("BRIDGE_REQUEST_ID") or "").strip() or None
 
     # ------------------------------------------------------------ 提交前
-    def adopt(self):
+    def adopt(self, written=None):
         """门禁已经替本调用落过账（`pre_send` 回报 `reserved=True`）。
 
-        只登记"本轮预约过"，**不再读 pending**——再读一次就会把刚写的那条
-        submitting 当成上一次，把合法首发拦掉（B26）。
+        **不再读 pending**——再读一次就会把刚写的那条 submitting 当成上一次，
+        把合法首发拦掉（B26）。但要核对这条预约**是不是本次调用的**：
+        只信门禁的布尔值，过期回执会被当成本次预约，终态写账就会改掉旧记录。
         """
+        scope = None
+        if written is not None:
+            try:
+                scope = self._sub.scope_from_view(written, site=self.site)
+            except Exception:               # noqa: BLE001 - 读不到身份就不比对
+                scope = None
+        owned = self._sub.adopt_owned(self.site, self.prompt, scope=scope, root=self.root)
+        if not owned.get("ok"):
+            return {"ok": False, "stage": "tier_unconfirmed",
+                    "reason": owned.get("reason"), "code": tier_guard.TierUnconfirmed.code,
+                    "submission": "unknown", "sent": False,
+                    "hint": "预约不属于本次调用：不点击、不记账"}
         self.reserved = True
+        return None
 
     def reserve(self, written):
         """落账。返回 None = 放行；返回 dict = 就地拒发（原样交回调用方）。"""

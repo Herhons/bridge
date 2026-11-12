@@ -1,6 +1,6 @@
 # 自迭代循环状态（Herhons 10:42 新规后）
 
-更新时间：2026-11-12 16:10
+更新时间：2026-11-12 16:45
 规则：计划闸门已关闭（规格 §10）；停机只分 A 类（花钱/登录/删数据/动 v0.0.8）与 B 类（技术性）。
 本文不是"等批准"的 STOP，而是**交接与续跑用的状态**。
 
@@ -50,11 +50,19 @@ py -3.10 -B tools/iterate.py review --round round-3 --site gemini --force
 | 验真 | **chatgpt 6/7、deepseek 6/6、grok 6/7 → 三家 true_read**，`meets_three_vendors=true` |
 | 汇总 | **chatgpt 代汇总**（gemini 不可用），新会话 `6af56c00…`，1093 字 |
 | 施工 | P1 账本降级、P2 剪贴板事务、P3 孤儿锁入口、P4 驱动边界 AST、P5 提问碎片、P6 匿名清洗、P7 上传文件存在性 |
-| 遗留 | R3-2 写账所有权、R3-5 收卷主路径统一、R3-6 驱动实现迁移 |
+| 遗留 | ~~R3-2~~、~~R3-5~~ 已于 Round 4 施工；R3-6 驱动实现迁移待做 |
 
 **口径更正**：`_squash` 之前只去空白，模型抄写时丢掉行内代码的反引号就会被判"没逐字引用"。
 改为同时忽略 `` ` `` 与 `*` 后，Round 1/2/3 的复算全部升为 true_read——此前"chatgpt 在转述"的结论是**错的**，
 是取回截断 + 反引号两件事叠加造成的误判。
+
+## Round 4 施工（16:31 起，承接已核实项，未新开会审）
+
+- **R3-2 写账所有权**：`submissions.adopt_owned()` + `_Ledger.adopt(written)` 核对预约归属，
+  窗口级判据（只比 site/hwnd）——按 `reconcile` 那套逐字段比会把正常首发全拒（已用旧用例验证）。
+- **R3-5 匹配规则统一**：`conversation.merged_blocks/prompt_span` 为唯一实现，tools 只委托。
+- **兜底保留证据**：`ask_failure`（stage/timeout_kind/reason/diagnostics/warnings）。
+- 全量 **1716 用例 OK**。下一轮：以这批改动为对象开 Round 4 会审。
 
 ## 近期已修（2026-11-12 14:31 起，STOP_handled_20261112_1431 的未决清单）
 

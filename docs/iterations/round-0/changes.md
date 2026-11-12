@@ -534,3 +534,47 @@ gemini 的排查记录（都做了，不是没试）：
 2. R3-5 收卷主路径统一到 `_prompt_span`（现在只有取回侧用）；
 3. R3-6 驱动实现迁移（第一步只抽 gemini upload）；
 4. gemini 账号的拒答状态需要人工确认（这是唯一需要人看一眼的点，但不属于四种停机）。
+
+## 26. Round 4 施工：承接 Round 3 的已核实遗留（2026-11-12 16:31 起）
+
+**没有新开会审**，理由：R3-2 / R3-5 已在 `round-3/verification.md` 判为**成立**，
+且三席有明确共识，按 §10「核实通过即施工」直接做。下一轮会审的对象就是这批改动。
+
+### 26.1 R3-2 写账所有权
+
+`_Ledger.adopt()` 原来只把 `reserved=True` 置真（"门禁说预约过我就信"），
+过期回执会被当成本次预约，随后终态写账就会改掉旧记录。
+
+| 改动 | 说明 |
+|---|---|
+| `submissions.adopt_owned()` | 记录必须存在；站点不同 → `site_mismatch`；两边都有 hwnd 且不同 → `hwnd_mismatch` |
+| `_Ledger.adopt(written)` | 用当前视图算 scope 再核对归属；不通过就返回拒发（`tier_unconfirmed`），**不点击、不记账** |
+| 调用点 | `_ask_impl` 收到拒发就原样返回，不再继续提交 |
+
+**为什么只比到窗口级**：发送时新会话还没生成 `session_id`，`doc_rid` 也会因新开对话而变；
+照 `reconcile()` 那套逐字段比会把**每一次正常首发**都拒掉（`test_rework09f_recovery`
+当场就抓到了：期望 `code=1/submission_pending`，实际被我的严格版本判成 `scope_mismatch`）。
+adopt 只需要挡住"上一轮/别的窗口的过期回执"，真正的严格比对留给恢复阶段。
+
+### 26.2 R3-5 提问匹配规则收成一处
+
+`conversation.merged_blocks()` / `conversation.prompt_span()` 成为唯一实现，
+`tools/iterate.py` 的两个同名函数改为**委托**。此前两边各写一套，改一边忘另一边就会出现
+"能定位不能取回 / 能取回不能定位"。
+
+### 26.3 兜底不再自毁证据
+
+`_ask_upload` 走 harvest/text_extracted 时会把 `ask` 的结果整个覆盖掉，
+Round 3 的 grok 因此只剩 `stage=text_extracted`，看不出是 timeout 还是 prompt_gone。
+现在覆盖前先留一份 `ask_failure`（`stage / timeout_kind / reason / diagnostics / warnings`）。
+
+### 26.4 用例
+
+新增 10 条：`test_b31_adopt_owned.py`(4)、`test_b31_ask_failure.py`(2)、
+`test_b31_prompt_rule_shared.py`(3)，另在 `test_b31_adopt_owned` 里覆盖"只有 session 不同不阻断"。
+全量 **1716 用例 OK**。
+
+### 26.5 仍未做
+
+- R3-6 驱动实现迁移（第一步只抽 gemini upload）——需要真机跑通再落；
+- `status` 是否清锁的语义（本轮维持"只报告"）。
