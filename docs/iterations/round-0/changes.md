@@ -284,3 +284,24 @@ Herhons 的决定：§5.3 阈值与逐字口径**都不改**，按 §12 停机�
   但**改规格文本本身**仍按 §5.4 处理。
 
 边界：只改这两节及其指针，未动其他条款；`CALIBER.md` / `known_gaps.md` 未改。
+
+## 21. Round 1 会审与施工（2026-11-12 12:00–14:00）
+
+**验真口径再修**（会审本身暴露的）：
+1. 语料从「只有规格」扩成「规格 + 本轮材料」，但 `core` 仍只认规格正文（新增 `core_text`）；
+2. 切分支持五种真实排版：`1）` / `1.` / `整段 1. [方向]` / `A 稳定：` / grok 的 `②` 续条；
+3. **分母漏洞**：原来把"没有引句的意见"整条排除，等于少写少错；改为只丢页眉，其余计未命中；
+4. `SECTION_RE` 现在同时认 `§5.2` 与 `第 5.2 节`。
+
+**会审**：四席齐（2087/1875/6392/3147 字），2 家真读（deepseek 5/5、gemini 5/5），
+chatgpt 3/7 partial、grok 3/5 partial（引句取自材料 §3.1，core=false）。
+
+**汇总**：Gemini 新开对话（`session_id=daba2074c268d3ef`），上传匿名包 + 短指令，2743 字。
+
+**施工（S1–S4）**：
+- `src/qi/safe_ui.py`：点位归属/黑名单/客户区判定 + 危险键前台与焦点双检；接进 `upload` 点位点击与 `_clear_composer`。
+- `tools/iterate.py::_drop_prompt_echo`：剔除尾部提问回声（chatgpt 尾部混了 3 段）。
+- `src/qi/session_anchor.py`：`stay/navigate/new_allowed/session_lost`，已 accepted 时**绝不新建**。
+- `src/qi/drivers/__init__.py` + `tools/sisyphus.py`：总控骨架，按 plan.md 条目断点续跑、命中四种硬停即拒。
+
+新增用例 20 条（safe_ui 9 / echo 3 / anchor 5 / sisyphus 3）；全量 **1631 OK**。

@@ -1,0 +1,83 @@
+{
+  "schema": "round-state/2",
+  "materials": {
+    "prompt:d628f2061790048a": {
+      "status": "unknown",
+      "at": "2026-11-12T12:03:48+0800",
+      "chars": 0
+    },
+    "prompt:688e97438a9b6aa2": {
+      "status": "unknown",
+      "at": "2026-11-12T12:13:38+0800",
+      "chars": 0
+    },
+    "prompt:af7173555a760295": {
+      "status": "sent",
+      "at": "2026-11-12T12:17:01+0800",
+      "chars": 6392
+    },
+    "prompt:588b916c1580a12f": {
+      "status": "unknown",
+      "at": "2026-11-12T12:27:13+0800",
+      "chars": 0
+    }
+  },
+  "lock": {
+    "checked_at": "2026-11-12T12:30:41+0800",
+    "cleared": true,
+    "reason": "stale",
+    "pid": 34896,
+    "owner": "iterate:upload:deepseek"
+  },
+  "steps": {
+    "review:chatgpt": {
+      "at": "2026-11-12T12:05:19+0800",
+      "ok": true,
+      "stage": "text_extracted",
+      "feed": "upload",
+      "chars": 2087,
+      "elapsed": 494.5
+    },
+    "review:grok": {
+      "at": "2026-11-12T12:15:08+0800",
+      "ok": true,
+      "stage": "text_extracted",
+      "feed": "upload",
+      "chars": 1875,
+      "elapsed": 584.3
+    },
+    "review:gemini": {
+      "at": "2026-11-12T12:17:01+0800",
+      "ok": true,
+      "stage": "answered",
+      "feed": "upload-script",
+      "chars": 6392,
+      "elapsed": 108.3
+    },
+    "review:deepseek": {
+      "at": "2026-11-12T12:28:43+0800",
+      "ok": true,
+      "stage": "text_extracted",
+      "feed": "upload",
+      "chars": 3147,
+      "elapsed": 696.7
+    },
+    "verify": {
+      "at": "2026-11-12T12:36:59+0800",
+      "valid": [
+        "deepseek",
+        "gemini"
+      ],
+      "count": 2
+    },
+    "anonymize": {
+      "at": "2026-11-12T12:30:22+0800",
+      "entries": 4
+    },
+    "summarize": {
+      "at": "2026-11-12T12:31:56+0800",
+      "chars": 2743,
+      "session_id": "daba2074c268d3ef"
+    }
+  }
+}

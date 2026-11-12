@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 
 import uiautomation as auto
 
-from . import ui
+from . import safe_ui, ui
 
 user32 = ctypes.windll.user32
 user32.GetClassNameW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
@@ -241,7 +241,11 @@ def upload(screen, site: str, path: str, *, timeout: float = 60.0,
             return UploadResult(False, "composer_not_found", path=path)
         x = int(rect.left + (rect.right - rect.left) * point[0])
         y = int(rect.top + (rect.bottom - rect.top) * point[1])
-        _raw_click(x, y)
+        # S1：点位点击必须过归属校验（客户区内 + 命中窗口属于目标进程 + 非桌面类）。
+        verdict = safe_ui.safe_click(screen.target_hwnd, x, y)
+        if not verdict.ok:
+            return UploadResult(False, "unsafe_click", path=path,
+                                detail={"reason": verdict.reason, "x": x, "y": y})
     elif spec["menu"]:
         button = _find(root, ("ButtonControl", "MenuControl"), spec["button"])
         if button is None:

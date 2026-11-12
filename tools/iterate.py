@@ -175,6 +175,26 @@ def start_new_chat(screen, site: str, timeout: float = 20.0) -> bool:
     return False
 
 
+def _drop_prompt_echo(blocks: list[str], prompt: str) -> list[str]:
+    """剔掉与提问重合的块。
+
+    chatgpt 实测会在回答尾部把自己收到的提问复述 3 段（2026-11-12 Round 1），
+    如果留着，会被验真当成"引用"或拉低命中率。判据：整块是提问的连续子串。
+    """
+    squashed_prompt = "".join(prompt.split())
+    if not squashed_prompt:
+        return blocks
+    kept = []
+    for block in blocks:
+        squashed = "".join(block.split())
+        # 「可访问=是」是答案抬头，即使和提问重合也要留；其余够长的重合块按回声丢掉。
+        if (len(squashed) >= 8 and not squashed.startswith("可访问")
+                and squashed in squashed_prompt):
+            continue
+        kept.append(block)
+    return kept
+
+
 def read_answer_text(screen, site: str, prompt: str) -> str:
     """从控件树里按顺序读答案文本（复制键点不到时的兜底）。
 
@@ -219,7 +239,7 @@ def read_answer_text(screen, site: str, prompt: str) -> str:
                 break
             body.append(text)
         if body:
-            return "\n".join(body).strip()
+            return "\n".join(_drop_prompt_echo(body, prompt)).strip()
 
     # 退回：只认「可访问」开头的块（chatgpt 的答案就是这个形状）。
     out, started = [], False
@@ -232,7 +252,7 @@ def read_answer_text(screen, site: str, prompt: str) -> str:
             else:
                 continue
         out.append(text)
-    return "\n".join(out).strip()
+    return "\n".join(_drop_prompt_echo(out, prompt)).strip()
 
 
 #: 各端的输入框占位文字。`composer_empty` 的结构判据要求把它显式传进去，
@@ -279,15 +299,26 @@ def _clear_composer(screen, site: str) -> bool:
             left, right, top, bottom = win.left, win.right, win.top, win.bottom
         x = (left + right) // 2
         y = (top + bottom) // 2
-        _raw_click(x, y)
+        from qi import safe_ui
+
+        verdict = safe_ui.safe_click(screen.target_hwnd, x, y)
+        if not verdict.ok:
+            return False          # 点位不安全（桌面/他窗/客户区外）：一个键都不发
         time.sleep(0.3)
-        # **安全闸门**：点完之后焦点必须真的在浏览器窗口上，否则后面的
-        # Ctrl+A / Delete 会发给桌面——2026-11-12 就这样选中了桌面上 155 个图标
-        # 并弹出"移到回收站"的确认框（已取消，未删除任何东西）。
+        # S1：发键前双检——前台是目标窗口 + 焦点在可编辑控件上；
+        # 2026-11-12 就是这样把 Ctrl+A/Delete 发到桌面、选中 155 个图标的。
         import ctypes
 
-        foreground = ctypes.windll.user32.GetForegroundWindow()
-        if screen.target_hwnd and foreground != screen.target_hwnd:
+        import uiautomation as auto
+
+        try:
+            role = auto.GetFocusedControl().ControlTypeName
+        except Exception:                     # noqa: BLE001
+            role = None
+        key_verdict = safe_ui.decide_keys(
+            keys=("ctrl", "a"), foreground_hwnd=ctypes.windll.user32.GetForegroundWindow(),
+            target_hwnd=screen.target_hwnd, focused_role=role)
+        if not key_verdict.ok:
             return False
         screen.hotkey("ctrl", "a")
         time.sleep(0.1)
@@ -787,6 +818,11 @@ def cmd_verify(args, cfg) -> int:
                 sha = "unknown"
     tree = _tree_paths(sha, round_dir(args.round))
     spec_text = (ROOT / it.SPEC_PATH).read_text(encoding="utf-8")
+    # 本轮材料（Round 1 起含架构与已知问题）也算"可引用的正文"；
+    # 但"核心命中"仍只认规格本身。
+    material_path = round_dir(args.round) / "materials" / "material.md"
+    corpus = spec_text + ("\n\n" + material_path.read_text(encoding="utf-8")
+                          if material_path.is_file() else "")
 
     replies_dir = round_dir(args.round) / "replies"
     verdicts, report = {}, {}
@@ -797,7 +833,8 @@ def cmd_verify(args, cfg) -> int:
             verdict = {"hits": 0, "total": 0, "rate": 0.0, "core": False,
                        "verdict": "no_access", "rows": []}
         else:
-            verdict = it.verify_reply(text, tree_paths=tree, spec_text=spec_text,
+            verdict = it.verify_reply(text, tree_paths=tree, spec_text=corpus,
+                                      core_text=spec_text,
                                       core_paths=(it.SPEC_PATH,))
         verdicts[site] = verdict
         report[site] = {"chars": len(text), **{k: verdict[k] for k in
@@ -859,17 +896,60 @@ def cmd_summarize(args, cfg) -> int:
     prompt = it.anonymize_prompt(pack)
     screen = _screen_for("gemini")
     _clear_composer(screen, "gemini")
-    with uilock.hold("iterate:summarize:gemini",
-                     timeout=float(cfg.get("ui_lock_timeout", 180))):
-        if not start_new_chat(screen, "gemini"):
-            print(json.dumps({"ok": False, "stage": "new_chat_failed",
-                              "hint": "汇总必须新开对话；没开成就不发"},
-                             ensure_ascii=False))
-            return 1
-        _refresh_tier("gemini")          # 回执一次性
-        conv = _conversation(screen, "gemini")
-        result = conversation.ask(conv, prompt, timeout=cfg["review_timeout"],
-                                  purpose="review")
+    if str(cfg.get("summary_via") or "") == "upload":
+        # 匿名包动辄上万字，gemini 的输入框塞不下（实测 input_mismatch）。
+        # 改走附件 + 一条短指令；前提仍是**先新开对话**。
+        from qi import upload as upload_mod
+
+        pack_file = round_dir(args.round) / "anonymous_pack.md"
+        with uilock.hold("iterate:summarize:gemini",
+                         timeout=float(cfg.get("ui_lock_timeout", 180))):
+            if not start_new_chat(screen, "gemini"):
+                print(json.dumps({"ok": False, "stage": "new_chat_failed",
+                                  "hint": "汇总必须新开对话；没开成就不发"},
+                                 ensure_ascii=False))
+                return 1
+            up = upload_mod.upload(screen, "gemini", str(pack_file),
+                                   timeout=cfg["upload_timeout"])
+            if not up.ok:
+                print(json.dumps({"ok": False, "stage": "upload_failed",
+                                  **up.as_dict()}, ensure_ascii=False))
+                return 1
+            _upload_settled("gemini", screen)
+        _refresh_tier("gemini")
+        short = str(cfg.get("summary_prompt") or
+                    "附件是匿名审查意见。请按四点汇总：1) 按主题聚类并注明合并了哪几条；"
+                    "2) 标出冲突；3) 按对本项目的好处排序；4) 你要补充的新缺陷单独列在「汇总者新增」。"
+                    "不要猜来源，1500 字内。")
+        script = ROOT / "src" / "scripts" / "gemini_use.py"
+        budget = int(cfg["review_timeout"])
+        proc = subprocess.run([sys.executable, str(script), short, "--purpose", "review",
+                               "--continue", "--timeout", str(budget)],
+                              cwd=ROOT, capture_output=True, text=True,
+                              encoding="utf-8", timeout=budget + 180)
+        parsed = None
+        for line in reversed((proc.stdout or "").splitlines()):
+            line = line.strip()
+            if line.startswith("{") and line.endswith("}"):
+                try:
+                    parsed = json.loads(line)
+                    break
+                except ValueError:
+                    continue
+        result = dict(parsed or {"ok": False, "stage": "bad_output",
+                                 "exit": proc.returncode})
+    else:
+        with uilock.hold("iterate:summarize:gemini",
+                         timeout=float(cfg.get("ui_lock_timeout", 180))):
+            if not start_new_chat(screen, "gemini"):
+                print(json.dumps({"ok": False, "stage": "new_chat_failed",
+                                  "hint": "汇总必须新开对话；没开成就不发"},
+                                 ensure_ascii=False))
+                return 1
+            _refresh_tier("gemini")          # 回执一次性
+            conv = _conversation(screen, "gemini")
+            result = conversation.ask(conv, prompt, timeout=cfg["review_timeout"],
+                                      purpose="review")
 
     url = ""
     try:

@@ -1,0 +1,25 @@
+{
+  "schema": "sisyphus/1",
+  "items": {
+    "S1": {
+      "status": "done",
+      "note": "safe_ui + 接线 + 9 条用例",
+      "at": "2026-11-12T13:55:00+0800"
+    },
+    "S2": {
+      "status": "done",
+      "note": "_drop_prompt_echo + 3 条用例",
+      "at": "2026-11-12T13:55:00+0800"
+    },
+    "S3": {
+      "status": "done",
+      "note": "session_anchor 模块 + 5 条用例",
+      "at": "2026-11-12T13:55:00+0800"
+    },
+    "S4": {
+      "status": "done",
+      "note": "drivers 协议 + sisyphus 骨架 + 3 条用例",
+      "at": "2026-11-12T13:55:00+0800"
+    }
+  }
+}

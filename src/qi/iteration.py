@@ -242,32 +242,6 @@ def _cut_at(text: str, positions) -> list[str]:
     return blocks
 
 
-def split_opinions(reply: str) -> list[str]:
-    """把回复切成「结构化意见」的候选块。
-
-    三种写法都要认，按优先级试，能切出 ≥2 块就用：
-      1. 编号列表（`1. ` / `2、`）——grok / chatgpt 的严格版；
-      2. 行内「章节号…原文依据：」——gemini 的严格版（一整段里逐条展开）；
-      3. 空行分段——兜底。
-
-    这里**只负责切**，不做命中判定；过滤与计数在 `verify_reply` 里做。
-    """
-    text = (reply or "").strip()
-    if not text:
-        return []
-    numbered = [m.start() for m in NUMBERED_ITEM_RE.finditer(text)]
-    if len(numbered) >= 2:
-        return _cut_at(text, numbered)
-    anchors = [m.start() for m in SECTION_ANCHOR_RE.finditer(text)]
-    if len(anchors) >= 2:
-        return _cut_at(text, anchors)
-    heads = _line_heads(text)
-    if len(heads) >= 2:
-        return _cut_at(text, heads)
-    blocks = [b.strip() for b in re.split(r"\n\s*\n", text) if b.strip()]
-    return blocks or [text]
-
-
 #: 以章节号开头的行（可能带 markdown 强调）。
 HEAD_START_RE = re.compile(r"^[*_`\s]*(?:第\s*\d+(?:\.\d+)*\s*节|§\s*\d+(?:\.\d+)*)")
 #: 章节号写在括号里的行（chatgpt 的小标题）。
@@ -285,24 +259,69 @@ def _is_detail(line: str) -> bool:
 
 
 def _line_heads(text: str) -> list[int]:
-    """逐行写意见的回复（chatgpt 那种）：标题行本身就是一条意见的起点。
-
-    标题行 = 不以「原句：/问题：/改：…」开头，且含章节号或 `文件:行号`。
-    """
+    """逐行写意见的回复：标题行本身就是一条意见的起点。"""
     heads, offset = [], 0
     for line in text.splitlines(keepends=True):
         stripped = line.strip()
         if stripped and not _is_detail(stripped):
-            # 标题行只认两种形态：
-            #   · 以章节号开头且很短（「第 12 节「…」」）——逐条列点；
-            #   · 章节号写在括号里（「独立验收没有必经闸门（§4、§1、§9.2）」）——chatgpt 的写法。
-            # 纯 `文件:行号` 行是**证据行**，正文里顺手提到的「第4节随后…」是续写，
-            # 都不算新意见（按行切会把 chatgpt 的 8 条切成 15 条，实测 9/15）。
             if (HEAD_START_RE.match(stripped) and len(stripped) <= 40) \
                     or HEAD_PAREN_RE.search(stripped):
                 heads.append(offset + (len(line) - len(line.lstrip())))
         offset += len(line)
     return heads
+
+
+def _candidates(text: str) -> list[list[int]]:
+    """各种「新意见起点」的候选位置。真机回复的排版五花八门，靠单一正则切不准。"""
+    out = []
+    out.append([m.start() for m in re.finditer(r"(?m)^\s*\d+[）)]", text)])
+    out.append([m.start() for m in re.finditer(r"(?m)^\s*\d+[.、]\s+", text)])
+    # gemini：整段里 `1. [方向 A…] 2. [方向 B…]`
+    out.append([m.start() for m in re.finditer(r"\d+\.\s*(?=[\[【]?\s*方向)", text)])
+    # deepseek：`A 稳定：…` / `B 架构：…`
+    # 整段里用「第 X 节…原文依据：」逐条展开（gemini 的一种写法）
+    out.append([m.start() for m in SECTION_ANCHOR_RE.finditer(text)])
+    # deepseek 实际写的是 `A 稳定：…` / `D 重复点击与…`（有的带冒号有的不带），
+    # 所以按「字母 + 空格 + 短标题行」认，不强制冒号。
+    out.append([m.start() for m in re.finditer(r"(?m)^[A-E][\s　]+\S[^\n]{0,40}$", text)])
+    # grok：每条的引句行以 ② 开头，且上一条刚以 ⑥ 收尾
+    grok = []
+    lines = text.splitlines(keepends=True)
+    offset, prev = 0, ""
+    for line in lines:
+        if line.strip().startswith("②") and prev.strip().startswith("⑥"):
+            grok.append(offset)
+        if line.strip():
+            prev = line
+        offset += len(line)
+    out.append(grok)
+    return [c for c in out if len(c) >= 2]
+
+
+def split_opinions(reply: str) -> list[str]:
+    """把回复切成「结构化意见」的候选块。
+
+    真机上见过五种写法：`1）`、`1.`、`A 稳定：`、整段 `1. [方向…]`、grok 的
+    `②`（上一条以 ⑥ 收尾时为下一条起点）。这里生成多组候选切点，取**块数最接近 6**
+    （但至少 3 块）的那组——规格 §7.2 要求 5–8 条，6 是常见值。
+
+    切分只负责分段；过滤与计数在 `verify_reply` 里做。
+    """
+    text = (reply or "").strip()
+    if not text:
+        return []
+    # 按格式优先级取**第一个**切得出 ≥2 块的候选：
+    # 编号/字母/方向锚点这些强特征排在前面，行式与空行只作兜底。
+    # （试过"取最接近 6 条"的贪心，会把只有两条意见的夹具挤到别的候选上去。）
+    for positions in _candidates(text):
+        blocks = _cut_at(text, positions)
+        if len(blocks) >= 2:
+            return blocks
+    heads = _line_heads(text)
+    if len(heads) >= 2:
+        return _cut_at(text, heads)
+    blocks = [b.strip() for b in re.split(r"\n\s*\n", text) if b.strip()]
+    return blocks or [text]
 
 
 def _has_citation(block: str) -> bool:
@@ -319,7 +338,7 @@ def _has_citation(block: str) -> bool:
 
 
 def verify_reply(reply: str, *, tree_paths, spec_text: str | None = None,
-                 core_paths=CODE_CORE) -> dict:
+                 core_text: str | None = None, core_paths=CODE_CORE) -> dict:
     """核对一条回复里的引用。返回命中**条数**、命中率、判定与逐条明细。
 
     计数口径（2026-11-12 Herhons 批准，规格 §9.1 未定义分母，这里补空白）：
@@ -331,12 +350,25 @@ def verify_reply(reply: str, *, tree_paths, spec_text: str | None = None,
     * 阈值不变：真读 = 命中 ≥ 3 且 命中率 ≥ 0.7 且至少一条落在核心位置。
     """
     tree = {normalize_path(p) for p in tree_paths}
+    # `spec_text` 是**本轮材料全文**（Round 1 起含架构与已知问题，引句可以来自任何一节）；
+    # `core_text` 只含规格正文——"核心命中"必须落在规格上，避免拿附录里的引句充数。
     squashed_spec = _squash(spec_text) if spec_text else None
+    squashed_core = _squash(core_text) if core_text else squashed_spec
     seen_quotes: dict[str, int] = {}
     rows, hits, core_hit = [], 0, False
 
-    for index, block in enumerate(split_opinions(reply), start=1):
-        if not _has_citation(block):
+    raw_blocks = split_opinions(reply)
+    if len(raw_blocks) == 1 and not _has_citation(raw_blocks[0]):
+        return {"hits": 0, "total": 0, "rate": 0.0, "core": False,
+                "verdict": "unread", "rows": [], "few_opinions": True}
+
+    for index, block in enumerate(raw_blocks, start=1):
+        # 只丢页眉（`可访问=是` 之类）；**没有引句的意见要留在分母里算未命中**，
+        # 否则"少写几条就命中率 100%"，口径立刻失真（2026-11-12 自测发现）。
+        probe = block.strip()
+        if len(probe) < 12 and not _has_citation(probe):
+            continue
+        if probe.startswith("可访问=") and len(probe) < 40:
             continue
         # 引句里出现的文件名/章节号属于「被引用的原文」，不能当成作者自己的定位，
         # 否则一句捏造的引句只要提到真实文件名就会被判命中。
@@ -356,7 +388,8 @@ def verify_reply(reply: str, *, tree_paths, spec_text: str | None = None,
             ok = bool(squashed_spec) and squashed in squashed_spec
             if ok:
                 seen_quotes[squashed] = index
-            quote_rows.append({"ref": quote[:40], "hit": ok})
+            in_core = bool(squashed_core) and squashed in squashed_core
+            quote_rows.append({"ref": quote[:40], "hit": ok, "core": in_core})
 
         path_rows = []
         for raw in PATH_RE.findall(bare):
@@ -367,7 +400,7 @@ def verify_reply(reply: str, *, tree_paths, spec_text: str | None = None,
         hit = any(r["hit"] for r in quote_rows) or any(r["hit"] for r in path_rows)
         if hit:
             hits += 1
-            if any(r["hit"] for r in quote_rows):
+            if any(r["hit"] and r.get("core") for r in quote_rows):
                 core_hit = True
             if any(r["hit"] and (r["ref"] == SPEC_PATH
                                  or any(r["ref"].startswith(p) for p in core_paths))
