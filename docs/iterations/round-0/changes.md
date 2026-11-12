@@ -305,3 +305,24 @@ chatgpt 3/7 partial、grok 3/5 partial（引句取自材料 §3.1，core=false�
 - `src/qi/drivers/__init__.py` + `tools/sisyphus.py`：总控骨架，按 plan.md 条目断点续跑、命中四种硬停即拒。
 
 新增用例 20 条（safe_ui 9 / echo 3 / anchor 5 / sisyphus 3）；全量 **1631 OK**。
+
+## 22. Round 2（代码轮）：会审 + 汇总 + P1–P4（2026-11-12 12:45–13:10）
+
+**会审**（3 席：gemini 6114 / chatgpt 2050 / deepseek 3934 字）：
+- deepseek 4/5 = **true_read**、gemini 5/6 = **true_read**、chatgpt 1/4 unread（引句取自实现片段，未落规格）。
+- 切分又遇到两种新排版，已补进 `_candidates`：`^①`（chatgpt 用 ①–⑥ 当字段）、`【A. 标题】`（gemini）；
+  并把选择规则从"第一个匹配"改成"块数最多且 ≤10"，解决跨轮排版漂移。
+
+**汇总**：Gemini 新开对话（`session_id=2d744528ebfb94d6`），2329 字。
+过程中又出现一次「假 accepted」（页面 /app、0 消息、附件未发却记 accepted），
+按人工出口清账本后重跑成功——这条已记进 Round 2 待办（四阶段账本）。
+
+**施工（P1–P4）**：
+- P1 `safe_ui.decide_point` 增 `hit_top_hwnd`（同进程弹窗）与 `expected_rect`（布局漂移）校验；
+  `point_verdict` 用 `GetAncestor(GA_ROOT)` 取顶层窗口。
+- P2 `tools/iterate.py` 新增 `_session_plan` / `_remember_anchor` / `_navigate`：
+  发送前按锚点决定 stay/navigate/new_allowed/session_lost；`session_lost` 直接不发；锚点写 `state.anchors`。
+- P3 `_drop_prompt_echo` 对含「」/§/`文件:行号` 的块豁免，避免误删合规引文。
+- P4 `sisyphus.py` 增 `verification_ok` 前置闸门（未核实拒跑，退出码 4）与 `MAX_ATTEMPTS=3`（三振，退出码 5）。
+
+用例 +4（safe_ui 2、echo 1、sisyphus 1），全量 **1635 OK**。

@@ -32,6 +32,21 @@ class PointTests(unittest.TestCase):
         self.assertFalse(v.ok)
         self.assertEqual(v.reason, "other_process")
 
+    def test_same_pid_popup_is_refused(self):
+        # 同进程弹窗 pid 相同，只有比顶层才拦得住（2026-11-12 会审建议）
+        v = safe_ui.decide_point(x=10, y=10, client_rect=RECT, hit_pid=7,
+                                 hit_class="Chrome_WidgetWin_1", target_pid=7,
+                                 hit_top_hwnd=99, target_hwnd=7)
+        self.assertFalse(v.ok)
+        self.assertEqual(v.reason, "other_top_window")
+
+    def test_layout_moved_is_refused(self):
+        v = safe_ui.decide_point(x=10, y=10, client_rect=RECT, hit_pid=7,
+                                 hit_class="Chrome_WidgetWin_1", target_pid=7,
+                                 expected_rect=RECT, current_rect=(0, 0, 900, 800))
+        self.assertFalse(v.ok)
+        self.assertEqual(v.reason, "layout_moved")
+
     def test_outside_client_is_refused(self):
         v = safe_ui.decide_point(x=1200, y=10, client_rect=RECT, hit_pid=7,
                                  hit_class="Chrome_WidgetWin_1", target_pid=7)

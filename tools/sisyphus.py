@@ -92,6 +92,25 @@ def cmd_status(args) -> int:
     return 0
 
 
+def verification_ok(round_name: str, ident: str) -> tuple[bool, str]:
+    """条目必须先在本轮 `verification.md` 里被核实为成立/部分成立。"""
+    vpath = ROOT / "docs" / "iterations" / round_name / "verification.md"
+    if not vpath.is_file():
+        return False, "verification_missing"
+    text = vpath.read_text(encoding="utf-8")
+    for line in text.splitlines():
+        if not line.strip().startswith("|"):
+            continue
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if not cells or cells[0].lstrip("# ").strip() != ident:
+            continue
+        blob = " ".join(cells)
+        if "成立" in blob:
+            return True, "verified"
+        return False, "not_verified"
+    return False, "not_in_verification"
+
+
 def cmd_next(args) -> int:
     path = plan_path(args.round)
     items = parse_plan(path.read_text(encoding="utf-8")) if path.is_file() else []
@@ -99,6 +118,20 @@ def cmd_next(args) -> int:
     for item in items:
         if (state["items"].get(item["id"]) or {}).get("status") == "done":
             continue
+        ok, why = verification_ok(args.round, item["id"])
+        if not ok:
+            print(json.dumps({"ok": False, "stage": "not_verified", "id": item["id"],
+                              "reason": why,
+                              "hint": "先在本轮 verification.md 核实为成立/部分成立"},
+                             ensure_ascii=False))
+            return 4
+        tries = attempt(args.round, item["id"])
+        if tries >= MAX_ATTEMPTS:
+            print(json.dumps({"ok": False, "stage": "no_progress", "id": item["id"],
+                              "attempts": tries,
+                              "hint": "同一计划连续 3 次无进展，按 §12 B3 停轮"},
+                             ensure_ascii=False))
+            return 5
         blocked = hard_stop(item)
         if blocked:
             print(json.dumps({"ok": False, "stage": "hard_stop", "id": item["id"],
@@ -110,6 +143,21 @@ def cmd_next(args) -> int:
         return 0
     print(json.dumps({"ok": True, "next": None, "hint": "计划已跑完"}, ensure_ascii=False))
     return 0
+
+
+MAX_ATTEMPTS = 3
+
+
+def attempt(round_name: str, ident: str) -> int:
+    return int((load_state(round_name)["items"].get(ident) or {}).get("attempts", 0))
+
+
+def bump_attempt(round_name: str, ident: str) -> int:
+    state = load_state(round_name)
+    record = state["items"].setdefault(ident, {"status": "pending"})
+    record["attempts"] = int(record.get("attempts", 0)) + 1
+    save_state(round_name, state)
+    return record["attempts"]
 
 
 def cmd_done(args) -> int:

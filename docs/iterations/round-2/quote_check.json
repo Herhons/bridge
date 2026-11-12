@@ -1,0 +1,763 @@
+{
+  "summary": {
+    "sha": "unknown",
+    "valid_seats": [
+      "deepseek",
+      "gemini"
+    ],
+    "valid_count": 2,
+    "meets_three_vendors": false,
+    "seats": {
+      "chatgpt": {
+        "chars": 2050,
+        "hits": 1,
+        "total": 4,
+        "rate": 0.25,
+        "core": false,
+        "verdict": "unread"
+      },
+      "deepseek": {
+        "chars": 3934,
+        "hits": 4,
+        "total": 5,
+        "rate": 0.8,
+        "core": true,
+        "verdict": "true_read"
+      },
+      "gemini": {
+        "chars": 6114,
+        "hits": 5,
+        "total": 6,
+        "rate": 0.83,
+        "core": true,
+        "verdict": "true_read"
+      }
+    }
+  },
+  "detail": {
+    "chatgpt": {
+      "hits": 1,
+      "total": 4,
+      "rate": 0.25,
+      "core": false,
+      "verdict": "unread",
+      "rows": [
+        {
+          "index": 1,
+          "sections": [],
+          "hit": false,
+          "quotes": [],
+          "paths": [
+            {
+              "ref": "safe_ui.py",
+              "hit": false,
+              "with_line": false
+            }
+          ]
+        },
+        {
+          "index": 2,
+          "sections": [
+            "13"
+          ],
+          "hit": false,
+          "quotes": [],
+          "paths": []
+        },
+        {
+          "index": 3,
+          "sections": [],
+          "hit": false,
+          "quotes": [],
+          "paths": [
+            {
+              "ref": "__use.py",
+              "hit": false,
+              "with_line": false
+            }
+          ]
+        },
+        {
+          "index": 4,
+          "sections": [
+            "13",
+            "10",
+            "12"
+          ],
+          "hit": true,
+          "quotes": [
+            {
+              "ref": "允许复用现有\nbridge_server\n`tools/live_job.py\n",
+              "hit": false,
+              "core": false
+            },
+            {
+              "ref": "# 与提问重合且长度 >= 8 的块按回声丢掉；以「可访问",
+              "hit": true,
+              "core": false
+            }
+          ],
+          "paths": [
+            {
+              "ref": "sisyphus.py",
+              "hit": false,
+              "with_line": false
+            },
+            {
+              "ref": "tools/sisyphus.py",
+              "hit": true,
+              "with_line": false
+            }
+          ]
+        }
+      ],
+      "few_opinions": true
+    },
+    "deepseek": {
+      "hits": 4,
+      "total": 5,
+      "rate": 0.8,
+      "core": true,
+      "verdict": "true_read",
+      "rows": [
+        {
+          "index": 1,
+          "sections": [],
+          "hit": true,
+          "quotes": [
+            {
+              "ref": "点之前，目标点必须落在目标窗口的客户区内、命中的窗口属于目标进程",
+              "hit": true,
+              "core": false
+            },
+            {
+              "ref": "进程对、类名对",
+              "hit": false,
+              "core": false
+            },
+            {
+              "ref": "先取\nElementFromPoint\n/UIA 命中元素，再核该元素的\nCon",
+              "hit": false,
+              "core": false
+            }
+          ],
+          "paths": [
+            {
+              "ref": "src/qi/safe_ui.py",
+              "hit": true,
+              "with_line": false
+            }
+          ]
+        },
+        {
+          "index": 2,
+          "sections": [],
+          "hit": false,
+          "quotes": [
+            {
+              "ref": "已点发送、未读回复",
+              "hit": false,
+              "core": false
+            },
+            {
+              "ref": "读到回复且\nprompt_hash\n匹配后",
+              "hit": false,
+              "core": false
+            },
+            {
+              "ref": "\n及以后只读不重发",
+              "hit": false,
+              "core": false
+            }
+          ],
+          "paths": [
+            {
+              "ref": "submissions.py",
+              "hit": false,
+              "with_line": false
+            }
+          ]
+        },
+        {
+          "index": 3,
+          "sections": [],
+          "hit": true,
+          "quotes": [
+            {
+              "ref": "不一致且已 accepted → session_lost（\n，保留账本交人工）",
+              "hit": false,
+              "core": false
+            }
+          ],
+          "paths": [
+            {
+              "ref": "src/qi/session_anchor.py",
+              "hit": true,
+              "with_line": false
+            },
+            {
+              "ref": "__use.py",
+              "hit": false,
+              "with_line": false
+            }
+          ]
+        },
+        {
+          "index": 4,
+          "sections": [
+            "13"
+          ],
+          "hit": true,
+          "quotes": [
+            {
+              "ref": "39 个 qi 模块 + 20 个脚本收敛成「总控 + 各端驱动",
+              "hit": true,
+              "core": false
+            },
+            {
+              "ref": "借机重构与编排无关的发送语义",
+              "hit": true,
+              "core": true
+            },
+            {
+              "ref": "适配器路径与原路径发送序列字节级一致",
+              "hit": false,
+              "core": false
+            }
+          ],
+          "paths": [
+            {
+              "ref": "src/qi/drivers/__init__.py",
+              "hit": true,
+              "with_line": false
+            },
+            {
+              "ref": "tools/sisyphus.py",
+              "hit": true,
+              "with_line": false
+            },
+            {
+              "ref": "_use.py",
+              "hit": false,
+              "with_line": false
+            }
+          ]
+        },
+        {
+          "index": 5,
+          "sections": [
+            "5.2",
+            "10",
+            "5.3"
+          ],
+          "hit": true,
+          "quotes": [
+            {
+              "ref": "与提问重合且长度 >= 8 的块按回声丢掉；以「可访问",
+              "hit": true,
+              "core": false
+            },
+            {
+              "ref": "与提问重合且长度 >= 8 的块按回声丢掉",
+              "hit": true,
+              "core": false
+            },
+            {
+              "ref": "重合长度 ≥8",
+              "hit": false,
+              "core": false
+            },
+            {
+              "ref": "块与提问的编辑距离/最长公共子串占比 > 阈值且该块不是引号包裹的引用块",
+              "hit": false,
+              "core": false
+            },
+            {
+              "ref": "回复含提问原句作引号引用",
+              "hit": false,
+              "core": false
+            },
+            {
+              "ref": "回复含提问原句无引号",
+              "hit": false,
+              "core": false
+            },
+            {
+              "ref": "回复含短复述",
+              "hit": false,
+              "core": false
+            },
+            {
+              "ref": "缺 verdict 的 plan 条目",
+              "hit": false,
+              "core": false
+            },
+            {
+              "ref": "verdict=不成立但被列为施工项",
+              "hit": false,
+              "core": false
+            },
+            {
+              "ref": "逐字抄附件原文一句",
+              "hit": false,
+              "core": false
+            },
+            {
+              "ref": "屏幕坐标点击+全局按键",
+              "hit": false,
+              "core": false
+            },
+            {
+              "ref": "拿不到回复就新开对话",
+              "hit": false,
+              "core": false
+            }
+          ],
+          "paths": [
+            {
+              "ref": "tools/iterate.py",
+              "hit": true,
+              "with_line": false
+            },
+            {
+              "ref": "sisyphus.py",
+              "hit": false,
+              "with_line": false
+            },
+            {
+              "ref": "docs/self_iteration_spec.md",
+              "hit": true,
+              "with_line": false
+            },
+            {
+              "ref": "material.md",
+              "hit": false,
+              "with_line": false
+            },
+            {
+              "ref": "material.md",
+              "hit": false,
+              "with_line": false
+            }
+          ]
+        }
+      ],
+      "few_opinions": false
+    },
+    "gemini": {
+      "hits": 5,
+      "total": 6,
+      "rate": 0.83,
+      "core": true,
+      "verdict": "true_read",
+      "rows": [
+        {
+          "index": 2,
+          "sections": [
+            "15"
+          ],
+          "hit": false,
+          "quotes": [
+            {
+              "ref": "现在 submissions.py 只有 draft/submitting/ac",
+              "hit": false,
+              "core": false
+            },
+            {
+              "ref": "发出动作（点击/回车）",
+              "hit": false,
+              "core": false
+            },
+            {
+              "ref": "已点但未确认上屏",
+              "hit": false,
+              "core": false
+            },
+            {
+              "ref": "仅调用 mark_dispatched 未传 evidence 即调 mark_",
+              "hit": false,
+              "core": false
+            }
+          ],
+          "paths": [
+            {
+              "ref": "submissions.py",
+              "hit": false,
+              "with_line": false
+            },
+            {
+              "ref": "submissions.py",
+              "hit": false,
+              "with_line": false
+            }
+          ]
+        },
+        {
+          "index": 3,
+          "sections": [
+            "7.1"
+          ],
+          "hit": true,
+          "quotes": [
+            {
+              "ref": "尚未接线：_ask_upload_body 仍在发送前直接 start_new_",
+              "hit": false,
+              "core": false
+            },
+            {
+              "ref": "有锚点、URL 不匹配、且未 accepted",
+              "hit": false,
+              "core": false
+            },
+            {
+              "ref": "action",
+              "hit": true,
+              "core": false
+            },
+            {
+              "ref": "navigate",
+              "hit": true,
+              "core": false
+            },
+            {
+              "ref": ": anchor.url, ",
+              "hit": false,
+              "core": false
+            },
+            {
+              "ref": "drifted_before_accepted",
+              "hit": false,
+              "core": false
+            }
+          ],
+          "paths": [
+            {
+              "ref": "src/qi/session_anchor.py",
+              "hit": true,
+              "with_line": false
+            },
+            {
+              "ref": "session_anchor.py",
+              "hit": false,
+              "with_line": false
+            },
+            {
+              "ref": "tools/iterate.py",
+              "hit": true,
+              "with_line": false
+            },
+            {
+              "ref": "__use.py",
+              "hit": false,
+              "with_line": false
+            }
+          ]
+        },
+        {
+          "index": 4,
+          "sections": [],
+          "hit": true,
+          "quotes": [
+            {
+              "ref": "decide_point(...)：点之前，目标点必须落在目标窗口的客户区内、命",
+              "hit": false,
+              "core": false
+            },
+            {
+              "ref": "Document",
+              "hit": false,
+              "core": false
+            }
+          ],
+          "paths": [
+            {
+              "ref": "src/qi/safe_ui.py",
+              "hit": true,
+              "with_line": false
+            },
+            {
+              "ref": "test_safe_ui.py",
+              "hit": false,
+              "with_line": false
+            }
+          ]
+        },
+        {
+          "index": 5,
+          "sections": [
+            "13"
+          ],
+          "hit": true,
+          "quotes": [
+            {
+              "ref": "只定义了 SiteDriver 协议（ensure_session/choose",
+              "hit": false,
+              "core": false
+            },
+            {
+              "ref": "不要再复制一套发送栈；禁止借机重构与编排无关的发送语义",
+              "hit": false,
+              "core": false
+            },
+            {
+              "ref": "薄门面（Facade）收口 + 编排层解耦",
+              "hit": false,
+              "core": false
+            }
+          ],
+          "paths": [
+            {
+              "ref": "src/qi/drivers/__init__.py",
+              "hit": true,
+              "with_line": false
+            },
+            {
+              "ref": "drivers/chatgpt.py",
+              "hit": false,
+              "with_line": false
+            },
+            {
+              "ref": "live_job.py",
+              "hit": false,
+              "with_line": false
+            },
+            {
+              "ref": "src/qi/drivers/legacy_adapter.py",
+              "hit": false,
+              "with_line": false
+            },
+            {
+              "ref": "upload.py",
+              "hit": false,
+              "with_line": false
+            },
+            {
+              "ref": "submissions.py",
+              "hit": false,
+              "with_line": false
+            },
+            {
+              "ref": "live_job.py",
+              "hit": false,
+              "with_line": false
+            },
+            {
+              "ref": "tools/iterate.py",
+              "hit": true,
+              "with_line": false
+            },
+            {
+              "ref": "legacy_adapter.py",
+              "hit": false,
+              "with_line": false
+            },
+            {
+              "ref": "tools/iterate.py",
+              "hit": true,
+              "with_line": false
+            },
+            {
+              "ref": "tools/sisyphus.py",
+              "hit": true,
+              "with_line": false
+            }
+          ]
+        },
+        {
+          "index": 6,
+          "sections": [
+            "8",
+            "5.2",
+            "7.2",
+            "12"
+          ],
+          "hit": true,
+          "quotes": [
+            {
+              "ref": "# 与提问重合且长度 >= 8 的块按回声丢掉；以「可访问",
+              "hit": true,
+              "core": false
+            },
+            {
+              "ref": "与 prompt 重合且长度 ≥ 8",
+              "hit": false,
+              "core": false
+            },
+            {
+              "ref": "每条必须引用本规格的章节号，并附一句从规格里逐字抄出的原句",
+              "hit": true,
+              "core": true
+            },
+            {
+              "ref": "去空白后与 prompt 某段完全相等，或整块 85% 以上字符属于 promp",
+              "hit": false,
+              "core": false
+            }
+          ],
+          "paths": [
+            {
+              "ref": "tools/iterate.py",
+              "hit": true,
+              "with_line": false
+            },
+            {
+              "ref": "quote_check.py",
+              "hit": false,
+              "with_line": false
+            },
+            {
+              "ref": "material.md",
+              "hit": false,
+              "with_line": false
+            }
+          ]
+        },
+        {
+          "index": 7,
+          "sections": [
+            "10",
+            "12",
+            "4",
+            "5.4"
+          ],
+          "hit": true,
+          "quotes": [
+            {
+              "ref": "tools/sisyphus.py 读 plan.md 条目、按 ID 断点续跑",
+              "hit": false,
+              "core": false
+            },
+            {
+              "ref": "成立 / 部分成立",
+              "hit": false,
+              "core": false
+            },
+            {
+              "ref": "修改 docs/self_iteration_spec.md 合同条款却无 de",
+              "hit": false,
+              "core": false
+            },
+            {
+              "ref": "跑离线单测 → 失败则一次回滚+一次重做 → 仍红则写 STOP.md（§12.",
+              "hit": false,
+              "core": false
+            },
+            {
+              "ref": "同一张计划连续推 3 次无进展即停（§12.B.3）",
+              "hit": false,
+              "core": false
+            }
+          ],
+          "paths": [
+            {
+              "ref": "sisyphus.py",
+              "hit": false,
+              "with_line": false
+            },
+            {
+              "ref": "src/qi/drivers/__init__.py",
+              "hit": true,
+              "with_line": false
+            },
+            {
+              "ref": "tools/sisyphus.py",
+              "hit": true,
+              "with_line": false
+            },
+            {
+              "ref": "sisyphus.py",
+              "hit": false,
+              "with_line": false
+            },
+            {
+              "ref": "plan.md",
+              "hit": false,
+              "with_line": false
+            },
+            {
+              "ref": "verification.md",
+              "hit": false,
+              "with_line": false
+            },
+            {
+              "ref": "plan.md",
+              "hit": false,
+              "with_line": false
+            },
+            {
+              "ref": "sisyphus.py",
+              "hit": false,
+              "with_line": false
+            },
+            {
+              "ref": "STOP.md",
+              "hit": false,
+              "with_line": false
+            },
+            {
+              "ref": "self_iteration_spec.md",
+              "hit": false,
+              "with_line": false
+            },
+            {
+              "ref": "sisyphus.py",
+              "hit": false,
+              "with_line": false
+            },
+            {
+              "ref": "verification.md",
+              "hit": false,
+              "with_line": false
+            },
+            {
+              "ref": "docs/self_iteration_spec.md",
+              "hit": true,
+              "with_line": false
+            },
+            {
+              "ref": "decisions.md",
+              "hit": false,
+              "with_line": false
+            },
+            {
+              "ref": "STOP.md",
+              "hit": false,
+              "with_line": false
+            },
+            {
+              "ref": "verification.md",
+              "hit": false,
+              "with_line": false
+            },
+            {
+              "ref": "plan.md",
+              "hit": false,
+              "with_line": false
+            },
+            {
+              "ref": "self_iteration_spec.md",
+              "hit": false,
+              "with_line": false
+            },
+            {
+              "ref": "decisions.md",
+              "hit": false,
+              "with_line": false
+            },
+            {
+              "ref": "sisyphus.py",
+              "hit": false,
+              "with_line": false
+            },
+            {
+              "ref": "STOP.md",
+              "hit": false,
+              "with_line": false
+            }
+          ]
+        }
+      ],
+      "few_opinions": false
+    }
+  }
+}

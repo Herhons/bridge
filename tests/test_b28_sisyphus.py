@@ -47,6 +47,9 @@ class ResumeTests(unittest.TestCase):
         rdir = root / "docs" / "iterations" / "round-1"
         rdir.mkdir(parents=True)
         (rdir / "plan.md").write_text(PLAN, encoding="utf-8")
+        (rdir / "verification.md").write_text(
+            "| # | 项 | 判定 |\n|---|---|---|\n| S1 | 安全原语 | **成立** |\n"
+            "| S2 | 回声过滤 | 部分成立 |\n| S3 | 要登录账号 | 成立 |\n", encoding="utf-8")
         self.root = root
         self._old = sisyphus.ROOT
         sisyphus.ROOT = root
@@ -66,6 +69,14 @@ class ResumeTests(unittest.TestCase):
         pending = [i["id"] for i in items
                    if (state["items"].get(i["id"]) or {}).get("status") != "done"]
         self.assertEqual(pending, ["S2"])
+
+    def test_three_attempts_stop(self):
+        state = {"schema": "sisyphus/1",
+                 "items": {"S1": {"status": "pending", "attempts": 3}}}
+        (self.root / "docs/iterations/round-1/sisyphus.json").write_text(
+            json.dumps(state), encoding="utf-8")
+        with mock.patch("sys.stdout"):
+            self.assertEqual(sisyphus.main(["next", "--round", "round-1"]), 5)
 
     def test_hard_stop_blocks_next(self):
         (self.root / "docs/iterations/round-1/plan.md").write_text(

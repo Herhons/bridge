@@ -279,6 +279,10 @@ def _candidates(text: str) -> list[list[int]]:
     # gemini：整段里 `1. [方向 A…] 2. [方向 B…]`
     out.append([m.start() for m in re.finditer(r"\d+\.\s*(?=[\[【]?\s*方向)", text)])
     # deepseek：`A 稳定：…` / `B 架构：…`
+    # chatgpt 有时每条都以 `①` 起头（①…⑥ 当字段用）
+    out.append([m.start() for m in re.finditer(r"(?m)^\s*①", text)])
+    # gemini 有时用 `【A. 标题】` 当条目标题
+    out.append([m.start() for m in re.finditer(r"【[A-F][.、]\s*", text)])
     # 整段里用「第 X 节…原文依据：」逐条展开（gemini 的一种写法）
     out.append([m.start() for m in SECTION_ANCHOR_RE.finditer(text)])
     # deepseek 实际写的是 `A 稳定：…` / `D 重复点击与…`（有的带冒号有的不带），
@@ -310,13 +314,18 @@ def split_opinions(reply: str) -> list[str]:
     text = (reply or "").strip()
     if not text:
         return []
-    # 按格式优先级取**第一个**切得出 ≥2 块的候选：
-    # 编号/字母/方向锚点这些强特征排在前面，行式与空行只作兜底。
-    # （试过"取最接近 6 条"的贪心，会把只有两条意见的夹具挤到别的候选上去。）
+    # 取「块数最多且不超过 10」的候选：真机上同一种排版会在不同轮次漂移
+    # （Round 1 用 ②，Round 2 用 ①），按优先级取第一个会被切碎。
+    # 上限 10 防止把代码块里的编号也当意见。
+    best = None
     for positions in _candidates(text):
         blocks = _cut_at(text, positions)
-        if len(blocks) >= 2:
-            return blocks
+        if not (2 <= len(blocks) <= 10):
+            continue
+        if best is None or len(blocks) > len(best):
+            best = blocks
+    if best:
+        return best
     heads = _line_heads(text)
     if len(heads) >= 2:
         return _cut_at(text, heads)

@@ -31,6 +31,13 @@ class EchoTests(unittest.TestCase):
         blocks = ["可访问=是", "这条不是提问的一部分，必须留着"]
         self.assertEqual(iterate._drop_prompt_echo(blocks, PROMPT), blocks)
 
+    def test_citation_block_is_exempt(self):
+        # 逐字引文即使与提问重合也必须保留（否则验真归零）
+        quote = "「附件 material.md 是规格全文。」"
+        blocks = ["问题：这里引用一句", quote]
+        kept = iterate._drop_prompt_echo(blocks, PROMPT + quote)
+        self.assertIn(quote, kept)
+
     def test_empty_prompt_is_noop(self):
         blocks = ["任意内容"]
         self.assertEqual(iterate._drop_prompt_echo(blocks, ""), blocks)

@@ -184,12 +184,28 @@ def _drop_prompt_echo(blocks: list[str], prompt: str) -> list[str]:
     squashed_prompt = "".join(prompt.split())
     if not squashed_prompt:
         return blocks
+    # 只在前序区剥（第一条正式意见之前）。正文里引用提问原句是合法的，
+    # 一旦进入意见区就停止剥离（2026-11-12 会审建议）。
+    head = 0
+    for index, block in enumerate(blocks):
+        stripped = block.strip()
+        if (re.match(r"^\s*(?:\d+[）).、]|[①-⑥]|[A-E][\s　])", stripped)
+                or "章节号" in stripped[:12]):
+            head = index
+            break
     kept = []
-    for block in blocks:
+    for position, block in enumerate(blocks):
+        if position >= head and head > 0:
+            kept.append(block)
+            continue
         squashed = "".join(block.split())
-        # 「可访问=是」是答案抬头，即使和提问重合也要留；其余够长的重合块按回声丢掉。
+        # 「可访问=是」是答案抬头，即使和提问重合也要留；
+        # 含「」/章节号/文件:行号 的块是**合规引文**，同样豁免（2026-11-12 会审：
+        # 按重合长度一刀切会把逐字引用删掉，验真直接归零）。
+        looks_like_citation = any(mark in block for mark in ("「", "」", "§")) \
+            or re.search(r"[\w./-]+\.(?:py|md|json|yml|yaml):\d+", block) is not None
         if (len(squashed) >= 8 and not squashed.startswith("可访问")
-                and squashed in squashed_prompt):
+                and not looks_like_citation and squashed in squashed_prompt):
             continue
         kept.append(block)
     return kept
@@ -448,6 +464,67 @@ def _reconcile_gate(screen, site: str, ask_text: str) -> dict | None:
                     f"{state} --reason ... --confirm 清掉再跑"}
 
 
+def _url_now(screen, site: str) -> str:
+    from qi import ui
+
+    try:
+        _control, url = ui.document(screen.target_hwnd, site)
+        return url or ""
+    except Exception:                     # noqa: BLE001
+        return ""
+
+
+def _navigate(screen, url: str, wait: float = 3.0) -> bool:
+    """把当前标签导航到 `url` 并确认地址真的变了。"""
+    if not url:
+        return False
+    try:
+        screen.hotkey("ctrl", "l")
+        time.sleep(0.3)
+        screen.type_text(url)
+        time.sleep(0.2)
+        screen.press("enter")
+        time.sleep(wait)
+    except Exception:                     # noqa: BLE001 - 前台被抢等
+        return False
+    return _url_now(screen, getattr(screen, "tab_site", "")) .split("?")[0] == url.split("?")[0]
+
+
+def _session_plan(screen, site: str, state=None) -> dict:
+    """S3：按锚点决定 stay / navigate / new_allowed / session_lost。"""
+    from qi import session_anchor as sa
+
+    anchor = None
+    if state is not None:
+        raw = (state.data.get("anchors") or {}).get(site)
+        if raw:
+            anchor = sa.SessionAnchor.from_dict(raw)
+    decision = sa.resolve(anchor, _url_now(screen, site))
+    if decision["action"] == "navigate":
+        decision["ok"] = _navigate(screen, decision["url"])
+        if not decision["ok"] and anchor is not None and anchor.accepted:
+            return {"action": "session_lost", "url": decision["url"],
+                    "reason": "navigate_failed_after_accepted"}
+    return decision
+
+
+def _remember_anchor(state, site: str, round_name: str, prompt_hash: str,
+                    accepted: bool) -> None:
+    """发送成功后把本轮会话钉住（下次续跑不再新开）。"""
+    from qi import session_anchor as sa
+
+    if state is None:
+        return
+    url = _url_now(_screen_for(site), site)
+    if not url:
+        return
+    anchors = state.data.setdefault("anchors", {})
+    anchors[site] = sa.SessionAnchor(site=site, round_name=round_name, url=url,
+                                     prompt_hash=prompt_hash,
+                                     accepted=bool(accepted)).to_dict()
+    state.save()
+
+
 def _clear_stale_lock(state=None) -> dict:
     """开跑前清掉「持有者已死」的残留锁，并把结果记进 state。
 
@@ -479,9 +556,17 @@ def _ask_upload_body(site: str, prompt: str, material: Path, cfg, state=None) ->
 
     screen = _screen_for(site)
     _clear_composer(screen, site)
-    if not start_new_chat(screen, site):
-        # 上传模式同样必须新开会话：否则材料会发进上一次的旧会话。
-        return {"ok": False, "stage": "new_chat_failed", "feed": "upload"}
+    # S3：先看锚点再决定要不要新开。漂移就回跳；已 accepted 还漂移就硬停，绝不新建。
+    plan = _session_plan(screen, site, state)
+    if plan["action"] == "session_lost":
+        return {"ok": False, "stage": "session_lost", "feed": "upload",
+                "hint": "锚点漂移且已 accepted；按 §10 不新建、不重发，保留账本"}
+    if plan["action"] == "new_allowed":
+        if not start_new_chat(screen, site):
+            return {"ok": False, "stage": "new_chat_failed", "feed": "upload"}
+    elif plan["action"] == "navigate" and not plan.get("ok"):
+        return {"ok": False, "stage": "session_navigate_failed", "feed": "upload",
+                "hint": "锚点回跳失败，且未 accepted；未发送"}
     up = upload.upload(screen, site, str(material), timeout=cfg["upload_timeout"])
     if not up.ok:
         return {"ok": False, "stage": "upload_failed", **up.as_dict()}
@@ -508,6 +593,9 @@ def _ask_upload_body(site: str, prompt: str, material: Path, cfg, state=None) ->
     if state is not None:
         state.mark_chunk(prompt_id, "sent" if result.get("ok") else "unknown",
                          chars=len(result.get("reply") or ""))
+    _remember_anchor(state, site, getattr(state, "round_dir", None) and state.round_dir.name or "",
+                     prompt_id, accepted=bool(result.get("ok")
+                                              or result.get("submission") == "accepted"))
     if not result.get("ok") and result.get("stage") in ("timeout", "interrupted", "harvest_timeout"):
         harvested = harvest_reply(screen, site, wait=float(cfg.get("harvest_wait", 420)))
         if harvested["ok"]:

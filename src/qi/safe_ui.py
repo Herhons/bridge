@@ -34,8 +34,20 @@ class PointVerdict:
 
 
 def decide_point(*, x: int, y: int, client_rect, hit_pid, hit_class: str,
-                 target_pid: int) -> PointVerdict:
-    """点 (x,y) 是否安全。`client_rect` = (left, top, right, bottom)。"""
+                 target_pid: int, hit_top_hwnd=None, target_hwnd=None,
+                 expected_rect=None, current_rect=None) -> PointVerdict:
+    """点 (x,y) 是否安全。`client_rect` = (left, top, right, bottom)。
+
+    `hit_top_hwnd`/`target_hwnd`：命中窗口的**顶层**必须是目标窗口——
+    同进程的弹窗/对话框（同 pid）也能通过 pid 校验，只有比顶层才拦得住。
+    `expected_rect`/`current_rect`：布局漂移（窗口移动/重排/DPI 变）时点会打偏，
+    两值不等就拒。
+    """
+    if (expected_rect is not None and current_rect is not None
+            and tuple(expected_rect) != tuple(current_rect)):
+        return PointVerdict(False, "layout_moved")
+    if hit_top_hwnd is not None and target_hwnd is not None and hit_top_hwnd != target_hwnd:
+        return PointVerdict(False, "other_top_window")
     left, top, right, bottom = client_rect
     if not (left <= x < right and top <= y < bottom):
         return PointVerdict(False, "outside_client")
@@ -125,9 +137,11 @@ def point_verdict(hwnd, x: int, y: int) -> PointVerdict:
     hit = user32.WindowFromPoint(wintypes.POINT(int(x), int(y)))
     if not hit:
         return PointVerdict(False, "no_window_at_point")
+    top = user32.GetAncestor(hit, 2) or hit          # GA_ROOT=2
     return decide_point(x=int(x), y=int(y), client_rect=rect,
                         hit_pid=pid_of(hit), hit_class=class_of(hit),
-                        target_pid=pid_of(hwnd) or -1)
+                        target_pid=pid_of(hwnd) or -1,
+                        hit_top_hwnd=top, target_hwnd=hwnd)
 
 
 def safe_click(hwnd, x: int, y: int) -> PointVerdict:
