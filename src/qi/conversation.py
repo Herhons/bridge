@@ -1321,20 +1321,37 @@ def _first_turn_landed(before, now) -> bool:
     `conversation_changed`（`reason=document_changed`），一次会审就这样白跑。
 
     只认「容器路径 -> 容器下的一段 id」：
-      · gemini   `/app`       -> `/app/<id>`
-      · chatgpt  `/c/local-…` -> `/c/<uuid>`（原 B17 路径，保留）
-    反例必须继续拒：`/app/<id1>` -> `/app/<id2>`（真的换了会话）。
+      · 站点根   `/`           -> `/c/<id>`、`/a/chat/s/<id>`、`/app/<id>`
+      · gemini   `/app`        -> `/app/<id>`
+      · chatgpt  `/c/local-…`  -> `/c/<uuid>`（原 B17 路径，保留）
+    反例必须继续拒：`/app/<id1>` -> `/app/<id2>`、`/c/<id1>` -> `/c/<id2>`。
+
+    站点根这一条不是猜的：`runs/submissions/grok-*.json` 里有 **4 条**真实记录是
+    `https://grok.com/` -> `https://grok.com/c/<uuid>`，形态与 gemini 完全相同，
+    只是根路径写作 `/`。只覆盖 `/app` 等于把 grok 与 chatgpt 的首轮落库漏在外面。
     """
-    old = ((before or {}).get("path") or "").rstrip("/")
+    raw_old = (before or {}).get("path")
     new = (now or {}).get("path") or ""
-    if not old or not new:
+    # 注意别把 `/` 当成"读不到"：站点根的 path 就是 `/`，rstrip 之后是空串，
+    # 而空串恰好是"这一项没读出来"的表示。两者必须分开判。
+    if raw_old is None or not new:
         return False
+    old = raw_old.rstrip("/")
     if _local_chat_persisted(before, now):
         return True
-    if old != "/app":
-        return False
-    rest = new[len("/app/"):] if new.startswith("/app/") else ""
-    return bool(rest) and "/" not in rest
+    segments = [part for part in new.split("/") if part]
+    if old == "":
+        # 站点根：只认这几种已知的会话形态，别的（设置页、更深的路径）一律不认。
+        #   /c/<id>           chatgpt、grok
+        #   /app/<id>         gemini（少数版本根路径直接给 id）
+        #   /a/chat/s/<id>    deepseek
+        if len(segments) == 2 and segments[0] in ("c", "app"):
+            return True
+        return len(segments) == 4 and segments[:3] == ["a", "chat", "s"]
+    if old == "/app":
+        rest = new[len("/app/"):] if new.startswith("/app/") else ""
+        return bool(rest) and "/" not in rest
+    return False
 
 
 def _rect_of(node):

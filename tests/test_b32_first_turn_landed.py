@@ -52,6 +52,30 @@ class LandingRule(unittest.TestCase):
         self.assertFalse(_first_turn_landed(
             *shape("/app/1bd58577f9ed3799", "/app/ffffffffffffffff")))
 
+    def test_site_root_to_session_is_landing(self):
+        """账本里有 4 条真实记录：`grok.com/` -> `grok.com/c/<uuid>`。
+
+        形态和 gemini 完全一样，只是根路径写作 `/`。只覆盖 `/app` 等于把
+        grok 与 chatgpt 的首轮落库漏在外面。
+        """
+        self.assertTrue(_first_turn_landed(
+            *shape("/", "/c/e30751a4-35b0-4b2d-98c8-8c6ed164e")))
+        self.assertTrue(_first_turn_landed(
+            *shape("/", "/c/68f1a2b3-1111-2222-3333-444455556666")))
+
+    def test_deepseek_root_to_chat_is_landing(self):
+        """deepseek 的会话路径是 `/a/chat/s/<id>`，同样三段。"""
+        self.assertTrue(_first_turn_landed(
+            *shape("/", "/a/chat/s/4bc998b5-1767-49a5-9d93-0d1c2f2b1a11")))
+
+    def test_root_to_a_deeper_path_is_not_landing(self):
+        """更深的路径不是"首轮落库"，别放过去。"""
+        self.assertFalse(_first_turn_landed(*shape("/", "/c/abc/extra/more")))
+        self.assertFalse(_first_turn_landed(*shape("/", "/settings")))
+
+    def test_session_to_another_session_is_not_landing(self):
+        self.assertFalse(_first_turn_landed(*shape("/c/abc", "/c/def")))
+
     def test_unrelated_path_change_is_not_landing(self):
         self.assertFalse(_first_turn_landed(*shape("/app/abc", "/settings")))
         self.assertFalse(_first_turn_landed(*shape("/app", "/app")))

@@ -792,3 +792,87 @@ blocks = [回复: "上一轮的旧答案", 提问: 我们的提问]     at=1, ba
 - `scan()` / `_page_text` / `_text_after_prompt` 各端保留自己的；
 - `grok_use.ask()` 的独立等待循环没并到 `conversation.ask` —— 会审走的是后者
   （`feed=grok:upload`），前者只在 CLI 直调时用，两条路径的收卷判据仍不同。
+
+## 33. B32 补漏：首轮落库的判据漏了「站点根」（18:50 起）
+
+做完 B32 只覆盖了 gemini 的 `/app` → `/app/<id>`。这轮翻账本才发现漏得更多：
+
+```
+runs/submissions/grok-*.json    4 条：before=https://grok.com/  after=https://grok.com/c/<uuid>
+runs/submissions/deepseek-*.json    ：before=https://chat.deepseek.com/
+```
+
+grok 的形态跟 gemini **完全一样**（容器 → 会话），只是根路径写作 `/`。
+而 `_first_turn_landed` 当时写的是 `if old != "/app": return False` ——
+等于把 grok、chatgpt 的首轮落库全漏在外面，它们仍在用"接受后 2 次读"的 0.8 秒窗口。
+
+改法：把判据从"写死 `/app`"改成**按已知会话形态认**：
+
+| 形态 | 谁 | 段数 |
+|---|---|---|
+| `/c/<id>` | chatgpt、grok | 2 |
+| `/app/<id>` | gemini（少数版本） | 2 |
+| `/a/chat/s/<id>` | deepseek | 4 |
+
+不认"更深的路径"（`/c/abc/extra/more`）和"只有一段"（`/settings`）：那不是落库。
+
+### 33.1 顺手修掉的一个守卫误伤
+
+原来的守卫是 `if not old or not new: return False`（读不到就不猜）。但站点根的
+path 就是 `/`，`rstrip("/")` 之后成了空串 —— 恰好是"没读出来"的表示，
+于是站点根永远进不了分支。现在把 `raw_old is None`（真读不到）和
+`old == ""`（就是根）分开判。
+
+补 4 条用例（`test_b32_first_turn_landed.py` 11 条）：
+grok/chatgpt 根 → `/c/<id>`、deepseek 根 → `/a/chat/s/<id>`、
+更深的路径不认、会话 → 另一个会话不认。
+
+## 34. B38：账本里 15 条「卡在 submitting」的孤儿，审计原来不给出口（19:00 起）
+
+`submitting` 是"发送前落账、发送后该有终态"的中间态，正常情况下几秒内就变成
+`accepted` / `unknown`。一直停在这里只有一个原因：**写账进程在发送途中被杀**。
+它在 `BLOCKING_STATES` 里 —— 对应提问**永远发不出去**。
+
+实测账本（208 条记录）：
+
+```
+blocked 21 条，其中 submitting 15 条：
+  pid 全部已死 / scope_after 全部缺失 / 17~125 小时前
+```
+
+`tools/submission_clear.py` 其实**早就支持** `--state submitting`，缺的是
+`tools/submission_audit.py` 对这两类只列不导 —— `unknown` 和 `failed_terminal`
+都给了可直接复制的命令，`submitting` 只有一行 `v2_state`。
+
+改法（**只读工具，只加信息，不改任何记录**）：
+
+| 新增 | 说明 |
+|---|---|
+| 孤儿判据 | 三条**同时**成立：写账进程已死（`pid_alive` 返回 `False`）、从没写过 `scope_after`（那是 accepted 才写的）、超过 1 小时 |
+| 字段 | `orphan_submitting` / `writer_alive`（True=活/False=死/None=读不到）/ `has_scope_after` |
+| 命令 | 孤儿也给 `submission_clear --file … --state submitting --reason … --confirm` |
+| 汇总 | 顶层加 `orphan_submitting` 计数 |
+
+判据刻意保守：进程还活着、或读不到进程状态（权限/跨用户）、或写了 `scope_after`、
+或还不到 1 小时 —— 一律**不算**孤儿。宁可漏报，也不提示人去解锁一条正在发送的记录。
+提示语里写明"孤儿多半没发出去，但**不能证明**没发出去"，解锁前要看页面。
+
+**命令只给孤儿**。B26 当时立的规矩是"`submitting` 没有既定解法，不许给会误导的命令"
+（`test_submitting_is_listed_without_a_command` 就是钉这个的）。那条约束继续有效，
+本轮只是把它精细化：非孤儿仍然没有 `command` 字段，只有三条孤儿判据全中才给。
+写测试时先撞了这条 —— 第一版给所有 `submitting` 都发命令，`test_b26_audit_blocked`
+当场变红。约束是对的，改的是我。
+
+新增 `tests/test_b38_orphan_submitting.py` 6 条：孤儿成立、进程还活着、状态读不到、
+有 `scope_after`、不足 1 小时、`accepted` 不进 blocked。
+
+**没有**清这 15 条：按约定"删数据/改账本要停"，本轮只把识别和出口做出来。
+需要时：
+
+```
+py -3.10 tools/submission_audit.py | grep -A2 orphan_submitting
+```
+
+然后把里面 `command` 逐条核对执行（都会要求 `--confirm` 与 `--reason`）。
+
+全量 **1766 用例 OK**。

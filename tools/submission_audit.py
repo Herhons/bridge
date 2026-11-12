@@ -21,7 +21,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from qi import submissions  # noqa: E402
+from qi import submissions, uilock  # noqa: E402
 
 
 def main(argv=None) -> int:
@@ -86,6 +86,31 @@ def main(argv=None) -> int:
             elif info.get("v2_state") == submissions.STATE_FAILED_TERMINAL:
                 entry["command"] = (f"python tools/submission_clear.py --file {path} "
                                     f"--reason \"<为什么可以再试>\" --confirm")
+            elif info.get("v2_state") == submissions.STATE_SUBMITTING:
+                # `submitting` 是"发送前落账、发送后该有终态"的中间态。正常情况下
+                # 几秒内就变成 accepted/unknown；一直停在这里，就是写账进程被杀。
+                # 判孤儿要三个条件同时成立，缺一个都不算（2026-11-12 实测账本里
+                # 积了 15 条：pid 全死、`scope_after` 全缺、17~125 小时前）。
+                dead = uilock.pid_alive(record.get("pid"))
+                orphan = (dead is False
+                          and not record.get("scope_after")
+                          and (age or 0) >= 1.0)
+                entry["pid"] = record.get("pid")
+                entry["writer_alive"] = dead   # True=还活着 / False=已死 / None=读不到
+                entry["has_scope_after"] = bool(record.get("scope_after"))
+                entry["orphan_submitting"] = orphan
+                entry["hint"] = (
+                    "submitting 卡住 = 写账进程在发送途中被杀。孤儿判据（三条同时成立）："
+                    "写账进程已死 + 从没写过 scope_after（那是 accepted 才写的）"
+                    "+ 超过 1 小时。孤儿多半没发出去，但**不能证明**没发出去 —— "
+                    "解锁前先看页面上有没有这条提问。")
+                # B26 定的规矩是"submitting 没有既定解法，不许给会误导的命令"。
+                # 那条约束继续有效：**只有孤儿**才给命令。进程还活着、状态读不到、
+                # 或记录还年轻的时候，给命令等于怂恿人去解锁一条可能正在发送的记录。
+                if orphan:
+                    entry["command"] = (f"python tools/submission_clear.py --file {path} "
+                                        f"--state submitting "
+                                        f"--reason \"<确认页面上没有这条提问>\" --confirm")
             blocked.append(entry)
         if args.verbose:
             rows.append({"file": path.name, **info})
@@ -102,6 +127,7 @@ def main(argv=None) -> int:
         "unreadable": unreadable,
         "blocked": blocked,
         "blocked_total": len(blocked),
+        "orphan_submitting": sum(1 for e in blocked if e.get("orphan_submitting")),
         "note": ("legacy/missing_* 是既定事实，不重建、不回填；"
                  "老记录在恢复时被 reconcile() 判 fail-closed 是有意设计"),
     }
