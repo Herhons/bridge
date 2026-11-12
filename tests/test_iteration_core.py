@@ -18,6 +18,10 @@ SPEC = """# 自迭代循环规格
 
 把已提交的 `docs/self_iteration_spec.md` 交给四家，走完整管道。
 
+## 8. 材料投喂
+
+网页端上传是循环的必备能力。
+
 ## 12. 停机条件
 
 满足任意一条即停，通知 Herhons。
@@ -68,7 +72,8 @@ class VerifyTests(unittest.TestCase):
         return ["docs/self_iteration_spec.md", "src/qi/server.py", "src/qi/upload.py"]
 
     def test_true_read_for_spec_quotes(self):
-        reply = ('可访问=是\n引用：第 5 节「把已提交的 docs/self_iteration_spec.md 交给四家」\n'
+        reply = ('可访问=是\n第 5 节「交给四家，走完整管道」\n'
+                 '第 8 节「网页端上传是循环的必备能力」\n'
                  '第 12 节「满足任意一条即停，通知 Herhons」\n'
                  'src/qi/server.py:120 也要改\n')
         out = it.verify_reply(reply, tree_paths=self._tree(), spec_text=SPEC,

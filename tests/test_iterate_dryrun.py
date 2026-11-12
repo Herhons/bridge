@@ -21,10 +21,14 @@ iterate = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(iterate)                  # noqa: E402
 
 SPEC = ("# 自迭代规格\n\n## 5. Round 0\n\n把已提交的 `docs/self_iteration_spec.md` "
-        "交给四家，走完整管道。\n\n## 12. 停机条件\n\n满足任意一条即停，通知 Herhons。\n")
+        "交给四家，走完整管道。\n\n## 8. 材料投喂\n\n网页端上传是循环的必备能力。\n\n"
+        "## 12. 停机条件\n\n满足任意一条即停，通知 Herhons。\n")
 
-GOOD = ('可访问=是\n第 5 节「把已提交的 docs/self_iteration_spec.md 交给四家」\n'
-        '第 12 节「满足任意一条即停，通知 Herhons」\n'
+# 2026-11-12 起验真按「结构化意见条数」计分母：每条至少一处有效引句才算命中，
+# 所以夹具要写成 3 条独立意见（以前两句话就能靠路径凑够 3 个 hit）。
+GOOD = ('可访问=是\n1. 第 5 节「交给四家，走完整管道」\n'
+        '2. 第 8 节「网页端上传是循环的必备能力」\n'
+        '3. 第 12 节「满足任意一条即停，通知 Herhons」\n'
         'docs/self_iteration_spec.md:108\n')
 BAD = "可访问=是\n第 9 节「这句话不存在于规格」\n"
 

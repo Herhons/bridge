@@ -134,8 +134,22 @@ def sha256_text(text: str) -> str:
 PATH_RE = re.compile(r"(?:https?://github\.com/[\w.-]+/[\w.-]+/(?:blob|tree)/[\w.-]+/)?"
                      r"([A-Za-z0-9_./-]+\.(?:py|md|json|js|html|txt|yml|yaml|cfg|ini))")
 LINE_RE = re.compile(r":(\d+)(?:-(\d+))?")
+#: 同时抓「文件:行号」——判断一条是不是"代码式引用"要用到行号，
+#: 但 PATH_RE 只抓文件名，行号会被丢掉（2026-11-12 单测暴露）。
+
 QUOTE_RE = re.compile(r"[「“\"']([^」”\"']{6,120})[」”\"']")
-SECTION_RE = re.compile(r"(?:第\s*)?(\d+(?:\.\d+)*)\s*(?:节|章|条|§)")
+#: 两种写法都要认：「第 5.2 节」与「§5.2」。之前的正则只认前者，
+#: 而真机回复里几乎全是后者（grok/chatgpt 的 `§8 / §5.2` 一条都抓不到）。
+SECTION_RE = re.compile(
+    r"(?:第\s*(\d+(?:\.\d+)*)\s*(?:节|章|条)|§\s*(\d+(?:\.\d+)*))")
+PATH_LINE_RE = re.compile(
+    r"([A-Za-z0-9_./-]+\.(?:py|md|json|js|html|txt|yml|yaml|cfg|ini)):(\d+)")
+
+#: 一条意见的起点：编号列表项（`1.` / `2、`）。
+NUMBERED_ITEM_RE = re.compile(r"(?m)^\s*\d+[.、]\s+")
+#: 行内分条：`第 5.2 节…原文依据：` 这种「章节号 + 原文依据」是 gemini 的写法。
+SECTION_ANCHOR_RE = re.compile(
+    r"(?:第\s*\d+(?:\.\d+)*\s*节|§\s*\d+(?:\.\d+)*)[^。\n]{0,24}?(?:原文依据|原文)[：:]")
 
 
 def normalize_path(raw: str) -> str:
@@ -151,44 +165,169 @@ def _squash(text: str) -> str:
     return re.sub(r"\s+", "", text)
 
 
+def _sections(text: str) -> list[str]:
+    """抽出这条意见引用的章节号（去重、保序）。"""
+    out: list[str] = []
+    for match in SECTION_RE.finditer(text):
+        ref = match.group(1) or match.group(2)
+        if ref and ref not in out:
+            out.append(ref)
+    return out
+
+
+def _cut_at(text: str, positions) -> list[str]:
+    """按给定位置把文本切开；位置 0 不切（否则会切出一个空串）。"""
+    cuts = sorted({p for p in positions if 0 < p < len(text)})
+    if not cuts:
+        return [text.strip()] if text.strip() else []
+    blocks, prev = [], 0
+    for cut in cuts:
+        piece = text[prev:cut].strip()
+        if piece:
+            blocks.append(piece)
+        prev = cut
+    tail = text[prev:].strip()
+    if tail:
+        blocks.append(tail)
+    return blocks
+
+
+def split_opinions(reply: str) -> list[str]:
+    """把回复切成「结构化意见」的候选块。
+
+    三种写法都要认，按优先级试，能切出 ≥2 块就用：
+      1. 编号列表（`1. ` / `2、`）——grok / chatgpt 的严格版；
+      2. 行内「章节号…原文依据：」——gemini 的严格版（一整段里逐条展开）；
+      3. 空行分段——兜底。
+
+    这里**只负责切**，不做命中判定；过滤与计数在 `verify_reply` 里做。
+    """
+    text = (reply or "").strip()
+    if not text:
+        return []
+    numbered = [m.start() for m in NUMBERED_ITEM_RE.finditer(text)]
+    if len(numbered) >= 2:
+        return _cut_at(text, numbered)
+    anchors = [m.start() for m in SECTION_ANCHOR_RE.finditer(text)]
+    if len(anchors) >= 2:
+        return _cut_at(text, anchors)
+    heads = _line_heads(text)
+    if len(heads) >= 2:
+        return _cut_at(text, heads)
+    blocks = [b.strip() for b in re.split(r"\n\s*\n", text) if b.strip()]
+    return blocks or [text]
+
+
+#: 以章节号开头的行（可能带 markdown 强调）。
+HEAD_START_RE = re.compile(r"^[*_`\s]*(?:第\s*\d+(?:\.\d+)*\s*节|§\s*\d+(?:\.\d+)*)")
+#: 章节号写在括号里的行（chatgpt 的小标题）。
+HEAD_PAREN_RE = re.compile(r"[（(][^）)]{0,20}(?:§|第\s*\d+(?:\.\d+)*\s*节)")
+
+#: 这些前缀说明该行是上一条的**说明**，不是新意见的标题。
+DETAIL_PREFIXES = ("原句", "问题", "失败", "改", "验收", "为什么", "怎么", "注", "说明",
+                   "证据", "建议", "风险")
+
+
+def _is_detail(line: str) -> bool:
+    """`**改法：**` / `问题：` / `原句：` 这类是上一条的说明行。"""
+    probe = line.lstrip("*_` ").strip()
+    return probe.startswith(DETAIL_PREFIXES)
+
+
+def _line_heads(text: str) -> list[int]:
+    """逐行写意见的回复（chatgpt 那种）：标题行本身就是一条意见的起点。
+
+    标题行 = 不以「原句：/问题：/改：…」开头，且含章节号或 `文件:行号`。
+    """
+    heads, offset = [], 0
+    for line in text.splitlines(keepends=True):
+        stripped = line.strip()
+        if stripped and not _is_detail(stripped):
+            # 标题行只认两种形态：
+            #   · 以章节号开头且很短（「第 12 节「…」」）——逐条列点；
+            #   · 章节号写在括号里（「独立验收没有必经闸门（§4、§1、§9.2）」）——chatgpt 的写法。
+            # 纯 `文件:行号` 行是**证据行**，正文里顺手提到的「第4节随后…」是续写，
+            # 都不算新意见（按行切会把 chatgpt 的 8 条切成 15 条，实测 9/15）。
+            if (HEAD_START_RE.match(stripped) and len(stripped) <= 40) \
+                    or HEAD_PAREN_RE.search(stripped):
+                heads.append(offset + (len(line) - len(line.lstrip())))
+        offset += len(line)
+    return heads
+
+
+def _has_citation(block: str) -> bool:
+    """这条到底算不算「一条意见」。
+
+    算：写了章节号、或写了逐字引句、或写了 `文件:行号`。
+    不算：只有一句 `可访问=是`、或只提到一个不带行号的文件名
+    （「（全文已读：docs/self_iteration_spec.md）」这类前言不能凑成一条意见）。
+    """
+    bare = QUOTE_RE.sub(" ", block)          # 引句里的文件名不算独立引用
+    if SECTION_RE.search(bare) or QUOTE_RE.search(block):
+        return True
+    return bool(PATH_LINE_RE.search(bare))
+
+
 def verify_reply(reply: str, *, tree_paths, spec_text: str | None = None,
                  core_paths=CODE_CORE) -> dict:
-    """核对一条回复里的引用。返回命中数、命中率、判定与逐条明细。
+    """核对一条回复里的引用。返回命中**条数**、命中率、判定与逐条明细。
 
-    `tree_paths` 是本轮快照的文件清单（真值表）；`spec_text` 给了就额外支持
-    「章节号 + 逐字引句」（Round 0 变体，规格 §5.3）。
+    计数口径（2026-11-12 Herhons 批准，规格 §9.1 未定义分母，这里补空白）：
+
+    * **分母 = 结构化意见条数**，不是全文引用总数。一段里写 8 条意见，分母就是 8。
+    * **一条命中要求至少一处有效引用**：引句在规格里逐字找到，或路径在快照树里存在。
+    * **光写章节号不算命中**：章节号只说明这条在讲哪儿，必须有引句或有效路径。
+    * **重复引句只算一次**：同一句（空白归一后）在多条里复用，后来的那条不算命中。
+    * 阈值不变：真读 = 命中 ≥ 3 且 命中率 ≥ 0.7 且至少一条落在核心位置。
     """
     tree = {normalize_path(p) for p in tree_paths}
     squashed_spec = _squash(spec_text) if spec_text else None
-    rows = []
-    hits = 0
+    seen_quotes: dict[str, int] = {}
+    rows, hits, core_hit = [], 0, False
 
-    for raw in PATH_RE.findall(reply or ""):
-        path = normalize_path(raw)
-        ok = path in tree
-        rows.append({"kind": "path", "ref": path, "hit": ok})
-        hits += 1 if ok else 0
+    for index, block in enumerate(split_opinions(reply), start=1):
+        if not _has_citation(block):
+            continue
+        # 引句里出现的文件名/章节号属于「被引用的原文」，不能当成作者自己的定位，
+        # 否则一句捏造的引句只要提到真实文件名就会被判命中。
+        bare = QUOTE_RE.sub(" ", block)
+        sections = _sections(bare)
+        has_line = bool(PATH_LINE_RE.search(bare))
 
-    if squashed_spec:
-        for quote in QUOTE_RE.findall(reply or ""):
-            ok = _squash(quote) in squashed_spec
-            rows.append({"kind": "quote", "ref": quote[:40], "hit": ok})
-            hits += 1 if ok else 0
+        quote_rows = []
+        for quote in QUOTE_RE.findall(block):
+            squashed = _squash(quote)
+            if not squashed:
+                continue
+            if squashed in seen_quotes:
+                quote_rows.append({"ref": quote[:40], "hit": False,
+                                   "dup_of": seen_quotes[squashed]})
+                continue
+            ok = bool(squashed_spec) and squashed in squashed_spec
+            if ok:
+                seen_quotes[squashed] = index
+            quote_rows.append({"ref": quote[:40], "hit": ok})
+
+        path_rows = []
+        for raw in PATH_RE.findall(bare):
+            path = normalize_path(raw)
+            path_rows.append({"ref": path, "hit": path in tree,
+                              "with_line": has_line})
+
+        hit = any(r["hit"] for r in quote_rows) or any(r["hit"] for r in path_rows)
+        if hit:
+            hits += 1
+            if any(r["hit"] for r in quote_rows):
+                core_hit = True
+            if any(r["hit"] and (r["ref"] == SPEC_PATH
+                                 or any(r["ref"].startswith(p) for p in core_paths))
+                   for r in path_rows):
+                core_hit = True
+        rows.append({"index": index, "sections": sections, "hit": hit,
+                     "quotes": quote_rows, "paths": path_rows})
 
     total = len(rows)
     rate = (hits / total) if total else 0.0
-    core_hit = False
-    for row in rows:
-        if not row["hit"]:
-            continue
-        ref = row["ref"]
-        if row["kind"] == "quote" and squashed_spec:
-            core_hit = True
-        elif any(ref.startswith(prefix) for prefix in core_paths):
-            core_hit = True
-        elif ref == SPEC_PATH:
-            core_hit = True
-
     if hits >= TRUE_READ["min_hits"] and rate >= TRUE_READ["min_rate"] and core_hit:
         verdict = "true_read"
     elif hits >= PARTIAL["min_hits"] and rate >= PARTIAL["min_rate"]:
@@ -196,7 +335,9 @@ def verify_reply(reply: str, *, tree_paths, spec_text: str | None = None,
     else:
         verdict = "unread"
     return {"hits": hits, "total": total, "rate": round(rate, 2),
-            "core": core_hit, "verdict": verdict, "rows": rows}
+            "core": core_hit, "verdict": verdict, "rows": rows,
+            # 只做提示，不参与判定：意见条数少于 §7.2 要求的 5 条时标记出来。
+            "few_opinions": total < 5}
 
 
 # ---------------------------------------------------------------- 匿名化
