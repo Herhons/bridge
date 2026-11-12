@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import ctypes
 import time
+from pathlib import Path
 from ctypes import wintypes
 from dataclasses import dataclass, field
 
@@ -212,6 +213,14 @@ def clear_attachments(screen, site: str) -> int:
     return removed
 
 
+def _absolute(path) -> str:
+    """上传路径一律转绝对路径（文件对话框不认相对路径）。"""
+    try:
+        return str(Path(path).expanduser().resolve())
+    except (OSError, RuntimeError, ValueError):
+        return str(path)
+
+
 def upload(screen, site: str, path: str, *, timeout: float = 60.0,
            expect: str | None = None) -> UploadResult:
     """把 `path` 上传到当前页。成功判据：页面上出现该文件名（或 `expect` 子串）。"""
@@ -219,6 +228,9 @@ def upload(screen, site: str, path: str, *, timeout: float = 60.0,
     spec = ATTACH.get(site)
     if not spec:
         return UploadResult(False, "site_not_configured", path=path)
+    # 文件对话框按**它自己的**当前目录解析路径：传相对路径时永远打不开，
+    # 表现为「点了打开、对话框不关」（2026-11-12 实测 dialog_stuck）。
+    path = _absolute(path)
     filename = path.replace("\\", "/").rsplit("/", 1)[-1]
     needle = filename if expect is None else expect
     started = time.time()

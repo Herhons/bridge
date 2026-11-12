@@ -886,13 +886,22 @@ POSITIONAL_AFTER = 45.0
 
 
 def positional_ready(*, busy: bool, accepted: bool, since: float | None,
-                     now: float, after: float = POSITIONAL_AFTER) -> bool:
+                     now: float, after: float = POSITIONAL_AFTER,
+                     evidence: bool = False) -> bool:
     """纯函数：是不是该放弃 `copies > baseline`、改用树内位置判候选。
 
     **不能在生成中放行**（半句话会被交卷）；提问还没被收下也不放行。
     单独拎出来是为了能离线钉住这三条门槛，不靠 300s 真机超时去验。
+
+    `evidence`：树里已出现本轮回答的动作条（`answer_action_after`）。
+    deepseek 实测「停止」图标在回答结束后仍留在画面上，`busy` 恒为真，
+    原来这条永不放行 → 每轮都 25 分钟空转到 timeout（2026-11-12 三轮
+    `stage=text_extracted`）。动作条是完成证据，可以替代 `not busy`；
+    交卷前仍有文本长度签名稳定这道闸，不会交半句话。
     """
-    return bool(not busy and accepted and since is not None and now - since >= after)
+    if not accepted or since is None or now - since < after:
+        return False
+    return bool(not busy or evidence)
 
 
 # B17：dsh 首页的回复复制键要 hover 才出现，`view.copies` 一直为空，
@@ -908,7 +917,119 @@ UIA_TEXT_EXACT = frozenset({
     "朗读", "分享", "Off", "Low", "High", "Max",
     "DeepSeek-V4.1-Flash", "GPT-6Luna",
 })
-UIA_TEXT_PREFIX = ("描述你想要构建的内容", "搜索模型", "输入消息", "问DeepSeek")
+UIA_TEXT_PREFIX = ("描述你想要构建的内容", "搜索模型", "输入消息", "问DeepSeek",
+                   # deepseek 的联网检索抬头与页脚（2026-11-12 实测混进答案尾部）
+                   "搜索到", "已深度思考", "深度思考", "内容由 AI 生成", "以上内容")
+def is_count_text(text: str) -> bool:
+    """「-1-11」「15个网页」「2s」这类计数/时间戳，不可能是正文。
+
+    不用正则：本模块不导入 `re`（保持依赖面最小），而且这类判据就三行。
+    """
+    probe = (text or "").strip()
+    if not probe:
+        return False
+    if probe.endswith("个网页"):
+        return probe[:-3].strip().isdigit()
+    if probe[-1] in "sS" and probe[:-1].isdigit():
+        return True
+    body = probe.lstrip("-")
+    # 长度 ≤ 8 才算计数：`2026-11-12` 这种日期在正文里是合法内容，不能删。
+    return bool(body) and len(body) <= 8 and all(ch.isdigit() or ch in "-/." for ch in body)
+
+
+#: 回答动作条上的按钮名。**不依赖 hover 的完成证据**：deepseek 的动作条
+#: 要悬停才出图片模板，但按钮本身在 UIA 树里有名字，回答一生成完就出现
+#: （2026-11-12 实测：完成页 2 个「朗读」，生成中 0 个）。
+ANSWER_ACTION_NAMES = frozenset({"朗读", "复制", "重新生成", "重新生成回复",
+                                 "点赞", "点踩", "分享"})
+
+
+def _prompt_indices(ordered, prompts, editor) -> tuple[list[int], int]:
+    """本轮提问在树里的下标，以及「答案区」的右边界。
+
+    **必须排除编辑器之后的提问**：deepseek 把历史提问预览排在 composer 之后
+    （实测 2026-11-12：prompt 在 1000 与 1217，编辑器在 1177），取「最后一个」
+    会把起点放到 1218、终点留在 1177，切片为空——于是每轮都判 no_reply。
+    """
+    end = len(ordered)
+    if editor is not None:
+        try:
+            end = ordered.index(editor)
+        except ValueError:
+            end = len(ordered)
+    inside = [i for i, node in enumerate(ordered) if i < end and node in prompts]
+    if inside:
+        return inside, end
+    outside = [i for i, node in enumerate(ordered) if node in prompts]
+    return outside, len(ordered)
+
+
+def answer_action_after(root, prompts, editor=None) -> int:
+    """末个提问之后出现了几个回答动作按钮。历史回答的动作条不算本轮。"""
+    ordered = list(root.walk())
+    prompt_at, end = _prompt_indices(ordered, prompts, editor)
+    if not prompt_at:
+        return 0
+    start = max(prompt_at) + 1
+    return sum(1 for node in ordered[start:end]
+               if node.kind == "ButtonControl"
+               and (node.name or "").strip() in ANSWER_ACTION_NAMES)
+
+
+def _rect_of(node):
+    """控件矩形，统一成 `(left, top, right, bottom)`。
+
+    UIA 有时给 RECT（有属性），有时给四元组（真机 2026-11-12 实测两种都出现过），
+    这里统一，避免调用处再判类型。
+    """
+    try:
+        rect = node.control.BoundingRectangle
+    except Exception:                                 # noqa: BLE001
+        return None
+    if rect is None:
+        return None
+    try:
+        left, top, right, bottom = rect.left, rect.top, rect.right, rect.bottom
+    except AttributeError:
+        try:
+            left, top, right, bottom = rect
+        except Exception:                             # noqa: BLE001
+            return None
+    if bottom <= top or right <= left:
+        return None
+    return (left, top, right, bottom)
+
+
+def uia_text_join(nodes) -> str:
+    """把多段叶子文本按顺序拼成回复：同一视觉行接在一起，跨行才换行。
+
+    deepseek 的长回答既「一段一个 TextControl」（实测 50+ 段），也会把一句话
+    拆成多个行内片段；只取 `nodes[-1]` 等于只交最后一段（2026-11-12 修）。
+    相邻重复只留一份——同一段会被父子各报一次。
+    """
+    lines: list[dict] = []
+    for node in nodes:
+        try:
+            text = ui.canonical(ui.text_of(node))
+        except Exception:                             # noqa: BLE001
+            continue
+        if not text or (lines and lines[-1]["parts"][-1] == text):
+            continue
+        rect = _rect_of(node)
+        if rect is not None:
+            left, top, right, bottom = rect
+            center, height = (top + bottom) / 2, bottom - top
+        if rect is not None and lines and lines[-1]["center"] is not None:
+            last = lines[-1]
+            if (abs(last["center"] - center) <= max(4.0, height * 0.45)
+                    and left - last["right"] <= 40):
+                last["parts"].append(text)
+                last["right"] = max(last["right"], right)
+                continue
+        lines.append({"center": center if rect is not None else None,
+                      "parts": [text],
+                      "right": right if rect is not None else 0})
+    return "\n".join("".join(line["parts"]) for line in lines).strip()
 
 
 def uia_text_candidates(view, prompts, editor, prompt_text=""):
@@ -918,18 +1039,20 @@ def uia_text_candidates(view, prompts, editor, prompt_text=""):
     天然落在这个区间之外；再用黑名单和「与提问相等」两道过滤挡 UI 文案。
     """
     ordered = list(view.root.walk())
-    prompt_at = [i for i, node in enumerate(ordered) if node in prompts]
+    prompt_at, end = _prompt_indices(ordered, prompts, editor)
     if not prompt_at:
         return []
     start = max(prompt_at) + 1
-    end = len(ordered)
-    if editor is not None:
-        try:
-            end = ordered.index(editor)
-        except ValueError:
-            pass
+    # 提问气泡的**子节点**是回声：deepseek 的提问是 GroupControl，正文在子节点里，
+    # 按「节点等于提问」挡不住（实测 1004 是「请分 8 段…」的截断版）。
+    # 用父子关系判，而不是「文本是提问的子串」——后者会误删**答案本身**
+    # （夹具实测：答案恰好是提问里的那个 token）。
+    echo_ids = {id(child) for prompt_node in prompts
+                for child in prompt_node.walk()}
     out = []
     for node in ordered[start:max(start, end)]:
+        if id(node) in echo_ids:
+            continue
         if node.kind not in ("TextControl", "HyperlinkControl") or node.children:
             continue
         try:
@@ -941,6 +1064,8 @@ def uia_text_candidates(view, prompts, editor, prompt_text=""):
         if any(text.startswith(word) for word in UIA_TEXT_PREFIX):
             continue
         if prompt_text and textcmp.equal(prompt_text, text):
+            continue
+        if is_count_text(text):
             continue
         out.append(node)
     return out
@@ -1413,6 +1538,9 @@ def _ask_impl(conversation, prompt, timeout=180.0, pre_send=None, plain=False,
         busy_last_sig = None
         busy_ignored_once = False
         no_copies_since = None
+        copies_max = 0          # 诊断：本轮见过的最大复制键条数
+        busy_reads = 0          # 诊断：读到 busy=True 的次数
+        evidence_seen = False   # 诊断：是否见过回答动作条（完成证据）
         # B17：只复制到提问时用（见下面的 PROMPT_COPY_GRACE）：(当时的复制键条数, 起算时刻)
         prompt_only = None
         loop_started = time.monotonic()
@@ -1632,6 +1760,8 @@ def _ask_impl(conversation, prompt, timeout=180.0, pre_send=None, plain=False,
             # 文本长度参与签名？这里没有正文，所以用 (copies, 输入框长度)；
             # 真正防"半句话"的是下面 settle 签名里的 reply_text_len，它一直在变。
             busy_now = bool(view.busy)
+            copies_max = max(copies_max, len(view.copies))
+            busy_reads += 1 if busy_now else 0
             busy_ignored = False
             if busy_now and stall_limit > 0:
                 sig_now = (len(view.copies), len(view.value or ""))
@@ -1661,8 +1791,17 @@ def _ask_impl(conversation, prompt, timeout=180.0, pre_send=None, plain=False,
                 # `copies=9 baseline=9` 一动不动，而窗口里回复明明已经在了。
                 # 卡够 45s 且不在生成中，就改用「树里位置在提问之后」判候选，
                 # 不再把 copies 的条数差当唯一门槛。快路径（几十秒就出答案）不变。
+                # 只在「copies 一直为空且已过 45s」时才多走一次树，量很小；
+                # 动作条也算完成证据（busy 可能是停止图标的误报）。
+                evidence = False
+                if (accepted and no_copies_since is not None
+                        and now_gate - no_copies_since >= POSITIONAL_AFTER):
+                    evidence = answer_action_after(view.root, prompts,
+                                                   getattr(view, "editor", None)) > 0
+                    evidence_seen = evidence_seen or evidence
                 positional = positional_ready(busy=busy_now, accepted=accepted,
-                                              since=no_copies_since, now=now_gate)
+                                              since=no_copies_since, now=now_gate,
+                                              evidence=evidence)
                 heartbeat.beat("gate", reads=hb_reads, busy=busy_now,
                                copies=len(view.copies), baseline=baseline,
                                positional=positional,
@@ -1699,7 +1838,7 @@ def _ask_impl(conversation, prompt, timeout=180.0, pre_send=None, plain=False,
                         if sig != stable_sig:
                             stable_sig, stable_since = sig, now
                         if now - stable_since >= settle:
-                            text = ui.canonical(ui.text_of(nodes[-1]))
+                            text = uia_text_join(nodes)
                             screen = getattr(conversation, "screen", None)
                             shot, warns = None, list(state.get("warnings") or [])
                             if screen is not None:
@@ -1804,7 +1943,10 @@ def _ask_impl(conversation, prompt, timeout=180.0, pre_send=None, plain=False,
         else:
             kind = ("still_generating"
                     if state["sent"] and (last_busy or stable_sig is not None) else "no_reply")
-        out = {**state, "stage": "timeout", "timeout_kind": kind}
+        out = {**state, "stage": "timeout", "timeout_kind": kind,
+               "diagnostics": {"reads": hb_reads, "copies_max": copies_max,
+                               "busy_reads": busy_reads, "accepted": bool(accepted),
+                               "evidence_seen": evidence_seen}}
         if last_signals:
             out["reject_facts"] = dict(last_signals)
         return out

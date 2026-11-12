@@ -3,16 +3,17 @@
     "sha": "unknown",
     "valid_seats": [
       "deepseek",
-      "gemini"
+      "gemini",
+      "grok"
     ],
-    "valid_count": 2,
-    "meets_three_vendors": false,
+    "valid_count": 3,
+    "meets_three_vendors": true,
     "seats": {
       "chatgpt": {
-        "chars": 2050,
+        "chars": 2137,
         "hits": 1,
-        "total": 4,
-        "rate": 0.25,
+        "total": 7,
+        "rate": 0.14,
         "core": false,
         "verdict": "unread"
       },
@@ -31,14 +32,22 @@
         "rate": 0.83,
         "core": true,
         "verdict": "true_read"
+      },
+      "grok": {
+        "chars": 2238,
+        "hits": 5,
+        "total": 6,
+        "rate": 0.83,
+        "core": true,
+        "verdict": "true_read"
       }
     }
   },
   "detail": {
     "chatgpt": {
       "hits": 1,
-      "total": 4,
-      "rate": 0.25,
+      "total": 7,
+      "rate": 0.14,
       "core": false,
       "verdict": "unread",
       "rows": [
@@ -47,6 +56,19 @@
           "sections": [],
           "hit": false,
           "quotes": [],
+          "paths": []
+        },
+        {
+          "index": 2,
+          "sections": [],
+          "hit": false,
+          "quotes": [
+            {
+              "ref": "根因不是某个 if 写漏了，而是默认允许盲点盲按。",
+              "hit": false,
+              "core": false
+            }
+          ],
           "paths": [
             {
               "ref": "safe_ui.py",
@@ -56,19 +78,31 @@
           ]
         },
         {
-          "index": 2,
+          "index": 3,
           "sections": [
             "13"
           ],
           "hit": false,
-          "quotes": [],
+          "quotes": [
+            {
+              "ref": "进程被杀后能从本轮已完成的步骤续跑，且不违反防重发（同一提问已accepted不",
+              "hit": false,
+              "core": false
+            }
+          ],
           "paths": []
         },
         {
-          "index": 3,
+          "index": 4,
           "sections": [],
           "hit": false,
-          "quotes": [],
+          "quotes": [
+            {
+              "ref": "_ask_upload_body仍在发送前直接start_new_chat，没有",
+              "hit": false,
+              "core": false
+            }
+          ],
           "paths": [
             {
               "ref": "__use.py",
@@ -78,22 +112,50 @@
           ]
         },
         {
-          "index": 4,
+          "index": 5,
           "sections": [
-            "13",
-            "10",
-            "12"
+            "13"
           ],
+          "hit": false,
+          "quotes": [
+            {
+              "ref": "允许复用现有bridge_server、`tools/live_job.py`、",
+              "hit": false,
+              "core": false
+            }
+          ],
+          "paths": [
+            {
+              "ref": "__use.py",
+              "hit": false,
+              "with_line": false
+            }
+          ]
+        },
+        {
+          "index": 6,
+          "sections": [],
           "hit": true,
           "quotes": [
             {
-              "ref": "允许复用现有\nbridge_server\n`tools/live_job.py\n",
-              "hit": false,
-              "core": false
-            },
-            {
               "ref": "# 与提问重合且长度 >= 8 的块按回声丢掉；以「可访问",
               "hit": true,
+              "core": false
+            }
+          ],
+          "paths": []
+        },
+        {
+          "index": 7,
+          "sections": [
+            "10",
+            "12"
+          ],
+          "hit": false,
+          "quotes": [
+            {
+              "ref": "tools/sisyphus.py读plan.md条目、按 ID 断点续跑、命中",
+              "hit": false,
               "core": false
             }
           ],
@@ -102,16 +164,11 @@
               "ref": "sisyphus.py",
               "hit": false,
               "with_line": false
-            },
-            {
-              "ref": "tools/sisyphus.py",
-              "hit": true,
-              "with_line": false
             }
           ]
         }
       ],
-      "few_opinions": true
+      "few_opinions": false
     },
     "deepseek": {
       "hits": 4,
@@ -751,6 +808,177 @@
             },
             {
               "ref": "STOP.md",
+              "hit": false,
+              "with_line": false
+            }
+          ]
+        }
+      ],
+      "few_opinions": false
+    },
+    "grok": {
+      "hits": 5,
+      "total": 6,
+      "rate": 0.83,
+      "core": true,
+      "verdict": "true_read",
+      "rows": [
+        {
+          "index": 1,
+          "sections": [
+            "10",
+            "5.4"
+          ],
+          "hit": true,
+          "quotes": [
+            {
+              "ref": "本节优先于 §5.4 中「大改须批准",
+              "hit": true,
+              "core": true
+            },
+            {
+              "ref": "当次明确授权",
+              "hit": true,
+              "core": true
+            },
+            {
+              "ref": "授权修改§X",
+              "hit": false,
+              "core": false
+            }
+          ],
+          "paths": [
+            {
+              "ref": "decisions.md",
+              "hit": false,
+              "with_line": false
+            },
+            {
+              "ref": "decisions.md",
+              "hit": false,
+              "with_line": false
+            },
+            {
+              "ref": "decisions.md",
+              "hit": false,
+              "with_line": false
+            },
+            {
+              "ref": "STOP.md",
+              "hit": false,
+              "with_line": false
+            }
+          ]
+        },
+        {
+          "index": 2,
+          "sections": [
+            "8"
+          ],
+          "hit": true,
+          "quotes": [
+            {
+              "ref": "网页端上传是循环的必备能力，须在 Round 0 修通，并有一次通过的自检验证「",
+              "hit": true,
+              "core": true
+            },
+            {
+              "ref": "对方按文件内容作答",
+              "hit": true,
+              "core": true
+            },
+            {
+              "ref": "凭记忆或忽略文件作答",
+              "hit": false,
+              "core": false
+            }
+          ],
+          "paths": []
+        },
+        {
+          "index": 3,
+          "sections": [
+            "5.3",
+            "9.1"
+          ],
+          "hit": true,
+          "quotes": [
+            {
+              "ref": "分段粘贴时，命中以「章节号 + 逐字引句",
+              "hit": true,
+              "core": true
+            }
+          ],
+          "paths": []
+        },
+        {
+          "index": 4,
+          "sections": [
+            "5.5",
+            "12"
+          ],
+          "hit": true,
+          "quotes": [
+            {
+              "ref": "若只有文字澄清、例子、归档字段等小改：直接进入代码轮（Round 1），不再重复",
+              "hit": true,
+              "core": true
+            },
+            {
+              "ref": "改变轮次合同",
+              "hit": true,
+              "core": true
+            }
+          ],
+          "paths": []
+        },
+        {
+          "index": 5,
+          "sections": [
+            "13"
+          ],
+          "hit": false,
+          "quotes": [
+            {
+              "ref": "状态机落盘。进程被杀后能从本轮已完成的步骤续跑，且不违反防重发（同一提问已acc",
+              "hit": false,
+              "core": false
+            }
+          ],
+          "paths": [
+            {
+              "ref": "state.json",
+              "hit": false,
+              "with_line": false
+            }
+          ]
+        },
+        {
+          "index": 6,
+          "sections": [
+            "9.2"
+          ],
+          "hit": true,
+          "quotes": [
+            {
+              "ref": "若汇总者要补充，必须单独列为「汇总者新增",
+              "hit": true,
+              "core": true
+            }
+          ],
+          "paths": [
+            {
+              "ref": "plan.md",
+              "hit": false,
+              "with_line": false
+            },
+            {
+              "ref": "verification.md",
+              "hit": false,
+              "with_line": false
+            },
+            {
+              "ref": "plan.md",
               "hit": false,
               "with_line": false
             }

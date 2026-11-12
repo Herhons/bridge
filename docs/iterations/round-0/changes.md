@@ -326,3 +326,84 @@ chatgpt 3/7 partial、grok 3/5 partial（引句取自材料 §3.1，core=false�
 - P4 `sisyphus.py` 增 `verification_ok` 前置闸门（未核实拒跑，退出码 4）与 `MAX_ATTEMPTS=3`（三振，退出码 5）。
 
 用例 +4（safe_ui 2、echo 1、sisyphus 1），全量 **1635 OK**。
+
+## 23. STOP_20261112_1115 的三项下一步（2026-11-12 13:31 起）
+
+STOP 已改名 `STOP_handled_20261112_1331.md`。
+
+### 23.1 第 3 项（快照 SHA）——本来就已经修好
+
+`prompt.md` 里的快照是 `6b049b32f20cc11010d3bf92e467fdeeff98d659`，
+与 `round-0/snapshot.json` 一致，且 `git cat-file -e` 可达。STOP 写的是旧值 `2348121`。
+**无需改动**，只在此记录核对结果。
+
+### 23.2 第 2 项（DeepSeek 取答案靠兜底）——根因不是"完成检测弱"，是**锚点选错**
+
+三轮会审都是 `stage=text_extracted`，即 `conversation.ask` 空转到 timeout。真机诊断（read-only）：
+
+| 观察 | 值 |
+|---|---|
+| `busy`（`ds_stop` 模板） | 前 17 次读为真，之后为假——**不是**「停止图标常驻」 |
+| `copies`（`ds_actions`/`ds_copy` 模板） | 全程 0（动作条要 hover，模板抓不到） |
+| `prompt_nodes` | **2 个**（下标 1000 与 1217），编辑器在 **1177** |
+| `uia_text_candidates` | **0** |
+
+根因：`uia_text_candidates` 用「最后一个提问」当锚点、用编辑器当下界。
+deepseek 把**历史提问预览**排在 composer 之后，于是 `start=1218 > end=1177`，切片恒空。
+`answer_action_after` 同病，所以 `evidence_seen=false`。
+
+修了四处（全部可离线测）：
+
+| 改动 | 位置 | 说明 |
+|---|---|---|
+| 锚点只认编辑器**之前**的提问 | `conversation._prompt_indices` | 新增；`uia_text_candidates` 与 `answer_action_after` 共用 |
+| 完成证据 | `conversation.answer_action_after` | 回答动作条按钮（朗读/复制/重新生成…）出现即视为生成完毕；`positional_ready(evidence=)` 允许在 `busy` 误报时放行 |
+| 多段拼接 | `conversation.uia_text_join` | 原 `nodes[-1]` 只交最后一段；改为按视觉行回拼（同一行接起来，跨行换行） |
+| 超时诊断 | `conversation._ask_impl` | timeout 结果带 `diagnostics{reads,copies_max,busy_reads,accepted,evidence_seen}` |
+
+真机结果（同一标签页）：
+- 长回答（8 段）静态取回：候选 67 → 54 段、2079 字，起点是答案而非提问回声，`evidence=1`；
+- 新发一问走 `conversation.ask`：**`stage=answered`、7.9 秒、641 字**（此前必 timeout）。
+- 兜底不再是唯一出路；`text_extracted` 只在真超时时才出现。
+
+顺带修掉两个取回失真：
+
+1. `read_answer_text` 原来丢 `len(text) < 8` 的节点——chatgpt 把「」渲染成**独立单字符节点**，
+   于是每条引句都缺右括号、验真全判不中；改为只过滤噪声词，去重按「文本+位置」。
+2. 切分补 `1.①`（点号后无空格）这种紧凑编号。
+
+复算（同一批回复，只换取回/切分）：
+
+| 轮 | 端 | 旧 | 新 |
+|---|---|---|---|
+| Round 2 | chatgpt | 1/4 unread（文本被拆断） | **1/7 unread**（7 块 = 1 页眉 + 6 条；引句本身是转述，覆盖率 0.36–0.69，判不中是诚实的） |
+| Round 2 | deepseek | 4/5 | 4/5（不变） |
+| Round 2 | gemini | 5/6 | 5/6（不变） |
+| Round 1 | chatgpt | 3/7 | 3/7（不变） |
+
+**结论：第 2 项完成。** 两家真读的结论没变；chatgpt 的 partial 是它自己在转述，不是测量错。
+
+### 23.3 第 1 项（仍差 1 家真读）——补测拿到第三家，阈值没动
+
+按 STOP 里唯一允许的那条路（"让某家再答一版更严格的引用"），对 **grok** 做了一次补测：
+同一份 `round-2/materials/material.md`，提问要求「只依据第一章（规格）」「每条只用一处「」逐字抄
+第一章原文，不得改写或删节」「禁止引用第二、三章」。
+
+过程中修掉三个真 bug（都不是"教它怎么写"，而是取回端的问题）：
+
+| 现象 | 根因 | 修法 |
+|---|---|---|
+| 上传 `dialog_stuck` | 传了**相对路径**，文件对话框按自己的当前目录解析 | `upload._absolute()`，入口统一转绝对路径 |
+| `prompt_gone` | grok 把一条提问渲染成 **9~10 个节点**（含 `**` 独立节点），单块匹配判据整条断掉 | `_prompt_span()` 用**拼接后**的整段定位气泡起止；`**` 在合并时去掉 |
+| 取回从半句提问开始 / 混杂过程行 | 60 字前缀只覆盖到气泡中段；grok 的 `Analyzing…`、`工作了 57s`、`畅所欲问` 也在树里 | 取「能匹配的最长前缀」+ 跳过残余提问碎片 + `is_progress_noise()` + 占位符过滤 |
+
+结果：grok 回复 **2238 字 / 22 处引句**，验真 **5/6 = 0.83，core=true → true_read**。
+
+**Round 2 因此凑齐 3 家真读**（deepseek 4/5、gemini 5/6、grok 5/6）。
+
+必须写明的边界：
+- 这一席是**补测**，不是原始 Round 2 批次的一部分（原始批次只有 gemini/chatgpt/deepseek）；
+- 它的提问比原始批次更严（只许抄第一章），所以它拿到的"优势"来自提问措辞，不是口径放宽；
+- **§5.3 的阈值与逐字口径一个字都没改**（`TRUE_READ = ≥3 命中且 ≥0.7`）。
+- 仍未解决：`conversation.ask` 在 grok 上仍会判 `prompt_gone`（`prompt_nodes` 还是按单块匹配），
+  这次是靠 `read_answer_text` 收的卷；下一轮应把 `_prompt_span` 接进收卷主路径。

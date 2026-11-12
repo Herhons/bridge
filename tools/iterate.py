@@ -175,6 +175,28 @@ def start_new_chat(screen, site: str, timeout: float = 20.0) -> bool:
     return False
 
 
+def _is_prompt_echo(block: str, prompt: str, squashed_prompt: str) -> bool:
+    """这一块是不是提问回声（整块落在提问里）。"""
+    squashed = "".join(block.split())
+    # 「可访问=是」是答案抬头，即使和提问重合也要留；
+    # 含「」/章节号/文件:行号 的块是**合规引文**，同样豁免（2026-11-12 会审：
+    # 按重合长度一刀切会把逐字引用删掉，验真直接归零）。
+    looks_like_citation = any(mark in block for mark in ("「", "」", "§")) \
+        or re.search(r"[\w./-]+\.(?:py|md|json|yml|yaml):\d+", block) is not None
+    return bool(len(squashed) >= 8 and not squashed.startswith("可访问")
+                and not looks_like_citation and squashed in squashed_prompt)
+
+
+def _echo_head(blocks: list[str]) -> int:
+    """前序区到哪结束：第一条正式意见的行首。"""
+    for index, block in enumerate(blocks):
+        stripped = block.strip()
+        if (re.match(r"^\s*(?:\d+[）).、]|[①-⑥]|[A-E][\s　])", stripped)
+                or "章节号" in stripped[:12]):
+            return index
+    return 0
+
+
 def _drop_prompt_echo(blocks: list[str], prompt: str) -> list[str]:
     """剔掉与提问重合的块。
 
@@ -186,29 +208,113 @@ def _drop_prompt_echo(blocks: list[str], prompt: str) -> list[str]:
         return blocks
     # 只在前序区剥（第一条正式意见之前）。正文里引用提问原句是合法的，
     # 一旦进入意见区就停止剥离（2026-11-12 会审建议）。
-    head = 0
-    for index, block in enumerate(blocks):
-        stripped = block.strip()
-        if (re.match(r"^\s*(?:\d+[）).、]|[①-⑥]|[A-E][\s　])", stripped)
-                or "章节号" in stripped[:12]):
-            head = index
-            break
-    kept = []
-    for position, block in enumerate(blocks):
-        if position >= head and head > 0:
-            kept.append(block)
+    head = _echo_head(blocks)
+    return [block for position, block in enumerate(blocks)
+            if (position >= head and head > 0)
+            or not _is_prompt_echo(block, prompt, squashed_prompt)]
+
+
+def _rect_tuple(rect):
+    """UIA 矩形统一成 `(left, top, right, bottom)`；无效返回 None。"""
+    if rect is None:
+        return None
+    try:
+        left, top, right, bottom = rect.left, rect.top, rect.right, rect.bottom
+    except AttributeError:
+        try:
+            left, top, right, bottom = rect
+        except Exception:                     # noqa: BLE001
+            return None
+    if bottom <= top or right <= left:
+        return None
+    return (left, top, right, bottom)
+
+
+def _join_by_lines(items) -> str:
+    """把同一视觉行的碎片拼回一行，跨行才换行。
+
+    为什么：chatgpt 的行内代码（`safe_ui.py` / `_ask_upload_body`）在控件树里是
+    **独立节点**，按节点换行会把一句「引用」拆成 3 行（2026-11-12 实测 Round 2：
+    5 处引句里 4 处被拆断，验真只认出 1 处，把一个引句齐全的回复判成 unread）。
+    这里按控件矩形回拼：垂直中心相差 ≤ 半行高、且水平相邻（间隔 ≤ 40px）的算同一行。
+    """
+    lines: list[dict] = []
+    for text, rect in items:
+        box = _rect_tuple(rect)
+        if box is None:
+            lines.append({"center": None, "parts": [text], "left": 0, "right": 0})
             continue
-        squashed = "".join(block.split())
-        # 「可访问=是」是答案抬头，即使和提问重合也要留；
-        # 含「」/章节号/文件:行号 的块是**合规引文**，同样豁免（2026-11-12 会审：
-        # 按重合长度一刀切会把逐字引用删掉，验真直接归零）。
-        looks_like_citation = any(mark in block for mark in ("「", "」", "§")) \
-            or re.search(r"[\w./-]+\.(?:py|md|json|yml|yaml):\d+", block) is not None
-        if (len(squashed) >= 8 and not squashed.startswith("可访问")
-                and not looks_like_citation and squashed in squashed_prompt):
-            continue
-        kept.append(block)
-    return kept
+        left, top, right, bottom = box
+        center = (top + bottom) / 2
+        height = bottom - top
+        if lines:
+            last = lines[-1]
+            same_line = (
+                last["center"] is not None
+                and abs(last["center"] - center) <= max(4.0, height * 0.45)
+                and left - last["right"] <= 40
+            )
+            if same_line:
+                last["parts"].append(text)
+                last["left"] = min(last["left"], left)
+                last["right"] = max(last["right"], right)
+                continue
+        lines.append({"center": center, "parts": [text],
+                      "left": left, "right": right})
+    return "\n".join("".join(line["parts"]) for line in lines).strip()
+
+
+def _merged_blocks(texts):
+    """把所有块拼成一整串，并记录每块占的字符区间。
+
+    为什么要拼：grok 把一条提问拆成 9~10 个节点（`**`、`只依据第一章`、`**`…），
+    任何"单块匹配"的判据都会在气泡中间断掉。拼起来才能确定气泡的**起止块**。
+    """
+    parts, spans, offset = [], [], 0
+    for text in texts:
+        # 去掉 markdown 强调符号：grok 把 `**` 渲染成**独立节点**，
+        # 留在拼接串里会把提问切成两半，needle 永远匹配不上（2026-11-12 实测）。
+        squashed = "".join(text.split()).replace("*", "")
+        parts.append(squashed)
+        spans.append((offset, offset + len(squashed)))
+        offset += len(squashed)
+    return "".join(parts), spans
+
+
+def _prompt_span(texts, needle: str, start_at: int = 0):
+    """在拼接文本里找 `needle`，返回 `(首块, 末块, 结束偏移)`；找不到返回 None。"""
+    if not needle:
+        return None
+    merged, spans = _merged_blocks(texts)
+    pos = merged.find(needle, start_at)
+    if pos < 0:
+        return None
+    end = pos + len(needle)
+    first = next((i for i, (_a, b) in enumerate(spans) if b > pos), None)
+    last = next((i for i, (_a, b) in enumerate(spans) if b >= end), None)
+    if first is None or last is None:
+        return None
+    return first, last, end
+
+
+def is_progress_noise(text: str) -> bool:
+    """端自己的过程行/品牌名，不是答案。
+
+    grok 会把「Analyzing the specification document」这类思考步骤和「工作了 57s」
+    一起挂进控件树（2026-11-12 实测 6 条），留着会被验真算成一条没有引句的意见。
+    """
+    probe = (text or "").strip()
+    if not probe:
+        return True
+    if probe in ("Grok", "ChatGPT", "DeepSeek", "Gemini") or probe.endswith("已完成回复"):
+        return True
+    if probe.startswith("工作了") and probe.endswith("s"):
+        return True
+    # 纯英文的进行时短句（首字母大写、无句末标点）——本项目的会审都用中文
+    if (probe.isascii() and probe[:1].isupper() and len(probe) < 80
+            and not probe.endswith((".", "。", "!", "?", ":", ";", "；"))):
+        return True
+    return False
 
 
 def read_answer_text(screen, site: str, prompt: str) -> str:
@@ -240,35 +346,121 @@ def read_answer_text(screen, site: str, prompt: str) -> str:
         if node.kind != "TextControl":
             continue
         text = (node.name or "").strip()
-        if len(text) < 8 or text in seen or text in noise:
+        if not text or text in noise or is_progress_noise(text):
             continue
-        seen.add(text)
-        blocks.append(text)
+        # 输入框占位符会作为独立文本节点出现（grok「畅所欲问」、gemini「问问 Gemini」）
+        if text in SITE_PLACEHOLDERS.get(site, ()):  # noqa: F821 - 定义在本文件后段
+            continue
+        try:
+            rect = node.control.BoundingRectangle
+        except Exception:                 # noqa: BLE001 - 拿不到矩形就按独立行处理
+            rect = None
+        # **不能按长度丢**：chatgpt 把「」渲染成独立节点，一句引用的收尾就一个字符；
+        # 原来 `len(text) < 8` 把它丢了，于是每条引句都缺右括号、验真全判不中
+        # （2026-11-12 实测：5 条引句只有 1 条能配上对）。
+        # 去重也改成按「文本 + 位置」——单字符节点会重复出现多次。
+        dedupe_key = (text, getattr(rect, "top", None), getattr(rect, "left", None)) \
+            if rect is not None else (text, None, None)
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+        blocks.append((text, rect))
 
-    first = next((i for i, t in enumerate(blocks) if key and key in squash(t)), -1)
-    if first >= 0:
-        body = []
-        for text in blocks[first + 1:]:
-            if key and key in squash(text):
+    def is_echo(text: str) -> bool:
+        """这一块是不是提问（或提问的一段）。
+
+        grok 会把一条提问拆成 3 个 TextControl 渲染（2026-11-12 实测），
+        只认「整段包含前缀」会判成 prompt_gone；这里把「是提问的连续片段」
+        也算进来（≥12 字，短片段太容易撞上正文）。
+        """
+        squashed = squash(text)
+        if not squashed:
+            return False
+        if key and key in squashed:
+            return True
+        return len(squashed) >= 12 and squashed in sp
+
+    texts = [text for text, _rect in blocks]
+    # 提问可能被拆成多块，所以用**拼接后的整段**定位气泡起止：先找到它占的最后一块，
+    # 答案从下一块开始；再找一次同样的一段（grok 会在答案末尾再回显一遍）作为结束。
+    # 注意提问里的 markdown 强调（`**`）不会出现在渲染文本里，比较前先去掉。
+    stripped_prompt = sp.replace("*", "")
+    needle = stripped_prompt[:60]
+    first = next((i for i, t in enumerate(texts) if is_echo(t)), -1)
+
+    def collect(start_index: int, stop_index=None):
+        out = []
+        for index, (text, rect) in enumerate(blocks[start_index:], start=start_index):
+            if stop_index is not None and index >= stop_index:
                 break                       # 末尾那条回声 = 已经走过答案了
+            if stop_index is None and is_echo(text):
+                break
             if done.search(text):
                 break
-            body.append(text)
+            out.append((text, rect))
+        return out
+
+    if first >= 0:
+        body = collect(first + 1)
+        # 旧判据优先（多轮真机验证过）。只有它取到的正文短得不像答案时，才用
+        # 「拼接后定位气泡起止」——那条路能处理提问被拆成 9~10 块的情况，
+        # 但也更容易误锚到侧栏标题，所以不放在主路径上。
+        if len(_join_by_lines(body)) < 80:
+            # 用**能匹配上的最长前缀**定位气泡：前缀越短，落点越可能停在气泡中段
+            # （实测 60 字只覆盖到提问的第三块，答案会从半句提问开始）。
+            span = None
+            for size in (len(stripped_prompt), 200, 160, 120, 90, 60):
+                if size < 20:
+                    continue
+                candidate = stripped_prompt[:size]
+                span = _prompt_span(texts, candidate)
+                if span:
+                    needle = candidate
+                    break
+            if span:
+                stop = _prompt_span(texts, needle, start_at=span[2])
+                start_at = span[1] + 1
+                # 余下的提问碎片（`**`、`一句`…）继续跳过，直到出现不属于提问的块。
+                while start_at < len(blocks):
+                    probe = "".join(blocks[start_at][0].split()).replace("*", "")
+                    if len(probe) >= 2 and probe in stripped_prompt:
+                        start_at += 1
+                        continue
+                    break
+                alt = collect(start_at, stop[0] if stop else None)
+                if len(_join_by_lines(alt)) > len(_join_by_lines(body)):
+                    body = alt
         if body:
-            return "\n".join(_drop_prompt_echo(body, prompt)).strip()
+            # 与 `_drop_prompt_echo` 同一套规则：只在前序区剥回声，进入意见区就停。
+            head = _echo_head([t for t, _r in body])
+            out = []
+            for position, (text, rect) in enumerate(body):
+                if not (position >= head and head > 0) and _is_prompt_echo(text, prompt, sp):
+                    continue
+                if out and out[-1][0] == text:
+                    continue
+                out.append((text, rect))
+            return _join_by_lines(out)
 
     # 退回：只认「可访问」开头的块（chatgpt 的答案就是这个形状）。
     out, started = [], False
-    for text in blocks:
-        if key and key in squash(text):
+    for text, rect in blocks:
+        if is_echo(text):
             continue
         if not started:
             if text.startswith("可访问") or text.startswith("NO_ACCESS"):
                 started = True
             else:
                 continue
-        out.append(text)
-    return "\n".join(_drop_prompt_echo(out, prompt)).strip()
+        out.append((text, rect))
+    kept = []
+    for text, rect in out:
+        if _is_prompt_echo(text, prompt, sp):
+            continue
+        if kept and kept[-1][0] == text:
+            continue
+        kept.append((text, rect))
+    return _join_by_lines(kept)
 
 
 #: 各端的输入框占位文字。`composer_empty` 的结构判据要求把它显式传进去，

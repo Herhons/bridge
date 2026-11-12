@@ -276,6 +276,9 @@ def _candidates(text: str) -> list[list[int]]:
     out = []
     out.append([m.start() for m in re.finditer(r"(?m)^\s*\d+[）)]", text)])
     out.append([m.start() for m in re.finditer(r"(?m)^\s*\d+[.、]\s+", text)])
+    # chatgpt 的紧凑写法：`1.① 二·S1：…`（点号后直接接 ①，没有空格）。
+    # `(?!\d)` 避免把 `1.5 倍` 这类小数当条目。
+    out.append([m.start() for m in re.finditer(r"(?m)^\s*\d+[.、](?!\d)", text)])
     # gemini：整段里 `1. [方向 A…] 2. [方向 B…]`
     out.append([m.start() for m in re.finditer(r"\d+\.\s*(?=[\[【]?\s*方向)", text)])
     # deepseek：`A 稳定：…` / `B 架构：…`
