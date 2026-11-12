@@ -225,3 +225,18 @@ Herhons 的决定：§5.3 阈值与逐字口径**都不改**，按 §12 停机�
 新增 `tests/test_b27_uilock_scope.py`（5 条）：
 死持有者被清、活持有者不动、`hold` 遇死元数据 3 秒内拿到锁、无锁文件时返回 absent、**验真全程不取锁且不建 lock 文件**。
 连带跑 `test_b13_lock` / `test_b14_choose_lock` / `test_r3_choose_use_lockstep` / `test_rework09a_lock` 全绿。
+
+## 17. 修复第 4 项：崩溃续跑与防重发（2026-11-12 10:35）
+
+| 改动 | 文件 | 说明 |
+|---|---|---|
+| 固定身份 | `src/qi/iteration.py` | `chunk_identity(site,index,text)` = `chunk:<sha16>`（内容变则身份变）；`prompt_identity(site,round,prompt)` |
+| 带身份分块 | 同上 | `pack_chunks_with_ids()` 返回 `[{index,id,chars,text}]`；`resume_chunks()` 跳过 `sent` |
+| 状态 schema | 同上 | `SCHEMA="round-state/2"`；`state.json` 增 `schema` + `materials`；v1 老状态只补字段不改历史 |
+| 段状态机 | 同上 | `State.mark_chunk(id, status)`：`pending / sending / sent / unknown`；`sending` 写在**发送之前** |
+| 账本优先 | `tools/iterate.py` | `_reconcile_gate()`：`accepted/submitting/unknown` 一律先只读查答；有答案就直接采用，没答案返回 `needs_manual_clear`（**不自动清账本、不重发**） |
+| 续跑核对 | `tools/iterate.py` | `_ask_via_script` 遇到 `sending` 段先用 `_page_has("第 i/N 段")` 核对：在页面就记账跳过，不在才补发；全部 `sent` 时只读答案（`resumed_read`） |
+
+新增 `tests/test_b27_resume.py`（12 条）：身份稳定/可区分、`pack_chunks_with_ids`、schema 落盘、
+老状态兼容、跳过已发、账本三种状态的闸门、**杀进程模拟**（`sending` 段在页面上→不重发；不在→补发；
+全发过→只读不发）。

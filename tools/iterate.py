@@ -363,6 +363,52 @@ def harvest_reply(screen, site: str, wait: float = 420.0) -> dict:
     return {"ok": False, "stage": "harvest_timeout", "reply": last_text}
 
 
+#: 账本里这些状态意味着「可能已经发出去过」——只对账，不重发。
+RECONCILE_STATES = ("accepted", "submitting", "unknown")
+
+
+def _ledger_state(site: str, prompt: str) -> str:
+    from qi import submissions
+
+    try:
+        return submissions.read_state(site, prompt) or "none"
+    except Exception:                     # noqa: BLE001 - 读不出账本按"未知"处理更安全
+        return "unknown"
+
+
+def _page_has(screen, site: str, needle: str) -> bool:
+    """页面上有没有这段文字（续跑时核对"上一段到底发出去没有"）。"""
+    from qi import ui
+
+    try:
+        control, _url = ui.document(screen.target_hwnd, site)
+        root = ui.tree(control)
+    except Exception:                     # noqa: BLE001
+        return False
+    return any(needle in (node.name or "") for node in root.walk())
+
+
+def _reconcile_gate(screen, site: str, ask_text: str) -> dict | None:
+    """发之前的账本闸门：有记录就只对账，不重发。
+
+    返回 None 表示可以发；返回 dict 表示接管本次结果。
+    `accepted/submitting/unknown` 一律先只读查答：
+      · 页面已有答案 → 直接采用（不重发）；
+      · 页面没有答案 → `needs_manual_clear`，交人工确认后清账本，**绝不自动清、不重发**。
+    """
+    state = _ledger_state(site, ask_text)
+    if state not in RECONCILE_STATES:
+        return None
+    text = read_answer_text(screen, site, ask_text)
+    if len(text) >= 300:
+        return {"ok": True, "stage": "already_answered", "reply": text,
+                "feed": "reconcile", "ledger": state}
+    return {"ok": False, "stage": "needs_manual_clear", "ledger": state,
+            "hint": "账本里已有该提问的提交记录，但页面找不到答案；按「只对账不重发」停手。"
+                    "人工核对后用 tools/submission_clear.py --file <记录> --state "
+                    f"{state} --reason ... --confirm 清掉再跑"}
+
+
 def _clear_stale_lock(state=None) -> dict:
     """开跑前清掉「持有者已死」的残留锁，并把结果记进 state。
 
@@ -377,7 +423,7 @@ def _clear_stale_lock(state=None) -> dict:
     return info
 
 
-def _ask_upload(site: str, prompt: str, material: Path, cfg) -> dict:
+def _ask_upload(site: str, prompt: str, material: Path, cfg, state=None) -> dict:
     """上传 + 短提问。**整段持 UI 锁**：这段时间全是网页端动作。
 
     离线步骤（验真、匿名、归档）一律不取锁——锁只在"要动网页"的时候存在。
@@ -386,10 +432,10 @@ def _ask_upload(site: str, prompt: str, material: Path, cfg) -> dict:
 
     with uilock.hold(f"iterate:upload:{site}",
                      timeout=float(cfg.get("ui_lock_timeout", 180))):
-        return _ask_upload_body(site, prompt, material, cfg)
+        return _ask_upload_body(site, prompt, material, cfg, state)
 
 
-def _ask_upload_body(site: str, prompt: str, material: Path, cfg) -> dict:
+def _ask_upload_body(site: str, prompt: str, material: Path, cfg, state=None) -> dict:
     from qi import conversation, upload
 
     screen = _screen_for(site)
@@ -404,10 +450,22 @@ def _ask_upload_body(site: str, prompt: str, material: Path, cfg) -> dict:
         return {"ok": False, "stage": "upload_not_settled", "upload": up.as_dict()}
     # 上传模式材料在附件里，提问用一句短指令即可：长多行提问在部分端会写不进去。
     ask_text = str(cfg.get("upload_prompt") or prompt)
+    # 账本优先：已有 accepted/submitting/unknown 就先只读对账，**不重发**。
+    gated = _reconcile_gate(screen, site, ask_text)
+    if gated is not None:
+        gated["upload"] = up.as_dict()
+        return gated
+    prompt_id = it.prompt_identity(site, getattr(state, "round_dir", None) and state.round_dir.name or "",
+                                   ask_text)
+    if state is not None:
+        state.mark_chunk(prompt_id, "sending")     # 发送**之前**落盘，崩溃后不留空白
     _refresh_tier(site)                  # 回执一次性；上一次失败也会把它用掉
     conv = _conversation(screen, site)
     result = conversation.ask(conv, ask_text, timeout=cfg["review_timeout"],
                               purpose="review")
+    if state is not None:
+        state.mark_chunk(prompt_id, "sent" if result.get("ok") else "unknown",
+                         chars=len(result.get("reply") or ""))
     if not result.get("ok") and result.get("stage") in ("timeout", "interrupted", "harvest_timeout"):
         harvested = harvest_reply(screen, site, wait=float(cfg.get("harvest_wait", 420)))
         if harvested["ok"]:
@@ -422,7 +480,7 @@ def _ask_upload_body(site: str, prompt: str, material: Path, cfg) -> dict:
     return result
 
 
-def _ask_upload_script(site: str, prompt: str, material: Path, cfg) -> dict:
+def _ask_upload_script(site: str, prompt: str, material: Path, cfg, state=None) -> dict:
     """上传附件，再用该端自己的 `*_use.py` 写短指令并发送。
 
     为什么不用 `conversation.ask`：gemini 在 upload 模式下会把「写了字、根本没
@@ -452,6 +510,14 @@ def _ask_upload_script(site: str, prompt: str, material: Path, cfg) -> dict:
                 "upload": up.as_dict()}
 
     ask_text = str(cfg.get("upload_prompt") or prompt)
+    gated = _reconcile_gate(screen, site, ask_text)   # 账本优先，只对账不重发
+    if gated is not None:
+        gated["upload"] = up.as_dict()
+        return gated
+    prompt_id = it.prompt_identity(site, getattr(state, "round_dir", None) and state.round_dir.name or "",
+                                   ask_text)
+    if state is not None:
+        state.mark_chunk(prompt_id, "sending")
     _refresh_tier(site)                  # 回执一次性，发送前重拿一条
     script = ROOT / "src" / "scripts" / f"{site}_use.py"
     budget = int(cfg["review_timeout"])
@@ -471,6 +537,9 @@ def _ask_upload_script(site: str, prompt: str, material: Path, cfg) -> dict:
                 continue
     result = dict(parsed or {"ok": False, "stage": "bad_output",
                              "exit": proc.returncode})
+    if state is not None:
+        state.mark_chunk(prompt_id, "sent" if result.get("ok") else "unknown",
+                         chars=len(result.get("reply") or ""))
     result["feed"] = "upload-script"
     result["upload"] = up.as_dict()
     if not result.get("ok") and result.get("stage") in ("timeout", "interrupted"):
@@ -538,52 +607,75 @@ def _refresh_tier(site: str) -> None:
             pass
 
 
-def _ask_via_script(site: str, prompt: str, material_text: str, cfg) -> dict:
+def _ask_via_script(site: str, prompt: str, material_text: str, cfg,
+                    state=None) -> dict:
     """走各端自己的 `*_use.py`（它们管新会话、档位、粘贴保真）。
 
     为什么不自己拼 `flow.ask`：deepseek 的 review 档位回执由 **use 脚本**内部
     `tier_guard.gate` 处理，`*_choose.py` 只认 `--think/--search`，接不上。
+
+    续跑：每段有固定身份（`chunk:<sha>`），已 `sent` 的跳过；`sending` 是
+    "上次发送途中被杀"，先对着页面核对这一段在不在，在就记账跳过、不在才补发。
     """
     import subprocess
 
     script = ROOT / "src" / "scripts" / f"{site}_use.py"
     limit = int((cfg.get("chunk_chars_by_site") or {}).get(site, cfg["chunk_chars"]))
-    chunks = it.pack_chunks(material_text, limit, head=prompt)
+    chunks = it.pack_chunks_with_ids(material_text, limit, head=prompt, site=site)
+    total = len(chunks)
     if chunks:
         _clear_composer(_screen_for(site), site)      # 残草会让脚本直接拒发
+    pending = it.resume_chunks(chunks, state)
+    skipped = total - len(pending)
+    if chunks and not pending:
+        text = read_answer_text(_screen_for(site), site, prompt)
+        return {"ok": bool(text), "stage": "resumed_read" if text else "needs_manual_clear",
+                "reply": text, "feed": "paste", "chunks": total,
+                "resumed_skip": skipped}
+
     last = {"ok": False, "stage": "no_chunks"}
-    for index, chunk in enumerate(chunks, start=1):
-        # 档位回执是**一次性**的：每发一段都要重新拿一条。
-        _refresh_tier(site)
-        budget = cfg["review_timeout"] if index == len(chunks) else int(
+    for chunk in pending:
+        index, body = chunk["index"], chunk["text"]
+        record = state.chunk(chunk["id"]) if state is not None else {}
+        if record.get("status") == "sending":
+            # 上次发送途中被杀：只核对，不盲目重发。
+            if _page_has(_screen_for(site), site, f"第 {index}/{total} 段"):
+                state.mark_chunk(chunk["id"], "sent", reconciled=True)
+                continue
+        _refresh_tier(site)              # 档位回执是一次性的：每段都要重拿
+        budget = cfg["review_timeout"] if index == total else int(
             cfg.get("chunk_timeout", 300))
-        cmd = [sys.executable, str(script), chunk, "--purpose", "review",
+        cmd = [sys.executable, str(script), body, "--purpose", "review",
                "--timeout", str(int(budget))]
         if index > 1:
             cmd.append("--continue")
+        if state is not None:
+            state.mark_chunk(chunk["id"], "sending")
         proc = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True,
                               encoding="utf-8", timeout=budget + 120)
-        parsed = it and None
-        import json as _json
+        parsed = None
         for line in reversed((proc.stdout or "").splitlines()):
             line = line.strip()
             if line.startswith("{") and line.endswith("}"):
                 try:
-                    parsed = _json.loads(line)
+                    parsed = json.loads(line)
                     break
                 except ValueError:
                     continue
         last = parsed or {"ok": False, "stage": "bad_output", "exit": proc.returncode}
+        if state is not None:
+            state.mark_chunk(chunk["id"], "sent" if last.get("ok") else "unknown",
+                             chars=len(last.get("reply") or ""))
         if not last.get("ok"):
-            return {**last, "feed": "paste", "chunks": len(chunks), "at": index,
-                    "stderr": (proc.stderr or "")[-300:]}
-    return {**last, "feed": "paste", "chunks": len(chunks)}
+            return {**last, "feed": "paste", "chunks": total, "at": index,
+                    "resumed_skip": skipped, "stderr": (proc.stderr or "")[-300:]}
+    return {**last, "feed": "paste", "chunks": total, "resumed_skip": skipped}
 
 
-def _ask_paste(site: str, prompt: str, material_text: str, cfg) -> dict:
+def _ask_paste(site: str, prompt: str, material_text: str, cfg, state=None) -> dict:
     """分段粘贴：优先走各端 `*_use.py`。"""
     if (ROOT / "src" / "scripts" / f"{site}_use.py").is_file():
-        return _ask_via_script(site, prompt, material_text, cfg)
+        return _ask_via_script(site, prompt, material_text, cfg, state)
     from qi import flow
 
     site_obj = _site_object(site)
@@ -630,10 +722,10 @@ def cmd_review(args, cfg) -> int:
             print(json.dumps({"ok": False, "error": "material_missing"}, ensure_ascii=False))
             return 2
         ask = _ask_upload_script if mode == "upload-script" else _ask_upload
-        result = ask(args.site, prompt, material, cfg)
+        result = ask(args.site, prompt, material, cfg, state)
     else:
         text = material.read_text(encoding="utf-8") if material.is_file() else ""
-        result = _ask_paste(args.site, prompt, text, cfg)
+        result = _ask_paste(args.site, prompt, text, cfg, state)
 
     reply = result.get("reply") or ""
     replies_dir = round_dir(args.round) / "replies"

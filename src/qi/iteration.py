@@ -14,6 +14,8 @@ from pathlib import Path
 
 # ---------------------------------------------------------------- 常量
 
+SCHEMA = "round-state/2"          # 状态文件结构版本（崩溃续跑用）
+
 SPEC_PATH = "docs/self_iteration_spec.md"
 #: Round 0 的「核心命中」：意见里必须至少有一条落在规格文件上
 ROUND0_CORE = SPEC_PATH
@@ -40,6 +42,9 @@ class State:
         round_dir = root / "docs" / "iterations" / round_name
         path = round_dir / "state.json"
         data = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
+        # v1 状态没有 schema/materials：只在内存里补齐，不改历史记录。
+        data.setdefault("schema", SCHEMA)
+        data.setdefault("materials", {})
         return cls(root=root, round_dir=round_dir, data=data)
 
     def save(self) -> None:
@@ -61,6 +66,22 @@ class State:
     def set(self, key: str, value) -> None:
         self.data[key] = value
         self.save()
+
+    # ---- 崩溃续跑：每段材料一个固定身份 ----
+    def chunk(self, ident: str) -> dict:
+        return (self.data.get("materials") or {}).get(ident) or {}
+
+    def mark_chunk(self, ident: str, status: str, **payload) -> dict:
+        """记一段材料的发送状态：pending / sending / sent / unknown。
+
+        `sending` 写在**发送之前**：进程若在发送途中被杀，续跑时这一段是
+        "不确定"，必须先对着页面核对，不能直接重发。
+        """
+        materials = self.data.setdefault("materials", {})
+        record = {"status": status, "at": time.strftime("%Y-%m-%dT%H:%M:%S%z"), **payload}
+        materials[ident] = record
+        self.save()
+        return record
 
 
 # ---------------------------------------------------------------- 材料
@@ -128,6 +149,35 @@ def pack_chunks(text: str, limit: int, *, head: str = "") -> list[str]:
 
 def sha256_text(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+
+
+def chunk_identity(site: str, index: int, text: str) -> str:
+    """一段材料的固定身份。**内容变了 id 就变**，续跑时靠它判断发没发过。"""
+    return "chunk:" + sha256_text(f"{site}|{index}|{text}")
+
+
+def prompt_identity(site: str, round_name: str, prompt: str) -> str:
+    """最终提问的固定身份（与账本的 endpoint+prompt 哈希互相独立，便于交叉核对）。"""
+    return "prompt:" + sha256_text(f"{site}|{round_name}|{prompt}")
+
+
+def pack_chunks_with_ids(text: str, limit: int, *, head: str = "",
+                         site: str = "") -> list[dict]:
+    """`pack_chunks` 的带身份版本：返回 [{index, id, chars, text}]。"""
+    return [{"index": index, "id": chunk_identity(site, index, body),
+             "chars": len(body), "text": body}
+            for index, body in enumerate(pack_chunks(text, limit, head=head), start=1)]
+
+
+def resume_chunks(chunks, state) -> list[dict]:
+    """续跑时还要发的段：已 `sent` 的跳过；`sending`/`unknown` 交给调用方核对。"""
+    out = []
+    for chunk in chunks:
+        record = state.chunk(chunk["id"]) if state is not None else {}
+        if record.get("status") == "sent":
+            continue
+        out.append(chunk)
+    return out
 
 
 # ---------------------------------------------------------------- 引用验真
