@@ -44,6 +44,27 @@ def load_config() -> dict:
     return cfg
 
 
+def _review_budget(cfg) -> int:
+    """会审等答案的预算：**必须**过一遍 `tier_guard.floor_timeout`。
+
+    规格 §7.1：`purpose=review` 走 `REVIEW_TIMEOUT` 下限，不得把高档会审判成
+    小超时。`*_use.py` 的 CLI 入口本来就会 floor，但 `iterate.py` 是直接调
+    `conversation.ask` / `subprocess.run`，绕过了那层 —— 2026-11-12 实测：
+    配置写 480，`conversation.ask` 就在 480s 收工（Round 4 chatgpt 582s 报 timeout
+    正落在这条线上），而同一份配置交给 `gemini_use.py` 时子进程自己抬到 1500，
+    **父进程 `timeout=budget+180` 反而先把子进程杀了**，答案就在页面上却收不回来。
+
+    所以这里统一取 floor 后的值，父进程的 subprocess 超时也基于它算。
+    """
+    from qi import tier_guard
+
+    try:
+        raw = float((cfg or {}).get("review_timeout") or DEFAULT_CONFIG["review_timeout"])
+    except (TypeError, ValueError):
+        raw = float(DEFAULT_CONFIG["review_timeout"])
+    return int(tier_guard.floor_timeout("review", raw))
+
+
 def git(*args: str) -> str:
     return subprocess.run(["git", *args], cwd=ROOT, capture_output=True,
                           text=True, encoding="utf-8").stdout.strip()
@@ -767,7 +788,7 @@ def _ask_upload_body(site: str, prompt: str, material: Path, cfg, state=None,
         state.mark_chunk(prompt_id, "sending")     # 发送**之前**落盘，崩溃后不留空白
     _refresh_tier(site)                  # 回执一次性；上一次失败也会把它用掉
     conv = _conversation(screen, site)
-    result = conversation.ask(conv, ask_text, timeout=cfg["review_timeout"],
+    result = conversation.ask(conv, ask_text, timeout=_review_budget(cfg),
                               purpose="review")
     if state is not None:
         state.mark_chunk(prompt_id, "sent" if result.get("ok") else "unknown",
@@ -836,7 +857,7 @@ def _ask_upload_script(site: str, prompt: str, material: Path, cfg, state=None) 
         state.mark_chunk(prompt_id, "sending")
     _refresh_tier(site)                  # 回执一次性，发送前重拿一条
     script = ROOT / "src" / "scripts" / f"{site}_use.py"
-    budget = int(cfg["review_timeout"])
+    budget = _review_budget(cfg)
     proc = subprocess.run(
         [sys.executable, str(script), ask_text, "--purpose", "review",
          "--continue", "--timeout", str(budget)],
@@ -959,7 +980,7 @@ def _ask_via_script(site: str, prompt: str, material_text: str, cfg,
                 state.mark_chunk(chunk["id"], "sent", reconciled=True)
                 continue
         _refresh_tier(site)              # 档位回执是一次性的：每段都要重拿
-        budget = cfg["review_timeout"] if index == total else int(
+        budget = _review_budget(cfg) if index == total else int(
             cfg.get("chunk_timeout", 300))
         cmd = [sys.executable, str(script), body, "--purpose", "review",
                "--timeout", str(int(budget))]
@@ -1006,7 +1027,7 @@ def _ask_paste(site: str, prompt: str, material_text: str, cfg, state=None) -> d
     if chunks:
         _clear_composer(_screen_for(site), site)      # 上一轮残草会判 draft_present
     for index, chunk in enumerate(chunks, start=1):
-        budget = cfg["review_timeout"] if index == len(chunks) else int(
+        budget = _review_budget(cfg) if index == len(chunks) else int(
             cfg.get("chunk_timeout", 300))
         last = flow.ask(site_obj, chunk, mode=("new" if index == 1 else "continue"),
                         timeout=budget, purpose="review", verbose=False)
@@ -1233,7 +1254,7 @@ def cmd_summarize(args, cfg) -> int:
                     "2) 标出冲突；3) 按对本项目的好处排序；4) 你要补充的新缺陷单独列在「汇总者新增」。"
                     "不要猜来源，1500 字内。")
         script = ROOT / "src" / "scripts" / "gemini_use.py"
-        budget = int(cfg["review_timeout"])
+        budget = _review_budget(cfg)
         proc = subprocess.run([sys.executable, str(script), short, "--purpose", "review",
                                "--continue", "--timeout", str(budget)],
                               cwd=ROOT, capture_output=True, text=True,
@@ -1259,7 +1280,7 @@ def cmd_summarize(args, cfg) -> int:
                 return 1
             _refresh_tier("gemini")          # 回执一次性
             conv = _conversation(screen, "gemini")
-            result = conversation.ask(conv, prompt, timeout=cfg["review_timeout"],
+            result = conversation.ask(conv, prompt, timeout=_review_budget(cfg),
                                       purpose="review")
 
     url = ""
@@ -1317,7 +1338,7 @@ def cmd_upload_check(args, cfg) -> int:
     _upload_settled(site, screen)
     conv = _conversation(screen, site)
     result = conversation.ask(conv, "附件里那行关键内容是什么？只回答那一行，不要解释。",
-                              timeout=cfg["review_timeout"], purpose="review")
+                              timeout=_review_budget(cfg), purpose="review")
     reply = (result.get("reply") or "").strip()
     ok = token.lower() in reply.lower()
     payload = {"ok": bool(result.get("ok")) and ok, "upload": up.as_dict(),

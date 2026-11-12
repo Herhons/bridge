@@ -12,7 +12,7 @@
     "gemini",
     "deepseek"
   ],
-  "review_timeout": 480,
+  "review_timeout": 900,
   "upload_timeout": 120,
   "chunk_chars_by_site": {
     "deepseek": 1400

@@ -3,16 +3,16 @@
   "materials": {
     "prompt:f273f423e2b32536": {
       "status": "unknown",
-      "at": "2026-11-12T16:51:53+0800",
+      "at": "2026-11-12T17:22:16+0800",
       "chars": 0
     }
   },
   "lock": {
-    "checked_at": "2026-11-12T16:43:41+0800",
+    "checked_at": "2026-11-12T17:22:06+0800",
     "cleared": true,
     "reason": "stale",
-    "pid": 30628,
-    "owner": "iterate:upload:chatgpt"
+    "pid": 41796,
+    "owner": "probe:gemini5"
   },
   "anchors": {
     "chatgpt": {
@@ -25,12 +25,12 @@
   },
   "steps": {
     "review:chatgpt": {
-      "at": "2026-11-12T16:53:24+0800",
+      "at": "2026-11-12T17:23:47+0800",
       "ok": false,
-      "stage": "timeout",
+      "stage": "interrupted",
       "feed": "upload",
       "chars": 0,
-      "elapsed": 582.5
+      "elapsed": 101.0
     }
   }
 }

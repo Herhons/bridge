@@ -176,6 +176,40 @@ ACCEPT_NAV_GRACE_READS = 2
 # 连续这么多次仍读不出才按 `identity_unreadable` 退出（与换会话分开记账）。
 IDENTITY_UNREADABLE_READS = 10
 
+# 2026-11-12：**用量硬墙**要快速失败，不能当"还在生成"等满整档预算。
+# 实测 chatgpt Work 额度用完时页面写着「你暂时已用完工作用量 / 升级订阅或添加额度…」，
+# 收卷侧看不出区别 —— 没有回复键、也不 busy，于是白等到 `REVIEW_TIMEOUT`（1500s）。
+# 这不是绕过额度（一个字节都不碰），只是把"等 25 分钟"换成"当场认输"。
+# 词条取**整句**而不是关键词：审查内容里出现"额度""升级"是常态，短词必误判。
+QUOTA_WALL = {
+    "chatgpt": ("你暂时已用完工作用量",
+                "升级订阅或添加额度",
+                "You've reached your limit",
+                "You’ve reached your limit"),
+}
+
+
+def quota_wall(site, view):
+    """页面是不是「用量已用完」的硬墙；命中返回那一条文案，否则 None。
+
+    只在**没有回复键**时判：有回复就说明这一轮确实有产出，额度提示可能是别的
+    残留（比如侧栏历史里的同类会话标题），不能拿它盖掉真答案。
+    """
+    markers = QUOTA_WALL.get(str(site or "").strip().lower())
+    if not markers:
+        return None
+    try:
+        if list(getattr(view, "copies", None) or ()):
+            return None
+        text = ui.text_of(view.root) or ""
+    except (RuntimeError, COMError, AttributeError):
+        return None
+    for marker in markers:
+        if marker in text:
+            return marker
+    return None
+
+
 # 2026-11-07（R6）：**同一个文档、同一个 URL** 的 SPA 会话切换。
 # opencode 的每个会话都是应用自己的一个标签页：切会话时 document runtime id 和
 # URL（`oc://renderer/index.html`）都不变，变的只有应用画出来的**会话名和标签条**。
@@ -604,6 +638,18 @@ class Conversation:
                     raise SendUnavailable(
                         f"发送键存在但全部不可用（{len(named)} 个）：端不接受输入",
                         present=len(named))
+                # 2026-11-12：**点不了发送**也可以是额度问题 —— 前提是页面自己说了。
+                # chatgpt 的 Work 额度用完后，输入区被额度卡替换，发送键要么不存在、
+                # 要么常年灰着；旧代码报 `interrupted`，账本记 unknown（BLOCKING），
+                # 这条提问就被永久拦住（要人工清账），而实际上一个字都没发。
+                # 有额度墙证据时归到 `send_unavailable`（可重试态），额度恢复即可重发。
+                # 判据用 `not buttons`（一个能点的都没有），不是 `not named` ——
+                # 实测额度墙下"发送"按钮还在，只是 disabled。
+                wall = quota_wall(self.site, view)
+                if wall and not buttons:
+                    raise SendUnavailable(
+                        f"发送键不可用（{len(named)} 个存在 / 0 个可用），"
+                        f"且页面提示用量已用完：{wall}", present=len(named))
                 raise RuntimeError("可用发送按钮: 找到 0 个控件")
             time.sleep(0.5)
             view = self.read()
@@ -1263,6 +1309,34 @@ def _local_chat_persisted(before, now) -> bool:
         and not new.startswith("/c/local-")
 
 
+def _first_turn_landed(before, now) -> bool:
+    """首轮新会话「落库」：容器地址 -> 该容器下的具体会话地址。
+
+    与 `_local_chat_persisted` 同一类，但按**路径形状**判，**不看第几次读**。
+
+    为什么必须按形状：gemini 换地址发生在**答案出现的那一刻**。2026-11-12 实测
+    新会话问「请只回复两个字：收到」：发送后地址一直是 `/app`，到第 16 秒答案
+    才出来，地址同时变成 `/app/1bd58577…`。旧判据是"接受后 2 次读之内"，而答案
+    出来时已经读到第 40 次上下 —— 明明发成功、答案也在页面上，却被判成
+    `conversation_changed`（`reason=document_changed`），一次会审就这样白跑。
+
+    只认「容器路径 -> 容器下的一段 id」：
+      · gemini   `/app`       -> `/app/<id>`
+      · chatgpt  `/c/local-…` -> `/c/<uuid>`（原 B17 路径，保留）
+    反例必须继续拒：`/app/<id1>` -> `/app/<id2>`（真的换了会话）。
+    """
+    old = ((before or {}).get("path") or "").rstrip("/")
+    new = (now or {}).get("path") or ""
+    if not old or not new:
+        return False
+    if _local_chat_persisted(before, now):
+        return True
+    if old != "/app":
+        return False
+    rest = new[len("/app/"):] if new.startswith("/app/") else ""
+    return bool(rest) and "/" not in rest
+
+
 def _rect_of(node):
     """控件的屏幕矩形；读不到返回 None（不当成 0，也不猜）。"""
     try:
@@ -1692,6 +1766,25 @@ def _ask_impl(conversation, prompt, timeout=180.0, pre_send=None, plain=False,
             heartbeat.beat_view("waiting", view, reads=hb_reads,
                                 accepted=accepted, baseline=baseline,
                                 composer_len=len(view.value or ""))
+            # 用量硬墙：页面明说额度用完，就别按"还在生成"等到整档预算。
+            # 只读判断，不改任何页面状态；命中即收工，让上层去决定等额度还是换端。
+            wall = quota_wall(getattr(conversation, "site", None), view)
+            if wall:
+                # 额度墙是页面上的硬事实：无论有没有被判过接受，都别再等下去。
+                # 但两种情形要分开记 —— 判过接受的那条记录**不许改口**：
+                # 改成 `not_sent` 会让账本降成可重发（B24 只拦旧记录，不拦本轮
+                # 刚 reserve 的 submitting），额度一恢复就会真的再发一遍。
+                if accepted:
+                    return {**state, "stage": "quota_exhausted",
+                            "reason": "quota_wall", "quota_text": wall,
+                            "hint": "页面提示用量已用完（硬墙）。这条 accepted 是在额度墙"
+                                    "期间写的，可能并没有真的发出去；额度恢复后若要重发，"
+                                    "先用 tools/submission_clear.py 清掉这条记录"}
+                return {**state, "stage": "quota_exhausted",
+                        "reason": "quota_wall", "quota_text": wall,
+                        "sent": False, "submission": "not_sent",
+                        "hint": "页面提示用量已用完（硬墙）：未发送，不重试、不绕过，"
+                                "等额度恢复或换端"}
             prompts = prompt_nodes(view, prompt)
             if not prompts:
                 # 整段匹配失败时退回「碎片认领」：只影响"提问还在不在"的判断，
@@ -1746,10 +1839,18 @@ def _ask_impl(conversation, prompt, timeout=180.0, pre_send=None, plain=False,
                     # conversation_changed）。这**不是**换会话，是同一段对话在落库，
                     # 所以允许重新锚定一次——但只认"我们的提问还在页面上"，且只认
                     # 这条临时 id → 真实 id 的窄路径，别的路径变化照旧拒。
-                    if prompts and _local_chat_persisted(accepted_ident, ident):
+                    #
+                    # 2026-11-12 扩成 `_first_turn_landed`：gemini 的落库发生在
+                    # **答案出现那一刻**（实测第 16 秒、读到第 40 次上下），
+                    # "接受后 2 次读之内"的窗口根本覆盖不到，于是判成换会话。
+                    if prompts and _first_turn_landed(accepted_ident, ident):
                         accepted_ident = ident
                         anchor_path = path_of(view.url)
-                        baseline = len(view.copies)
+                        # 落库迟到时答案可能已经上屏：**别把它划进基线**，
+                        # 否则重新锚定等于把刚到的答案当成历史，白等到超时。
+                        # 只有"确实还没有回复"才重设基线（原来那一支的语义）。
+                        if not _has_reply_after(nodes_now, prompts, view.copies):
+                            baseline = len(view.copies)
                         time.sleep(0.4)
                         continue
                     return {**state, "stage": "conversation_changed",

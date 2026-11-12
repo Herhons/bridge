@@ -595,3 +595,87 @@ chatgpt 一席 582s 后 `stage=timeout`、0 字。真机页面上是：
 - 不升级、不购买、不换账号；
 - 本轮会审暂停（round-4 目录保留材料/快照/提问，随时可续）；
 - 未改动任何"绕过额度"的逻辑。
+
+## 28. Round 4 会审归档失败 + B32（首轮落库误判）已修（17:00 起）
+
+### 28.1 会审：3 家凑不齐，按 §7.3 归档
+
+| 端 | 状态 | 证据 |
+|---|---|---|
+| chatgpt | **额度墙** | 页面「你暂时已用完工作用量 / 升级订阅或添加额度…明天 20:36 重置」；模型选择器只有 `GPT-6.1 Sol` 一档，模式只有 ChatGPT/Codex，没有不耗 Work 额度的入口 |
+| gemini | **账号级拒答** | 新开会话问「用一句话描述春天」「今天适合散步吗」均回「因此没法帮到你」「我是一个文本 AI，这超出了我的能力范围」。侧栏历史里已有一串同类标题（拒审自迭代流程规格 / 拒绝简短回复 / 无法获取附件标题） |
+| grok / deepseek | 可用 | — |
+
+按 §7.3「至少 3 家真读才算齐」，本轮只有 2 家 → **Round 4 会审不成立**，不进汇总，
+材料与快照保留在 `round-4/`（快照 `820609ac`）。没有降级标准、没有换端凑数、没有碰额度。
+
+### 28.2 B32：首轮新会话「落库」被判成换会话
+
+探活时抓到：gemini 新会话问一句，发送后地址一直是 `/app`，**第 16 秒**答案出来时
+才变成 `/app/1bd58577…`。而 `_identity_broken` 一旦命中就判 `conversation_changed`，
+可用的例外只有两条：`since_accept <= ACCEPT_NAV_GRACE_READS(=2)`（约 0.8 秒）
+和 chatgpt 的 `/c/local-` 窄路径。读到第 40 次早超出窗口 → 明明发成功、答案在页面上，
+却报 `document_changed`。
+
+| 改动 | 说明 |
+|---|---|
+| `conversation._first_turn_landed()` | 按**路径形状**判落库，不看第几次读：`/app` → `/app/<id>`、`/c/local-…` → `/c/<uuid>`；同一容器下换到别的会话仍拒 |
+| 收集主循环 | 改用新判据；**落库时答案已上屏就不重设基线**，否则重新锚定等于把刚到的答案划成历史，白等到超时 |
+
+真机复验（gemini，新提问）：`stage=answered`（修复前是 `conversation_changed/document_changed`）。
+离线：`tests/test_b32_first_turn_landed.py` 7 条。**旧代码红**（原样复现
+`reason=document_changed, before=/app, now=/app/1bd58577…`）、新代码绿。
+全量 **1723 用例 OK**。
+
+### 28.3 本轮没做
+
+- Round 4 会审（缺第三家，§7.3 不允许）；
+- 会审有共识才能做的架构项（本轮没有新会审，无从产生新共识）。
+
+## 29. Round 5 续：会审预算与额度墙（17:30 起）
+
+两条都是"让下一次会审能跑通"的修复，不是新功能。规格依据分别是 §7.1 与 §12 精神
+（不误判、也不白等）。
+
+### 29.1 B33：`iterate.py` 绕过了会审超时下限
+
+`tier_guard.floor_timeout()` 只在 `*_use.py` 的 CLI 入口生效，而 `tools/iterate.py`
+是**直接**调 `conversation.ask` / `subprocess.run` 的。后果有两个，都是实测过的：
+
+| 现象 | 后果 |
+|---|---|
+| `docs/iteration.json` 写 `review_timeout: 480`，`conversation.ask` 就在 480s 收工 | Round 4 的 chatgpt 一席跑 582s 报 `stage=timeout`、0 字 |
+| 同一份配置交给 `gemini_use.py` 时子进程自己 floor 到 1500s | 父进程 `subprocess.run(timeout=budget+180)` 只有 660s，**先杀掉子进程** |
+
+改法：新增 `_review_budget(cfg)`（过一次 `floor_timeout`），7 个调用点全部改走它；
+`docs/iteration.json` 的 `review_timeout` 同步改成 900（仍会被 floor 到 1500）。
+新增 `tests/test_b33_review_budget.py` 6 条，其中一条**扫源码**：谁再把裸
+`cfg["review_timeout"]` 递给 ask/subprocess 就红。
+
+### 29.2 B34：额度墙要快速失败，且不能留下"永久拦住"的假账
+
+chatgpt 的 Work 额度用完后，页面写着「你暂时已用完工作用量 / 升级订阅或添加额度…」。
+收卷侧看不出差别（没有回复键、也不 busy），于是白等到整档预算。更糟的是**账本**：
+`_submit` 找不到可点的发送键 → `RuntimeError: 可用发送按钮: 找到 0 个控件` →
+外层成 `interrupted` → 账本记 `unknown`（`BLOCKING_STATES`）→ **这条提问永久发不出去**，
+只能人工清账，而实际上一个字节都没发。
+
+| 改动 | 说明 |
+|---|---|
+| `conversation.quota_wall()` | 只认整句（`你暂时已用完工作用量` 等 4 条），且**有回复键就不判**；只对 chatgpt 生效 |
+| 收集循环 | 命中即返回 `quota_exhausted`：没接受过就记 `not_sent`（可重试），接受过则**保留 accepted 不改口**（改口会造成重复发送） |
+| `_submit` | 有额度墙证据且一个能点的发送键都没有 → `SendUnavailable`（`send_unavailable`，可重试态）。判据是 `not buttons` 而不是 `not named` —— 真机上"发送"按钮还在，只是 disabled |
+
+**真机复验**（chatgpt，同一份 material）：
+`stage=send_unavailable / submission=not_sent / sent=false`，
+hint = `发送键不可用（1 个存在 / 0 个可用），且页面提示用量已用完：你暂时已用完工作用量`，
+**12.1 秒**返回（修复前 103 秒，且留下一条 unknown 假账）。
+
+离线：`tests/test_b34_quota_wall.py` 10 条。全量 **1739 用例 OK**。
+
+### 29.3 已知残留
+
+- 探活期间留下 3 条 chatgpt 账本记录（prompt 以「探活」开头），是**假账**
+  （消息没发出去，但记成了 accepted/unknown）。它们不影响真实提问（账本按 prompt 哈希分键），
+  按"删数据要停"的约定**没有删除**；额度恢复后如要重跑同一提问，先确认不撞这三条。
+- `tools/iterate.py` 之外的 `flow.ask` 调用是否都带了 purpose，未逐一复核。
