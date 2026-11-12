@@ -407,3 +407,59 @@ deepseek 把**历史提问预览**排在 composer 之后，于是 `start=1218 > 
 - **§5.3 的阈值与逐字口径一个字都没改**（`TRUE_READ = ≥3 命中且 ≥0.7`）。
 - 仍未解决：`conversation.ask` 在 grok 上仍会判 `prompt_gone`（`prompt_nodes` 还是按单块匹配），
   这次是靠 `read_answer_text` 收的卷；下一轮应把 `_prompt_span` 接进收卷主路径。
+
+## 24. STOP_20261111_2145 的未决清单（2026-11-12 14:31 起）
+
+该 STOP 已改名 `STOP_handled_20261112_1431.md`。清单五项，逐条对现状核过：
+
+| # | 清单项 | 现状 | 处置 |
+|---|---|---|---|
+| 1 | 完成检测（停止键消失 + copy 长度稳定） | **未解决到本次才修**：chatgpt 的复制键被长回答顶到 y=2061，窗口只到 1340，`copy()` 直接抛「光标没能移到」→ 整轮重试到 timeout | 已修，见 24.1 |
+| 2 | gemini 清框（按位置找 contenteditable） | **已不是问题**：gemini 的输入框现在是带名字的 `EditControl`（"为 Gemini 输入提示"），`_clear_composer` 取第一个 EditControl 并夹进窗口矩形即可 | 真机复验，见 24.2 |
+| 3 | deepseek/grok 换行 | **已绕开**：四端都不再粘长材料，`feed` = chatgpt/grok/deepseek `upload`、gemini `upload-script` | 无需改代码 |
+| 4 | grok 上传（点附件后还要点菜单项） | **已修**：`ATTACH["grok"] = {"button": ("附件",), "menu": ("上传文件",)}`，附件是 `MenuControl` | 今天补测里 upload ok |
+| 5 | prompt.md 快照 SHA | **已修**：现为 `6b049b32…`，与 `snapshot.json` 一致且可达（`4f1a848` 也仍可达，是被后续快照取代） | 无需改 |
+
+### 24.1 第 1 项：动作条顶出视口 → 走 UIA 文本兜底
+
+真机量到的因果链（chatgpt，Round 2 长回答）：
+
+| 观察 | 值 |
+|---|---|
+| 复制按钮矩形 | `(-954,2061)-(-921,2094)` |
+| 窗口矩形 | `(-1440,-560)-(1380,1340)` |
+| `conversation.copy(copy键)` | `RuntimeError: 光标没能移到 (-938,2077)，实际停在 (-938,1906)` |
+| `copies` | 1（不是 0，所以"没有复制键"的兜底分支根本进不去） |
+
+改法（不靠滚动，避免打断页面状态）：
+
+1. `rect_in_window(node, window)`：只要求「有一部分在窗口内」，完全在窗口外才算不可达；
+2. 候选过滤：若**全部候选都不可达**，当作没有候选，`positional=True` 让 UIA 文本兜底接手，
+   并记 `warnings=["actions_offscreen"]`；
+3. `chatgpt` 加进 `UIA_TEXT_SITES`（它的树内文本完整、且不需要 hover）；
+4. 噪声词补 `最新一条回复`、前缀补 `用时`。
+
+真机验证（同标签页，新发一问要 8 段长回答）：
+
+```
+stage=answered, reply=2590字, basis=uia_text_after_prompt, source=uia_text,
+warnings=["actions_offscreen"], elapsed=300.7s
+```
+
+此前同一形状必定 `stage=timeout` → `text_extracted`。**第 1 项完成。**
+
+### 24.2 第 2 项：gemini 清框真机复验
+
+```
+before len: 10   (值是占位符「问问 Gemini」)
+type 后:    17   'BRIDGE-CLEAR-TEST'
+_clear_composer → True
+after  clear: 10 (回到占位符)
+```
+
+清框有效；`composer_empty` 也把占位符认成空。无需改代码。
+
+### 24.3 五项之外的顺带修复
+
+- `conversation.rect_in_window` + 新增 `tests/test_b29_offscreen_actions.py`（7 条）；
+- 未改任何阈值、未改规格；`docs/self_iteration_spec.md` 零改动。

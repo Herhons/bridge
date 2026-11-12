@@ -41,3 +41,12 @@ py -3.10 -B tools/iterate.py review --round round-3 --site gemini --force
 ```
 
 注意：`sisyphus.py` 只做交接与续跑，不决策；计划由「Gemini 汇总 + 推进器核实」产出。
+
+## 近期已修（2026-11-12 14:31 起，STOP_handled_20261112_1431 的未决清单）
+
+- **动作条顶出视口**：chatgpt 长回答的复制键落在窗口外（y=2061 / 窗口 1340），
+  `copy()` 抛「光标没能移到」→ 整轮 timeout。现在候选全部不可达时改走 UIA 文本兜底，
+  真机验证 `stage=answered / 2590 字 / warnings=["actions_offscreen"]`。
+  同类保护对 deepseek 早已生效。
+- gemini 清框、deepseek/grok 换行、grok 上传菜单、prompt 快照 SHA 四项复核为「已解决」，
+  详见 `round-0/changes.md` 第 24 节。

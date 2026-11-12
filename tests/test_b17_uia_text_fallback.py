@@ -77,13 +77,17 @@ class PureHelperTests(unittest.TestCase):
         self.assertEqual(conversation.uia_text_len([answer]), len(REPLY))
 
     def test_only_opted_in_sites(self):
-        """B17 只开 dsh；B19 加 deepseek（长回答把动作条顶出视口）。
+        """B17 只开 dsh；B19 加 deepseek；B29 加 chatgpt（同一类：动作条顶出视口）。
 
-        这条用例原本写死 == {"dsh"}，B19 有意放开 deepseek，所以改成
-        "该开的两端都在，其它网页端一个都不许进"——比原来的精确相等更能守住策略。
+        这条用例原本写死 == {"dsh"}，之后每次有意放开一端都会改这里，
+        所以改成"该开的三端都在，其它网页端一个都不许进"——比精确相等更能守住策略。
+
+        chatgpt 的证据（2026-11-12 真机）：复制键 y=2061、窗口到 1340，
+        `copy()` 抛「光标没能移到」，长回答此前只能靠 timeout 后的 text_extracted。
         """
-        self.assertEqual(conversation.UIA_TEXT_SITES, frozenset({"dsh", "deepseek"}))
-        for other in ("chatgpt", "grok", "gemini"):
+        self.assertEqual(conversation.UIA_TEXT_SITES,
+                         frozenset({"dsh", "deepseek", "chatgpt"}))
+        for other in ("grok", "gemini"):
             self.assertNotIn(other, conversation.UIA_TEXT_SITES)
 
 

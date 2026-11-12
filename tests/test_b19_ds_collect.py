@@ -27,8 +27,12 @@ class WhitelistTests(unittest.TestCase):
         self.assertIn("deepseek", conversation.UIA_TEXT_SITES)
 
     def test_other_web_sites_are_not(self):
-        """别的网页端不该被这条兜底影响：它们的副本路径本来是好的。"""
-        for other in ("chatgpt", "grok", "gemini"):
+        """还没放开的网页端不该被这条兜底影响。
+
+        chatgpt 已于 2026-11-12 放开（长回答的复制键被顶出视口），
+        grok/gemini 仍然没放开——它们的复制路径目前够用。
+        """
+        for other in ("grok", "gemini"):
             self.assertNotIn(other, conversation.UIA_TEXT_SITES)
 
 

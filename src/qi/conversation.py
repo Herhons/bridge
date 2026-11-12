@@ -911,15 +911,17 @@ def positional_ready(*, busy: bool, accepted: bool, since: float | None,
 # 模板在画面上找不到 → `copies` 恒为 0 → 等待循环每轮 continue，25 分钟空转到
 # `no_reply`，而页面上回答早就完整了（真机 job_review4）。这条兜底只在
 # `positional`（已接受、不忙、>45s）就绪且 copies 为空时生效。
-UIA_TEXT_SITES = frozenset({"dsh", "deepseek"})
+UIA_TEXT_SITES = frozenset({"dsh", "deepseek", "chatgpt"})
 UIA_TEXT_EXACT = frozenset({
     "探索未至之境", "新会话", "新建会话", "复制", "重新生成", "点赞", "点踩",
-    "朗读", "分享", "Off", "Low", "High", "Max",
+    "朗读", "分享", "Off", "Low", "High", "Max", "最新一条回复",
     "DeepSeek-V4.1-Flash", "GPT-6Luna",
 })
 UIA_TEXT_PREFIX = ("描述你想要构建的内容", "搜索模型", "输入消息", "问DeepSeek",
                    # deepseek 的联网检索抬头与页脚（2026-11-12 实测混进答案尾部）
-                   "搜索到", "已深度思考", "深度思考", "内容由 AI 生成", "以上内容")
+                   "搜索到", "已深度思考", "深度思考", "内容由 AI 生成", "以上内容",
+                   # 回答耗时是 UI 计数，不是正文（chatgpt 实测「用时4分钟41秒」）
+                   "用时")
 def is_count_text(text: str) -> bool:
     """「-1-11」「15个网页」「2s」这类计数/时间戳，不可能是正文。
 
@@ -942,6 +944,35 @@ def is_count_text(text: str) -> bool:
 #: （2026-11-12 实测：完成页 2 个「朗读」，生成中 0 个）。
 ANSWER_ACTION_NAMES = frozenset({"朗读", "复制", "重新生成", "重新生成回复",
                                  "点赞", "点踩", "分享"})
+
+
+def rect_in_window(node, window) -> bool:
+    """动作条是否落在窗口可见区内。
+
+    长回答会把动作条顶到视口下方（chatgpt 实测：复制键 y=2061，窗口只到 1340），
+    这种候选**点了也点不到**，继续按候选处理只会把整轮拖到 timeout。
+    """
+    if window is None:
+        return True
+    try:
+        rect = node.control.BoundingRectangle
+    except Exception:                                 # noqa: BLE001
+        return True
+    if rect is None:
+        return True
+    try:
+        left, top, right, bottom = rect.left, rect.top, rect.right, rect.bottom
+    except AttributeError:
+        try:
+            left, top, right, bottom = rect
+        except Exception:                             # noqa: BLE001
+            return True
+    try:
+        wl, wt, wr, wb = window
+    except Exception:                                 # noqa: BLE001
+        wl, wt, wr, wb = window.left, window.top, window.right, window.bottom
+    # 只要求「有一部分在窗口内」：完全在窗口外的才判不可达
+    return not (right < wl or left > wr or bottom < wt or top > wb)
 
 
 def _prompt_indices(ordered, prompts, editor) -> tuple[list[int], int]:
@@ -1823,6 +1854,24 @@ def _ask_impl(conversation, prompt, timeout=180.0, pre_send=None, plain=False,
                     continue
                 if any(at > i for i in prompt_at):
                     candidates.append(node)
+            if candidates:
+                window = None
+                owner = getattr(conversation, "screen", None)
+                if owner is not None:
+                    try:
+                        window = owner.window_rect()
+                    except Exception:                 # noqa: BLE001
+                        window = None
+                reachable = [n for n in candidates if rect_in_window(n, window)]
+                if window is not None and not reachable:
+                    # 动作条全在视口外：复制键点不到。当作「没有候选」，
+                    # 让下面的 UIA 文本兜底接手（否则会一直重试到 timeout）。
+                    candidates = []
+                    positional = True
+                    warns = list(state.get("warnings") or [])
+                    if "actions_offscreen" not in warns:
+                        warns.append("actions_offscreen")
+                    state["warnings"] = warns
             if not candidates:
                 # B17：dsh 专属、用户授权的只读 UIA 文本兜底。只在「已放开
                 # copies 条数门槛」(positional) 之后生效，避免拿到半句话。
