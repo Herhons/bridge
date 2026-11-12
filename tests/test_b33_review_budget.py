@@ -17,6 +17,7 @@ ensure_offline()
 import importlib.util
 import sys
 import unittest
+import unittest.mock
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -70,3 +71,51 @@ class NoRawReviewTimeout(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SubprocessTimeout(unittest.TestCase):
+    """子进程超时必须变成结构化失败，不能把 `TimeoutExpired` 抛给调用方。
+
+    原来四处 `subprocess.run(timeout=…)` 都没接：子进程卡住时（UI 锁死、网页端
+    不返回）整个 `review` / `summarize` 以 traceback 收场，归档里一行结果都没有，
+    事后连"是超时还是崩了"都分不清。
+    """
+
+    def test_timeout_becomes_a_result_not_an_exception(self):
+        import subprocess as sp
+
+        boom = sp.TimeoutExpired(cmd=["x"], timeout=5)
+        with unittest.mock.patch.object(iterate.subprocess, "run", side_effect=boom):
+            proc, err = iterate._run_or_timeout(["x"], 5, "测试")
+        self.assertIsNone(proc)
+        self.assertEqual(err["stage"], "timeout")
+        self.assertEqual(err["timeout_kind"], "hard")
+        self.assertIn("测试", err["hint"])
+
+    def test_normal_run_is_passed_through(self):
+        from types import SimpleNamespace
+
+        fake = SimpleNamespace(stdout="{}\n", returncode=0)
+        with unittest.mock.patch.object(iterate.subprocess, "run", return_value=fake):
+            proc, err = iterate._run_or_timeout(["x"], 5, "测试")
+        self.assertIsNone(err)
+        self.assertIs(proc, fake)
+
+    def test_every_long_call_goes_through_the_helper(self):
+        """防回归：不许再有裸的 `subprocess.run(... timeout=...)`。"""
+        import re
+
+        lines = SOURCE.splitlines()
+        bad = []
+        for i, line in enumerate(lines, 1):
+            stripped = line.strip()
+            # 只看真正的调用语句：注释/docstring/`return subprocess.run(…)`（helper 自己）不算
+            if not stripped.startswith("subprocess.run("):
+                continue
+            window = "\n".join(lines[i - 1:i + 6])
+            if "timeout=" not in window:
+                continue
+            if "except" in window:        # 已经在 try/except 里包好了
+                continue
+            bad.append(f"{i}:{stripped}")
+        self.assertEqual(bad, [], "长调用必须走 _run_or_timeout")

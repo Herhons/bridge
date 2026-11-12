@@ -1,6 +1,7 @@
-# Round 4 会审材料（审 23ce172..820609a 这批改动）
+# Round 4 会审材料（范围 23ce172..f5ef01a，含探活中发现的 B32–B34）
 
-两部分：① 规格全文；② 本轮 diff（账本所有权 / 匹配规则收口 / 兜底证据）。
+三部分：① 规格全文；② 本轮源码 diff（src + tools，**测试不在里面**）；
+③ 每条回归用例的名字（测试代码在仓库 `tests/` 下，可按需查看）。
 
 ---
 
@@ -368,14 +369,74 @@ Round 0 结束之后：
 
 ---
 
-## 二、本轮改动（unified diff）
+## 二、本轮源码改动（unified diff）
 
 ```diff
 diff --git a/src/qi/conversation.py b/src/qi/conversation.py
-index 03ec3b9..6e5d533 100644
+index 03ec3b9..e9a30df 100644
 --- a/src/qi/conversation.py
 +++ b/src/qi/conversation.py
-@@ -705,6 +705,38 @@ def prompt_nodes(view, prompt):
+@@ -176,6 +176,40 @@ ACCEPT_NAV_GRACE_READS = 2
+ # 连续这么多次仍读不出才按 `identity_unreadable` 退出（与换会话分开记账）。
+ IDENTITY_UNREADABLE_READS = 10
+ 
++# 2026-11-12：**用量硬墙**要快速失败，不能当"还在生成"等满整档预算。
++# 实测 chatgpt Work 额度用完时页面写着「你暂时已用完工作用量 / 升级订阅或添加额度…」，
++# 收卷侧看不出区别 —— 没有回复键、也不 busy，于是白等到 `REVIEW_TIMEOUT`（1500s）。
++# 这不是绕过额度（一个字节都不碰），只是把"等 25 分钟"换成"当场认输"。
++# 词条取**整句**而不是关键词：审查内容里出现"额度""升级"是常态，短词必误判。
++QUOTA_WALL = {
++    "chatgpt": ("你暂时已用完工作用量",
++                "升级订阅或添加额度",
++                "You've reached your limit",
++                "You’ve reached your limit"),
++}
++
++
++def quota_wall(site, view):
++    """页面是不是「用量已用完」的硬墙；命中返回那一条文案，否则 None。
++
++    只在**没有回复键**时判：有回复就说明这一轮确实有产出，额度提示可能是别的
++    残留（比如侧栏历史里的同类会话标题），不能拿它盖掉真答案。
++    """
++    markers = QUOTA_WALL.get(str(site or "").strip().lower())
++    if not markers:
++        return None
++    try:
++        if list(getattr(view, "copies", None) or ()):
++            return None
++        text = ui.text_of(view.root) or ""
++    except (RuntimeError, COMError, AttributeError):
++        return None
++    for marker in markers:
++        if marker in text:
++            return marker
++    return None
++
++
+ # 2026-11-07（R6）：**同一个文档、同一个 URL** 的 SPA 会话切换。
+ # opencode 的每个会话都是应用自己的一个标签页：切会话时 document runtime id 和
+ # URL（`oc://renderer/index.html`）都不变，变的只有应用画出来的**会话名和标签条**。
+@@ -604,6 +638,18 @@ class Conversation:
+                     raise SendUnavailable(
+                         f"发送键存在但全部不可用（{len(named)} 个）：端不接受输入",
+                         present=len(named))
++                # 2026-11-12：**点不了发送**也可以是额度问题 —— 前提是页面自己说了。
++                # chatgpt 的 Work 额度用完后，输入区被额度卡替换，发送键要么不存在、
++                # 要么常年灰着；旧代码报 `interrupted`，账本记 unknown（BLOCKING），
++                # 这条提问就被永久拦住（要人工清账），而实际上一个字都没发。
++                # 有额度墙证据时归到 `send_unavailable`（可重试态），额度恢复即可重发。
++                # 判据用 `not buttons`（一个能点的都没有），不是 `not named` ——
++                # 实测额度墙下"发送"按钮还在，只是 disabled。
++                wall = quota_wall(self.site, view)
++                if wall and not buttons:
++                    raise SendUnavailable(
++                        f"发送键不可用（{len(named)} 个存在 / 0 个可用），"
++                        f"且页面提示用量已用完：{wall}", present=len(named))
+                 raise RuntimeError("可用发送按钮: 找到 0 个控件")
+             time.sleep(0.5)
+             view = self.read()
+@@ -705,6 +751,38 @@ def prompt_nodes(view, prompt):
      return found
  
  
@@ -414,7 +475,42 @@ index 03ec3b9..6e5d533 100644
  def prompt_fragments(view, prompt, *, min_chars: int = 12, limit: int = 12):
      """提问被渲染成多块时，找出属于它的叶子文本节点。
  
-@@ -1522,7 +1554,9 @@ def _ask_impl(conversation, prompt, timeout=180.0, pre_send=None, plain=False,
+@@ -1231,6 +1309,34 @@ def _local_chat_persisted(before, now) -> bool:
+         and not new.startswith("/c/local-")
+ 
+ 
++def _first_turn_landed(before, now) -> bool:
++    """首轮新会话「落库」：容器地址 -> 该容器下的具体会话地址。
++
++    与 `_local_chat_persisted` 同一类，但按**路径形状**判，**不看第几次读**。
++
++    为什么必须按形状：gemini 换地址发生在**答案出现的那一刻**。2026-11-12 实测
++    新会话问「请只回复两个字：收到」：发送后地址一直是 `/app`，到第 16 秒答案
++    才出来，地址同时变成 `/app/1bd58577…`。旧判据是"接受后 2 次读之内"，而答案
++    出来时已经读到第 40 次上下 —— 明明发成功、答案也在页面上，却被判成
++    `conversation_changed`（`reason=document_changed`），一次会审就这样白跑。
++
++    只认「容器路径 -> 容器下的一段 id」：
++      · gemini   `/app`       -> `/app/<id>`
++      · chatgpt  `/c/local-…` -> `/c/<uuid>`（原 B17 路径，保留）
++    反例必须继续拒：`/app/<id1>` -> `/app/<id2>`（真的换了会话）。
++    """
++    old = ((before or {}).get("path") or "").rstrip("/")
++    new = (now or {}).get("path") or ""
++    if not old or not new:
++        return False
++    if _local_chat_persisted(before, now):
++        return True
++    if old != "/app":
++        return False
++    rest = new[len("/app/"):] if new.startswith("/app/") else ""
++    return bool(rest) and "/" not in rest
++
++
+ def _rect_of(node):
+     """控件的屏幕矩形；读不到返回 None（不当成 0，也不猜）。"""
+     try:
+@@ -1522,7 +1628,9 @@ def _ask_impl(conversation, prompt, timeout=180.0, pre_send=None, plain=False,
              # 这段完全跳过，老调用方行为不变。
              if ledger is not None:
                  if reserved_by_door:
@@ -425,7 +521,54 @@ index 03ec3b9..6e5d533 100644
                  else:
                      refused = ledger.reserve(written)
                      if refused is not None:
-@@ -2130,13 +2164,27 @@ class _Ledger:
+@@ -1658,6 +1766,25 @@ def _ask_impl(conversation, prompt, timeout=180.0, pre_send=None, plain=False,
+             heartbeat.beat_view("waiting", view, reads=hb_reads,
+                                 accepted=accepted, baseline=baseline,
+                                 composer_len=len(view.value or ""))
++            # 用量硬墙：页面明说额度用完，就别按"还在生成"等到整档预算。
++            # 只读判断，不改任何页面状态；命中即收工，让上层去决定等额度还是换端。
++            wall = quota_wall(getattr(conversation, "site", None), view)
++            if wall:
++                # 额度墙是页面上的硬事实：无论有没有被判过接受，都别再等下去。
++                # 但两种情形要分开记 —— 判过接受的那条记录**不许改口**：
++                # 改成 `not_sent` 会让账本降成可重发（B24 只拦旧记录，不拦本轮
++                # 刚 reserve 的 submitting），额度一恢复就会真的再发一遍。
++                if accepted:
++                    return {**state, "stage": "quota_exhausted",
++                            "reason": "quota_wall", "quota_text": wall,
++                            "hint": "页面提示用量已用完（硬墙）。这条 accepted 是在额度墙"
++                                    "期间写的，可能并没有真的发出去；额度恢复后若要重发，"
++                                    "先用 tools/submission_clear.py 清掉这条记录"}
++                return {**state, "stage": "quota_exhausted",
++                        "reason": "quota_wall", "quota_text": wall,
++                        "sent": False, "submission": "not_sent",
++                        "hint": "页面提示用量已用完（硬墙）：未发送，不重试、不绕过，"
++                                "等额度恢复或换端"}
+             prompts = prompt_nodes(view, prompt)
+             if not prompts:
+                 # 整段匹配失败时退回「碎片认领」：只影响"提问还在不在"的判断，
+@@ -1712,10 +1839,18 @@ def _ask_impl(conversation, prompt, timeout=180.0, pre_send=None, plain=False,
+                     # conversation_changed）。这**不是**换会话，是同一段对话在落库，
+                     # 所以允许重新锚定一次——但只认"我们的提问还在页面上"，且只认
+                     # 这条临时 id → 真实 id 的窄路径，别的路径变化照旧拒。
+-                    if prompts and _local_chat_persisted(accepted_ident, ident):
++                    #
++                    # 2026-11-12 扩成 `_first_turn_landed`：gemini 的落库发生在
++                    # **答案出现那一刻**（实测第 16 秒、读到第 40 次上下），
++                    # "接受后 2 次读之内"的窗口根本覆盖不到，于是判成换会话。
++                    if prompts and _first_turn_landed(accepted_ident, ident):
+                         accepted_ident = ident
+                         anchor_path = path_of(view.url)
+-                        baseline = len(view.copies)
++                        # 落库迟到时答案可能已经上屏：**别把它划进基线**，
++                        # 否则重新锚定等于把刚到的答案当成历史，白等到超时。
++                        # 只有"确实还没有回复"才重设基线（原来那一支的语义）。
++                        if not _has_reply_after(nodes_now, prompts, view.copies):
++                            baseline = len(view.copies)
+                         time.sleep(0.4)
+                         continue
+                     return {**state, "stage": "conversation_changed",
+@@ -2130,13 +2265,27 @@ class _Ledger:
          self.request_id = (os.environ.get("BRIDGE_REQUEST_ID") or "").strip() or None
  
      # ------------------------------------------------------------ 提交前
@@ -497,134 +640,242 @@ index 3a87e4f..3b4b4a4 100644
  #: 允许降级的证据键。三项里 `page_empty` 必填，另两项至少一项——
  #: 单凭"页面空白"不足以降级（可能只是还没渲染），必须再有"身份/证据不支持"的旁证。
  DEMOTE_REQUIRED = "page_empty"
-diff --git a/tests/test_b31_adopt_owned.py b/tests/test_b31_adopt_owned.py
-new file mode 100644
-index 0000000..2fac1cf
---- /dev/null
-+++ b/tests/test_b31_adopt_owned.py
-@@ -0,0 +1,62 @@
-+"""B31：门禁写好的预约必须核对"是不是本次调用的"。
+diff --git a/tools/iterate.py b/tools/iterate.py
+index 2cefe98..a6cb59d 100644
+--- a/tools/iterate.py
++++ b/tools/iterate.py
+@@ -44,6 +44,27 @@ def load_config() -> dict:
+     return cfg
+ 
+ 
++def _review_budget(cfg) -> int:
++    """会审等答案的预算：**必须**过一遍 `tier_guard.floor_timeout`。
 +
-+Round 3 会审三方一致：`_Ledger.adopt()` 只置 `reserved=True` 等于无条件信任门禁的
-+布尔值，过期回执会被当成本次预约，终态写账就会改掉旧记录（B24/B26 的同一类风险）。
-+"""
-+from offline_guard import ensure_offline
-+ensure_offline()
++    规格 §7.1：`purpose=review` 走 `REVIEW_TIMEOUT` 下限，不得把高档会审判成
++    小超时。`*_use.py` 的 CLI 入口本来就会 floor，但 `iterate.py` 是直接调
++    `conversation.ask` / `subprocess.run`，绕过了那层 —— 2026-11-12 实测：
++    配置写 480，`conversation.ask` 就在 480s 收工（Round 4 chatgpt 582s 报 timeout
++    正落在这条线上），而同一份配置交给 `gemini_use.py` 时子进程自己抬到 1500，
++    **父进程 `timeout=budget+180` 反而先把子进程杀了**，答案就在页面上却收不回来。
 +
-+import sys
-+import tempfile
-+import unittest
-+from pathlib import Path
++    所以这里统一取 floor 后的值，父进程的 subprocess 超时也基于它算。
++    """
++    from qi import tier_guard
 +
-+ROOT = Path(__file__).resolve().parents[1]
-+sys.path.insert(0, str(ROOT / "src"))
-+
-+from qi import submissions as sub                 # noqa: E402
-+
-+EP = "chatgpt"
-+PROMPT = "BRIDGE-B31-ADOPT"
-+SCOPE = {"site": "chatgpt", "hwnd": 12345, "session_id": "s1"}
-+
-+
-+class AdoptOwnedTests(unittest.TestCase):
-+    def setUp(self):
-+        self._tmp = tempfile.TemporaryDirectory()
-+        self.addCleanup(self._tmp.cleanup)
-+        self.root = Path(self._tmp.name)
-+
-+    def test_matching_scope_is_accepted(self):
-+        sub.reserve(EP, PROMPT, root=self.root, scope=SCOPE, now=1000.0)
-+        out = sub.adopt_owned(EP, PROMPT, scope=dict(SCOPE), root=self.root)
-+        self.assertTrue(out["ok"], out)
-+        self.assertEqual(out["v2_state"], "submitting")
-+
-+    def test_different_window_is_refused(self):
-+        sub.reserve(EP, PROMPT, root=self.root, scope=SCOPE, now=1000.0)
-+        out = sub.adopt_owned(EP, PROMPT, scope={**SCOPE, "hwnd": 999}, root=self.root)
-+        self.assertFalse(out["ok"])
-+        self.assertEqual(out["reason"], "hwnd_mismatch")
-+
-+    def test_different_session_alone_does_not_block(self):
-+        # 发送时新会话还没生成 session_id，doc_rid 也会变：这一层不能当判据
-+        sub.reserve(EP, PROMPT, root=self.root, scope=SCOPE, now=1000.0)
-+        out = sub.adopt_owned(EP, PROMPT, scope={**SCOPE, "session_id": "s2"}, root=self.root)
-+        self.assertTrue(out["ok"], out)
-+
-+    def test_missing_record_is_refused(self):
-+        out = sub.adopt_owned(EP, "NO-SUCH-PROMPT", scope=SCOPE, root=self.root)
-+        self.assertFalse(out["ok"])
-+        self.assertEqual(out["reason"], "reservation_missing")
-+
-+    def test_unreadable_scope_does_not_block(self):
-+        # 读不到页面身份是常态：只拒绝"能比对且不一致"
-+        sub.reserve(EP, PROMPT, root=self.root, scope=SCOPE, now=1000.0)
-+        self.assertTrue(sub.adopt_owned(EP, PROMPT, scope=None, root=self.root)["ok"])
-+        sub.reserve(EP, "P2", root=self.root, scope=None, now=1000.0)
-+        self.assertTrue(sub.adopt_owned(EP, "P2", scope=SCOPE, root=self.root)["ok"])
++    try:
++        raw = float((cfg or {}).get("review_timeout") or DEFAULT_CONFIG["review_timeout"])
++    except (TypeError, ValueError):
++        raw = float(DEFAULT_CONFIG["review_timeout"])
++    return int(tier_guard.floor_timeout("review", raw))
 +
 +
-+if __name__ == "__main__":
-+    unittest.main()
-diff --git a/tests/test_b31_ask_failure.py b/tests/test_b31_ask_failure.py
-new file mode 100644
-index 0000000..674696e
---- /dev/null
-+++ b/tests/test_b31_ask_failure.py
-@@ -0,0 +1,30 @@
-+"""B31：走兜底时必须保留 ask 的失败细节。
+ def git(*args: str) -> str:
+     return subprocess.run(["git", *args], cwd=ROOT, capture_output=True,
+                           text=True, encoding="utf-8").stdout.strip()
+@@ -265,36 +286,17 @@ def _join_by_lines(items) -> str:
+ 
+ 
+ def _merged_blocks(texts):
+-    """把所有块拼成一整串，并记录每块占的字符区间。
++    """委托：实现只在 `qi.conversation.merged_blocks`（定位与取回共用一套规则）。"""
++    from qi import conversation
+ 
+-    为什么要拼：grok 把一条提问拆成 9~10 个节点（`**`、`只依据第一章`、`**`…），
+-    任何"单块匹配"的判据都会在气泡中间断掉。拼起来才能确定气泡的**起止块**。
+-    """
+-    parts, spans, offset = [], [], 0
+-    for text in texts:
+-        # 去掉 markdown 强调符号：grok 把 `**` 渲染成**独立节点**，
+-        # 留在拼接串里会把提问切成两半，needle 永远匹配不上（2026-11-12 实测）。
+-        squashed = "".join(text.split()).replace("*", "")
+-        parts.append(squashed)
+-        spans.append((offset, offset + len(squashed)))
+-        offset += len(squashed)
+-    return "".join(parts), spans
++    return conversation.merged_blocks(texts)
+ 
+ 
+ def _prompt_span(texts, needle: str, start_at: int = 0):
+-    """在拼接文本里找 `needle`，返回 `(首块, 末块, 结束偏移)`；找不到返回 None。"""
+-    if not needle:
+-        return None
+-    merged, spans = _merged_blocks(texts)
+-    pos = merged.find(needle, start_at)
+-    if pos < 0:
+-        return None
+-    end = pos + len(needle)
+-    first = next((i for i, (_a, b) in enumerate(spans) if b > pos), None)
+-    last = next((i for i, (_a, b) in enumerate(spans) if b >= end), None)
+-    if first is None or last is None:
+-        return None
+-    return first, last, end
++    """委托：实现只在 `qi.conversation.prompt_span`。"""
++    from qi import conversation
 +
-+Round 3 的 grok 只剩 `stage=text_extracted`，看不出它是 timeout 还是
-+conversation_changed，`diagnostics` 也丢了——等于每次兜底都自毁证据。
-+"""
-+from offline_guard import ensure_offline
-+ensure_offline()
-+
-+import sys
-+import unittest
-+from pathlib import Path
-+
-+ROOT = Path(__file__).resolve().parents[1]
-+sys.path.insert(0, str(ROOT / "src"))
-+
-+source = (ROOT / "tools" / "iterate.py").read_text(encoding="utf-8-sig")
-+
-+
-+class AskFailureKeptTests(unittest.TestCase):
-+    def test_failure_snapshot_is_taken_before_fallback(self):
-+        self.assertIn('failure = {key: result.get(key) for key in', source)
-+        self.assertIn('"ask_failure": failure', source)
-+
-+    def test_both_fallback_paths_carry_it(self):
-+        self.assertIn('result = {**harvested, "ask_failure": failure}', source)
-+        self.assertIn('"stage": "text_extracted", "reply": text,', source)
-+
-+
-+if __name__ == "__main__":
-+    unittest.main()
-diff --git a/tests/test_b31_prompt_rule_shared.py b/tests/test_b31_prompt_rule_shared.py
-new file mode 100644
-index 0000000..3937d6c
---- /dev/null
-+++ b/tests/test_b31_prompt_rule_shared.py
-@@ -0,0 +1,46 @@
-+"""B31：提问定位与答案取回必须共用同一套匹配。
-+
-+Round 3 会审：`tools/iterate.py` 与 `qi/conversation.py` 各写一套"拼接后定位"，
-+改一边忘另一边就会出现"能定位不能取回 / 能取回不能定位"。现在实现只在
-+`qi.conversation`，tools 只做委托。
-+"""
-+from offline_guard import ensure_offline
-+ensure_o
-…（截断，完整 diff 见仓库 23ce172..820609a）
++    return conversation.prompt_span(texts, needle, start_at=start_at)
+ 
+ 
+ def is_progress_noise(text: str) -> bool:
+@@ -786,7 +788,7 @@ def _ask_upload_body(site: str, prompt: str, material: Path, cfg, state=None,
+         state.mark_chunk(prompt_id, "sending")     # 发送**之前**落盘，崩溃后不留空白
+     _refresh_tier(site)                  # 回执一次性；上一次失败也会把它用掉
+     conv = _conversation(screen, site)
+-    result = conversation.ask(conv, ask_text, timeout=cfg["review_timeout"],
++    result = conversation.ask(conv, ask_text, timeout=_review_budget(cfg),
+                               purpose="review")
+     if state is not None:
+         state.mark_chunk(prompt_id, "sent" if result.get("ok") else "unknown",
+@@ -795,14 +797,20 @@ def _ask_upload_body(site: str, prompt: str, material: Path, cfg, state=None,
+                      prompt_id, accepted=bool(result.get("ok")
+                                               or result.get("submission") == "accepted"))
+     if not result.get("ok") and result.get("stage") in ("timeout", "interrupted", "harvest_timeout"):
++        # 兜底会**覆盖** result：把 ask 的失败细节先留一份，否则事后完全看不出
++        # 为什么这一席要走兜底（Round 3 的 grok 就是这样丢掉了 timeout_kind）。
++        failure = {key: result.get(key) for key in
++                   ("stage", "timeout_kind", "reason", "diagnostics", "warnings")
++                   if result.get(key) is not None}
+         harvested = harvest_reply(screen, site, wait=float(cfg.get("harvest_wait", 420)))
+         if harvested["ok"]:
+-            result = harvested
++            result = {**harvested, "ask_failure": failure}
+         else:
+             # 复制键点不到时，直接从控件树读（答案确实在，只是动作条不可点）。
+             text = read_answer_text(screen, site, ask_text)
+             if len(text) >= 300:
+-                result = {"ok": True, "stage": "text_extracted", "reply": text}
++                result = {"ok": True, "stage": "text_extracted", "reply": text,
++                          "ask_failure": failure}
+     result["feed"] = "upload"
+     result["upload"] = up.as_dict()
+     return result
+@@ -849,7 +857,7 @@ def _ask_upload_script(site: str, prompt: str, material: Path, cfg, state=None)
+         state.mark_chunk(prompt_id, "sending")
+     _refresh_tier(site)                  # 回执一次性，发送前重拿一条
+     script = ROOT / "src" / "scripts" / f"{site}_use.py"
+-    budget = int(cfg["review_timeout"])
++    budget = _review_budget(cfg)
+     proc = subprocess.run(
+         [sys.executable, str(script), ask_text, "--purpose", "review",
+          "--continue", "--timeout", str(budget)],
+@@ -972,7 +980,7 @@ def _ask_via_script(site: str, prompt: str, material_text: str, cfg,
+                 state.mark_chunk(chunk["id"], "sent", reconciled=True)
+                 continue
+         _refresh_tier(site)              # 档位回执是一次性的：每段都要重拿
+-        budget = cfg["review_timeout"] if index == total else int(
++        budget = _review_budget(cfg) if index == total else int(
+             cfg.get("chunk_timeout", 300))
+         cmd = [sys.executable, str(script), body, "--purpose", "review",
+                "--timeout", str(int(budget))]
+@@ -1019,7 +1027,7 @@ def _ask_paste(site: str, prompt: str, material_text: str, cfg, state=None) -> d
+     if chunks:
+         _clear_composer(_screen_for(site), site)      # 上一轮残草会判 draft_present
+     for index, chunk in enumerate(chunks, start=1):
+-        budget = cfg["review_timeout"] if index == len(chunks) else int(
++        budget = _review_budget(cfg) if index == len(chunks) else int(
+             cfg.get("chunk_timeout", 300))
+         last = flow.ask(site_obj, chunk, mode=("new" if index == 1 else "continue"),
+                         timeout=budget, purpose="review", verbose=False)
+@@ -1246,7 +1254,7 @@ def cmd_summarize(args, cfg) -> int:
+                     "2) 标出冲突；3) 按对本项目的好处排序；4) 你要补充的新缺陷单独列在「汇总者新增」。"
+                     "不要猜来源，1500 字内。")
+         script = ROOT / "src" / "scripts" / "gemini_use.py"
+-        budget = int(cfg["review_timeout"])
++        budget = _review_budget(cfg)
+         proc = subprocess.run([sys.executable, str(script), short, "--purpose", "review",
+                                "--continue", "--timeout", str(budget)],
+                               cwd=ROOT, capture_output=True, text=True,
+@@ -1272,7 +1280,7 @@ def cmd_summarize(args, cfg) -> int:
+                 return 1
+             _refresh_tier("gemini")          # 回执一次性
+             conv = _conversation(screen, "gemini")
+-            result = conversation.ask(conv, prompt, timeout=cfg["review_timeout"],
++            result = conversation.ask(conv, prompt, timeout=_review_budget(cfg),
+                                       purpose="review")
+ 
+     url = ""
+@@ -1330,7 +1338,7 @@ def cmd_upload_check(args, cfg) -> int:
+     _upload_settled(site, screen)
+     conv = _conversation(screen, site)
+     result = conversation.ask(conv, "附件里那行关键内容是什么？只回答那一行，不要解释。",
+-                              timeout=cfg["review_timeout"], purpose="review")
++                              timeout=_review_budget(cfg), purpose="review")
+     reply = (result.get("reply") or "").strip()
+     ok = token.lower() in reply.lower()
+     payload = {"ok": bool(result.get("ok")) and ok, "upload": up.as_dict(),
 
 ```
 
-## 三、请重点回答
+## 三、回归用例清单（只列名字，正文在仓库里）
+
+### `tests/test_b31_adopt_owned.py`
+B31：门禁写好的预约必须核对"是不是本次调用的"。
+
+- `test_matching_scope_is_accepted`
+- `test_different_window_is_refused`
+- `test_different_session_alone_does_not_block`
+- `test_missing_record_is_refused`
+- `test_unreadable_scope_does_not_block`
+
+### `tests/test_b31_ask_failure.py`
+B31：走兜底时必须保留 ask 的失败细节。
+
+- `test_failure_snapshot_is_taken_before_fallback`
+- `test_both_fallback_paths_carry_it`
+
+### `tests/test_b31_prompt_rule_shared.py`
+B31：提问定位与答案取回必须共用同一套匹配。
+
+- `test_same_input_same_span`
+- `test_tail_echo_agrees_too`
+- `test_tools_does_not_reimplement_it`
+
+### `tests/test_b32_first_turn_landed.py`
+B32：首轮新会话「落库」判据要按路径形状，不能按"读了几次"。
+
+- `test_gemini_container_to_session_is_landing`
+- `test_chatgpt_local_to_real_is_still_landing`
+- `test_another_session_under_the_same_container_is_not_landing`
+- `test_unrelated_path_change_is_not_landing`
+- `test_late_landing_is_not_a_conversation_change`
+- `test_answer_already_visible_when_landing_happens_is_collected`
+- `test_moving_to_another_session_is_still_refused`
+
+### `tests/test_b33_review_budget.py`
+B33：`iterate.py` 的会审预算必须过 `tier_guard.floor_timeout`。
+
+- `test_small_config_is_raised_to_the_review_floor`
+- `test_larger_config_is_kept`
+- `test_missing_or_bad_config_still_floors`
+- `test_default_budget_is_not_below_the_floor`
+- `test_no_raw_review_timeout_in_calls`
+- `test_only_the_last_chunk_gets_the_review_budget`
+
+### `tests/test_b34_quota_wall.py`
+B34：用量硬墙要快速失败，不能当"还在生成"等满整档预算。
+
+- `test_chatgpt_wall_is_detected`
+- `test_reply_beats_the_wall`
+- `test_other_sites_ignore_it`
+- `test_clean_page_is_not_a_wall`
+- `test_wall_ends_the_turn_without_waiting`
+- `test_wall_does_not_overwrite_an_accepted_turn`
+- `test_wall_without_any_send_button_is_retryable`
+- `test_wall_with_a_disabled_send_button_is_retryable`
+- `test_without_wall_evidence_keeps_the_original_error`
+- `test_wall_on_another_site_does_not_change_the_error`
+
+---
+
+## 四、请重点回答
 
 1. `adopt_owned()` 只比到窗口级（site/hwnd）是否足够挡住过期回执？
-   按 `reconcile()` 逐字段比会把正常首发全拒（旧用例已证），这个折中是否可接受、还缺什么？
-2. `prompt_span()` 收成一处后，收卷主路径（`_ask_impl` 的 `prompt_nodes`）仍用单块匹配
-   加碎片兜底。这种「两套入口、一套实现」是否够，还是必须把主路径也换掉？
-3. `ask_failure` 只保留 5 个字段，够不够事后定位？还该带什么（时间线、读数、页面指纹）？
-4. 这批改动最可能引入什么回归？（剪贴板、账本、收卷各给一个具体场景）
-5. 其余两条自由。
+   按 `reconcile()` 逐字段比会把正常首发全拒（旧用例已证），这个折中是否可接受？
+2. `prompt_span()` 收成一处后，收卷主路径仍用单块匹配 + 碎片兜底。
+   这种「两套入口、一套实现」是否够，还是必须把主路径也换掉？
+3. `ask_failure` 只保留 5 个字段，够不够事后定位？还该带什么？
+4. `_first_turn_landed()` 按路径形状判「首轮落库」：`/app` → `/app/<id>`、
+   `/c/local-…` → `/c/<uuid>`。这个白名单还会漏掉哪些端/形态？会不会放走真的换会话？
+5. `quota_wall()` 只认四句整词、且有回复键就不判。会误伤吗（比如审查内容本身含
+   「升级订阅或添加额度」）？还该加什么护栏？
+6. 这批改动最可能引入什么回归？（剪贴板、账本、收卷各给一个具体场景）
+7. 其余自由。

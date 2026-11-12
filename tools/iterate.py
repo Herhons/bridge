@@ -65,6 +65,23 @@ def _review_budget(cfg) -> int:
     return int(tier_guard.floor_timeout("review", raw))
 
 
+def _run_or_timeout(cmd, timeout, what):
+    """跑子进程；超时返回 `(None, 结构化失败)`，不把 `TimeoutExpired` 抛出去。
+
+    为什么必须包：`subprocess.run(timeout=…)` 超时抛的是异常。原来的四处调用都没接，
+    于是子进程卡住时（UI 锁死、网页端不返回）整个 `review` / `summarize` 命令以
+    traceback 收场，**归档里一行结果都没有**，事后连"是超时还是崩了"都分不清。
+    和 `ask_failure` 同一个理由：失败也要留下可读的原因。
+    """
+    try:
+        return subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True,
+                              encoding="utf-8", timeout=timeout), None
+    except subprocess.TimeoutExpired:
+        return None, {"ok": False, "stage": "timeout", "timeout_kind": "hard",
+                      "reason": "subprocess_timeout",
+                      "hint": f"{what}：子进程超过 {timeout}s 未退出，已强杀"}
+
+
 def git(*args: str) -> str:
     return subprocess.run(["git", *args], cwd=ROOT, capture_output=True,
                           text=True, encoding="utf-8").stdout.strip()
@@ -858,11 +875,12 @@ def _ask_upload_script(site: str, prompt: str, material: Path, cfg, state=None) 
     _refresh_tier(site)                  # 回执一次性，发送前重拿一条
     script = ROOT / "src" / "scripts" / f"{site}_use.py"
     budget = _review_budget(cfg)
-    proc = subprocess.run(
+    proc, timeout_err = _run_or_timeout(
         [sys.executable, str(script), ask_text, "--purpose", "review",
          "--continue", "--timeout", str(budget)],
-        cwd=ROOT, capture_output=True, text=True, encoding="utf-8",
-        timeout=budget + 180)
+        budget + 180, f"{site} 会审")
+    if timeout_err:
+        return {**timeout_err, "feed": "upload-script", "upload": up.as_dict()}
     parsed = None
     for line in reversed((proc.stdout or "").splitlines()):
         line = line.strip()
@@ -909,9 +927,11 @@ def _choose_tier(site: str, purpose: str = "review") -> dict:
     script = ROOT / "src" / "scripts" / f"{site}_choose.py"
     if not script.is_file():
         return {"ok": False, "reason": "no_choose_script"}
-    proc = subprocess.run([sys.executable, str(script), "--purpose", purpose],
-                          cwd=ROOT, capture_output=True, text=True,
-                          encoding="utf-8", timeout=180)
+    proc, timeout_err = _run_or_timeout(
+        [sys.executable, str(script), "--purpose", purpose], 180, f"{site} 选档")
+    if timeout_err:
+        return {"ok": False, "exit": None, "reason": "timeout",
+                "hint": timeout_err["hint"]}
     return {"ok": proc.returncode == 0, "exit": proc.returncode,
             "tail": (proc.stdout or "")[-200:]}
 
@@ -988,8 +1008,10 @@ def _ask_via_script(site: str, prompt: str, material_text: str, cfg,
             cmd.append("--continue")
         if state is not None:
             state.mark_chunk(chunk["id"], "sending")
-        proc = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True,
-                              encoding="utf-8", timeout=budget + 120)
+        proc, timeout_err = _run_or_timeout(
+            cmd, budget + 120, f"{site} 第 {index}/{total} 段")
+        if timeout_err:
+            return {**timeout_err, "feed": "paste", "chunks": total, "at": index}
         parsed = None
         for line in reversed((proc.stdout or "").splitlines()):
             line = line.strip()
@@ -1255,10 +1277,14 @@ def cmd_summarize(args, cfg) -> int:
                     "不要猜来源，1500 字内。")
         script = ROOT / "src" / "scripts" / "gemini_use.py"
         budget = _review_budget(cfg)
-        proc = subprocess.run([sys.executable, str(script), short, "--purpose", "review",
-                               "--continue", "--timeout", str(budget)],
-                              cwd=ROOT, capture_output=True, text=True,
-                              encoding="utf-8", timeout=budget + 180)
+        proc, timeout_err = _run_or_timeout(
+            [sys.executable, str(script), short, "--purpose", "review",
+             "--continue", "--timeout", str(budget)],
+            budget + 180, "gemini 汇总")
+        if timeout_err:
+            print(json.dumps({**timeout_err, "summarizer": "gemini"},
+                             ensure_ascii=False))
+            return 1
         parsed = None
         for line in reversed((proc.stdout or "").splitlines()):
             line = line.strip()

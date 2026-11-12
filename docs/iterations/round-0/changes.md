@@ -679,3 +679,23 @@ hint = `发送键不可用（1 个存在 / 0 个可用），且页面提示用�
   （消息没发出去，但记成了 accepted/unknown）。它们不影响真实提问（账本按 prompt 哈希分键），
   按"删数据要停"的约定**没有删除**；额度恢复后如要重跑同一提问，先确认不撞这三条。
 - `tools/iterate.py` 之外的 `flow.ask` 调用是否都带了 purpose，未逐一复核。
+
+## 30. B35：子进程超时不再抛 traceback（17:50 起）
+
+`tools/iterate.py` 有 4 处 `subprocess.run(..., timeout=…)` 没接 `TimeoutExpired`：
+`_ask_upload_script`（会审）、`_choose_tier`（选档）、`_ask_paste`（分段粘贴）、
+`cmd_summarize` 的 gemini 分支。子进程卡住时（UI 锁死、网页端不返回），整个
+`review` / `summarize` 以 traceback 收场，**归档里一行结果都没有** —— 事后连
+"是超时还是崩了"都分不清。和 `ask_failure` 同一个理由：失败也要留下可读的原因。
+
+改法：新增 `_run_or_timeout(cmd, timeout, what)`，超时返回
+`(None, {stage: "timeout", timeout_kind: "hard", reason: "subprocess_timeout", hint})`；
+4 处全部改走它。第 5 处（`_relaunch_site` 的试点）原本就有 `try/except`，不动。
+
+顺带修掉一个错配：`_ask_upload_script` 的 `budget` 以前取原始 `review_timeout`
+（480），父进程 `timeout=budget+180=660` **比子进程自己 floor 后的 1500 还短**，
+必然先杀掉子进程。B33 之后 `budget` 已是 floor 后的值，这条自然对齐。
+
+新增 3 条用例（`test_b33_review_budget.py` 的 `SubprocessTimeout`）：
+超时变结构化结果、正常路径原样透传、**扫源码**禁止再出现裸的
+`subprocess.run(... timeout=...)`。全量 **1742 用例 OK**。

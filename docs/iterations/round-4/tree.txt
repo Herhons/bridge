@@ -183,6 +183,12 @@ docs/iterations/round-3/snapshot.json
 docs/iterations/round-3/state.json
 docs/iterations/round-3/tree.txt
 docs/iterations/round-3/verification.md
+docs/iterations/round-4/materials/material.md
+docs/iterations/round-4/prompt.md
+docs/iterations/round-4/replies/chatgpt.md
+docs/iterations/round-4/snapshot.json
+docs/iterations/round-4/state.json
+docs/iterations/round-4/tree.txt
 docs/known_gaps.md
 docs/self_iteration_spec.md
 docs/tiers.json
@@ -479,6 +485,9 @@ tests/test_b30_submission_demote.py
 tests/test_b31_adopt_owned.py
 tests/test_b31_ask_failure.py
 tests/test_b31_prompt_rule_shared.py
+tests/test_b32_first_turn_landed.py
+tests/test_b33_review_budget.py
+tests/test_b34_quota_wall.py
 tests/test_b3_reply_codes.py
 tests/test_b4_spawn_attribution.py
 tests/test_b5_extension_workflow.py

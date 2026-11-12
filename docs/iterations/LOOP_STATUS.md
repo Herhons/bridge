@@ -1,6 +1,6 @@
 # 自迭代循环状态（Herhons 10:42 新规后）
 
-更新时间：2026-11-12 17:35
+更新时间：2026-11-12 17:55
 规则：计划闸门已关闭（规格 §10）；停机只分 A 类（花钱/登录/删数据/动 v0.0.8）与 B 类（技术性）。
 本文不是"等批准"的 STOP，而是**交接与续跑用的状态**。
 
@@ -75,7 +75,9 @@ py -3.10 -B tools/iterate.py review --round round-3 --site gemini --force
 - **B34 额度墙**：`quota_wall()` 只认整句、有回复键不判；命中即 `quota_exhausted`；
   `_submit` 在「额度墙 + 一个能点的发送键都没有」时报 `send_unavailable`（可重试），
   不再留下永久拦住的 unknown 假账。真机 `stage=send_unavailable`、12.1s 返回。
-- 全量 **1739 用例 OK**。
+- **B35 子进程超时**：4 处 `subprocess.run(timeout=…)` 没接 `TimeoutExpired`，
+  卡住时整个命令以 traceback 收场、归档无结果。新增 `_run_or_timeout()` 统一接住。
+- 全量 **1742 用例 OK**。
 
 ## Round 4 会审：归档失败（3 家凑不齐）
 
@@ -86,7 +88,7 @@ py -3.10 -B tools/iterate.py review --round round-3 --site gemini --force
 **结论（17:25 复核）：本轮会审不成立，已归档。** 不是等不等的问题 —— 三家里
 chatgpt 是额度墙（只有 `GPT-6.1 Sol` 一档，无免费入口）、gemini 是**账号级拒答**
 （新会话问「用一句话描述春天」也回「因此没法帮到你」）。凑不够 §7.3 的 3 家，
-不进汇总。材料与快照留在 `round-4/`，额度重置后可直接续跑。
+不进汇总。材料与快照留在 `round-4/`（已更新到 `f5ef01a`，含 B32–B35），额度重置后可直接续跑。
 
 ## 近期已修（2026-11-12 14:31 起，STOP_handled_20261112_1431 的未决清单）
 
