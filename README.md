@@ -10,12 +10,12 @@ WorkBuddy）。上面套一个本地 HTTP 后端，按端点串行执行「选�
 
 ```text
 py -3.10 -m pip install -r requirements.txt     # numpy / opencv-python-headless / uiautomation / pycaw
-py -3.10 src/scripts/bridge_server.py start     # 127.0.0.1:18765
+py -3.10 src/scripts/bridge.py start     # 127.0.0.1:18765
 curl http://127.0.0.1:18765/health              # {"ok": true, "version": "0.0.9"}
 ```
 
-单端直调：`py -3.10 src/scripts/deepseek_use.py "你的问题" --purpose review`
-批量：`py -3.10 tools/live_job.py --endpoints chatgpt,gemini --purpose review --prompt-file q.txt`
+单端直调：`py -3.10 src/scripts/deepseek.py use "你的问题" --purpose review`
+批量：`py -3.10 src/scripts/bridge.py ask --endpoints chatgpt,gemini --purpose review --prompt-file q.txt`
 
 退出码与 stage 见 `docs/exit-codes.md`（0 正常 / 1 通用失败 / 3 资源缺失 / 4 用户占用 / 5 档位未确认 …）。
 

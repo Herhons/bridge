@@ -23,3 +23,26 @@ progress.json.lock
 runs/
 docs/history/checkpoints/
 @AutomationLog.txt
+
+# === Bridge 终极收口：测试、探针与过程文档仅留本地，不在 GitHub 出现 ===
+_local_archive_before_consolidate/
+bridge_hygiene_refactor.py
+tests/
+tools/
+cards/
+deliverables/
+PLAN.md
+CALIBER.md
+REWORK_STATUS.json
+progress.json
+CHANGES_B*.md
+docs/history/
+docs/iterations/
+docs/workflow/
+docs/REVIEW-*.md
+docs/DEDUP-*.md
+docs/ARCH-STATS.md
+docs/known_gaps.md
+docs/完成矩阵.md
+docs/网页端脚本.md
+docs/deepseek.md

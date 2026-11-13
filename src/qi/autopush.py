@@ -1,6 +1,6 @@
 """自动推：WorkBuddy 停下来时补一句话（PLAN 第 7 项子卡 CARD-07b，CARD-08 第 2 条落地）。
 
-**这是个纯判定 + 记账模块，不发消息。** 真去发在 `src\\scripts\\workbuddy_autopush.py`，
+**这是个纯判定 + 记账模块，不发消息。** 真去发在 `src\\scripts\\bridge.py autopush`（内部走 `workbuddy.py use`），
 这里只回答一个问题：现在该不该推？为什么？
 
 判定（照 PLAN 大纲，一处不加）：
@@ -10,7 +10,7 @@
     且没有「生成中」的标志
     → 推一次
 
-「生成中」的标志只有两种：`workbuddy_use --list` 那边给的（命令行传 `--generating`），
+「生成中」的标志只有两种：`workbuddy.py use --list` 那边给的（命令行传 `--generating`），
 或者 runlog 最后一行的 `stage=generating`。**超时里的 `still_generating` 不算**——
 那是"上一轮等到超时时它还在生成"，不是"现在还在生成"，拿它当挡箭牌会让推永远不发。
 

@@ -1,14 +1,14 @@
 """Bridge v0.0.9 本地后端（CARD-09a）。
 
 只做后端：不开浏览器、不点 UI、不装插件。把「一次会审」拆成可轮询的 job，
-真正执行时复用现成的 `*_choose.py` / `*_use.py`，一个端失败不影响别的端。
+真正执行时复用收口后的 `<ai>.py choose` / `<ai>.py use`，一个端失败不影响别的端。
 
 ## 边界（卡面第 1、2、5 条）
 
 - 只绑 `127.0.0.1`，默认端口 18765（`docs\\bridge_server.json` 可改）。
 - 端口被占 / 已有实例在跑：直接报错退出，不抢占、不换端口。
 - token 首次启动生成，落在 `%LOCALAPPDATA%\\Bridge\\v009\\server.json`（含 port），
-  之后沿用；`bridge_server.py rotate` 换新的。token 不进 URL、不进日志、不回显。
+  之后沿用；`bridge.py rotate` 换新的。token 不进 URL、不进日志、不回显。
 - 除 `GET /health` 外都要 `Authorization: Bearer <token>`；Host 必须是
   `127.0.0.1:<端口>`；Origin 配了 `allowed_extension_id` 时**只认**
   `chrome-extension://<该 ID>`，没配时退回「只认 chrome-extension:// 前缀」；
@@ -20,13 +20,13 @@
 ## 一个端怎么跑（第 5、6 条）
 
     runs\\ui.lock 加锁（覆盖 choose → 读回 → use 全程）
-      → *_choose.py <--model|--effort|--think> <target>
+      → <ai>.py choose <--model|--effort|--think> <target>
       → 读 runs\\tier\\<端>.json：退出码 0 + 回执新鲜 + readback == target 才算确认
-      → *_use.py <prompt> --purpose <purpose> --timeout <n>
+      → <ai>.py use <prompt> --purpose <purpose> --timeout <n>
       → 解析 stdout 最后一行的 JSON
 
 choose 没确认就**不跑 use**，该端记失败；锁拿不到也记失败，不排队硬等。
-服务内只用线程锁是不够的：命令行直接跑 `*_use.py` 是另一个进程，
+服务内只用线程锁是不够的：命令行直接跑 `<ai>.py use` 是另一个进程，
 所以锁落在 `runs\\ui.lock`，见 `qi.uilock`。
 
 ## job（第 7 条）
@@ -116,7 +116,7 @@ DEFAULT_CONFIG = {
     "budget_overrides": {},
     # B15：`busy` 停滞判据（秒）。{} = 关闭；{"codex": 45} = codex 的停止键常驻 45s 不动就按不忙处理。
     "stall_busy_ignore": {},
-    # B15：按端追加给 `<端>_choose.py` 的参数。{"chatgpt": ["--new"]} 表示每次先开新会话
+    # B15：按端追加给 `<端>.py choose` 的参数。{"chatgpt": ["--new"]} 表示每次先开新会话
     # —— chatgpt 的"聊天/工作"开关只有在新聊天页才读得到（真机 2026-11-08）。
     "choose_args": {},
     "output_limit": 65536,
@@ -1253,7 +1253,7 @@ class Engine:
         `gpt61_sol + max`，chat 模式只有 `gpt6 + high`）。拿错表去设，
         闸门会判 `purpose_mismatch`。`--list` 是只读的，只读芯片不点任何东西。
         """
-        script = self.root / "src" / "scripts" / f"{endpoint}_choose.py"
+        script = self.root / "src" / "scripts" / f"{endpoint}.py"
         if not script.exists():
             return None
         remaining = deadline - time.monotonic()
@@ -1270,7 +1270,7 @@ class Engine:
             stall = (self.config.get("stall_busy_ignore") or {}).get(str(endpoint).lower())
             if stall:
                 env["BRIDGE_STALL_BUSY"] = str(float(stall))
-        result = self.runner([self.python, str(script), "--list"],
+        result = self.runner([self.python, str(script), "choose", "--list"],
                              timeout=timeout, cwd=self.root, env=env)
         parsed = parse_last_json(result.get("stdout") or "") or {}
         writer = str(parsed.get("writer") or "").lower()
@@ -1283,7 +1283,7 @@ class Engine:
         为什么不是一个：`tiers.json` 里 chatgpt 声明了
         `required_dimensions: ["model","effort"]` + `require_writer`，
         闸门要求两张维度都在同一张联合回执里（`composite_version=1`）且都读回一致。
-        只设 model 时 `chatgpt_choose.py` 会拿"页面上当时那个 effort"去补，
+        只设 model 时 `chatgpt.py choose` 会拿"页面上当时那个 effort"去补，
         于是能不能过完全取决于页面当时的档 —— 这不是稳定行为（2026-11-08 核实：
         正式目录 `required_dimensions` 是 None，所以那时只设 model 也能过）。
         """
@@ -1342,7 +1342,7 @@ class Engine:
     def _run_choose(self, endpoint: str, dimension: str, target: str,
                     deadline: float, *, targets: list[tuple[str, str]] | None = None,
                     purpose: str = "") -> dict:
-        script = self.root / "src" / "scripts" / f"{endpoint}_choose.py"
+        script = self.root / "src" / "scripts" / f"{endpoint}.py"
         pairs = list(targets or [(dimension, target)])
         out = {"ok": False, "dimension": dimension, "target": target, "readback": None,
                # 联合维度（chatgpt 这种 required_dimensions 有两维的，这里是全部）
@@ -1351,7 +1351,7 @@ class Engine:
                "elapsed": 0.0, "error_code": None, "error_message": None, "stderr": ""}
         if not script.exists():
             out.update(error_code="script_missing",
-                       error_message=f"choose script not found: {script}")
+                       error_message=f"AI script not found: {script}")
             return out
 
         remaining = deadline - time.monotonic()
@@ -1362,9 +1362,9 @@ class Engine:
                                       "choose", float(self.config["choose_timeout"]))
         timeout = min(choose_budget, remaining)
         # 一维端拼一个 flag；`required_dimensions` 有两维的端拼两个
-        # （`chatgpt_choose.py` 支持 `--model X --effort Y` 一次设完，
+        # （`chatgpt.py choose` 支持 `--model X --effort Y` 一次设完，
         #  也只有一次设完才会写 composite 回执 —— 这是闸门放行的前提）。
-        cmd = [self.python, str(script)]
+        cmd = [self.python, str(script), "choose"]
         for dim, value in pairs:
             cmd.extend([DIMENSION_FLAGS[dim], value])
         for extra in (self.config.get("choose_args") or {}).get(str(endpoint).lower(), []):
@@ -1444,13 +1444,13 @@ class Engine:
 
     def _run_use(self, endpoint: str, prompt: str, purpose: str, deadline: float,
                  job_id: str | None = None) -> dict:
-        script = self.root / "src" / "scripts" / f"{endpoint}_use.py"
+        script = self.root / "src" / "scripts" / f"{endpoint}.py"
         out = {"ok": False, "stage": None, "reply": None, "exit_code": None,
                "timeout": False, "elapsed": 0.0, "error_code": None,
                "error_message": None, "stderr": ""}
         if not script.exists():
             out.update(error_code="script_missing",
-                       error_message=f"use script not found: {script}")
+                       error_message=f"AI script not found: {script}")
             return out
 
         remaining = deadline - time.monotonic()
@@ -1465,7 +1465,7 @@ class Engine:
             out.update(error_code="endpoint_timeout", error_message="insufficient outer reply budget")
             return out
         timeout = min(reply_budget + overhead, remaining)
-        cmd = [self.python, str(script), prompt, "--purpose", purpose,
+        cmd = [self.python, str(script), "use", prompt, "--purpose", purpose,
                "--timeout", str(max(1, int(min(reply_budget, timeout))))]
         # T2-1：把 job 身份下发给子进程，子进程据此写 L1 证据（`source="env"`）。
         # child_launch 的 env 是**整份替换**，所以必须带上 os.environ。
@@ -1927,7 +1927,7 @@ def create_server(port: int, engine: Engine) -> BridgeHTTPServer:
 
 
 def serve(port: int | None = None, *, root: str | Path | None = None) -> int:
-    """前台跑服务：给 bridge_server.py start --foreground 和子进程用。"""
+    """前台跑服务：给 bridge.py start --foreground 和子进程用。"""
     config = load_config(root)
     listen = int(port or config["port"])
     state = load_or_create_state(port=listen)
