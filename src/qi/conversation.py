@@ -1635,6 +1635,15 @@ def _ask_impl(conversation, prompt, timeout=180.0, pre_send=None, plain=False,
                 if stamp is not None:
                     verdict = sendgate.page_confirm(conversation.screen, conversation.site, stamp)
                     if not verdict["ok"]:
+                        # CARD-v010-P0P1 G6：门禁（workbuddy 的 pre_send）可能已经替本轮
+                        # 落过账。这里判定"页面被换走"→ 一个键都没点，必须退回可重试态，
+                        # 否则 submitting 会永久挡死同一提问。
+                        if reserved_by_door and conversation.site:
+                            from . import submissions as _sub
+
+                            _sub.release(str(conversation.site), prompt,
+                                         reason="page_changed",
+                                         root=getattr(ledger, "root", None))
                         return {**state, "stage": "tier_unconfirmed",
                                 "reason": "page_changed", "code": tier_guard.TierUnconfirmed.code,
                                 "changed": verdict["changed"], "page": verdict["now"],
@@ -1643,7 +1652,25 @@ def _ask_impl(conversation, prompt, timeout=180.0, pre_send=None, plain=False,
             # T2-1：提交动作**之前**落账。命中旧记录（accepted/submitting/unknown/
             # failed_terminal）就在这里拒发，绝不点击。没给 purpose 时 ledger=None，
             # 这段完全跳过，老调用方行为不变。
+            #
+            # CARD-v010-P1B-P2：在 reserve/adopt **之前**过一遍只读守卫。
+            # 顺序必须是 precheck → reserve，否则"守卫拒绝"会留下一条 submitting，
+            # 下一秒同一提问就被自己的记录挡死（B26 事故的复刻路径）。
             if ledger is not None:
+                from . import precheck as _precheck
+
+                _site = str(getattr(conversation, "site", "") or "")
+                blocked = _precheck.run(
+                    endpoint=_site, site=_site, prompt=prompt,
+                    payload_sha256=_precheck.digest(prompt),
+                    view=written, send_sid=send_sid,
+                    root=getattr(ledger, "root", None),
+                    # 只加 prompt_match：page_stable 刚刚在两行前比过（再比会自造假
+                    # page_changed）；session_anchor 拿 send_sid 自比恒真；journal_free
+                    # 会把 door 刚落的账当成"上次提交"，直接复刻 B26。
+                    require=("prompt_match",))
+                if blocked is not None:
+                    return {**state, **blocked}
                 if reserved_by_door:
                     refused = ledger.adopt(written)
                     if refused is not None:
@@ -1657,6 +1684,15 @@ def _ask_impl(conversation, prompt, timeout=180.0, pre_send=None, plain=False,
             except UserTookOver as exc:
                 return {**state, "submission": "not_sent", "sent": False,
                         "stage": "user_took_over", "hint": str(exc)}
+            if ledger is not None:
+                # 点过之后才记账/核销：从此状态是"可能已发"，票据也不该白烧给一次被抢走的发送
+                ledger.clicked()
+                from . import precheck as _precheck
+
+                _precheck.consume_grant_token(
+                    target=str(getattr(conversation, "site", "") or ""),
+                    payload_sha256=_precheck.digest(prompt),
+                    root=getattr(ledger, "root", None))
 
         try:
             with uilock.section(f"send:{getattr(conversation, 'site', None)}",
@@ -2334,6 +2370,20 @@ class _Ledger:
                     "hint": "无法持久化提交状态，已拒发"}
         self.reserved = True                # B24：落过账，收尾才有资格写这一轮的终态
         return None
+
+    def clicked(self):
+        """点击已经发出：把 `submitting` 标成"真的消耗了一次提交机会"。
+
+        CARD-v010-P1B-P2 之前，五端从来没人调 `mark_clicked`，记录永远停在
+        `attempt_consumed=False` → `delivery_state_of()` 把"可能已发"报成
+        `ATTEMPTING`，取消回执与恢复判据都因此失真。
+        """
+        if not self.reserved:
+            return {"ok": False, "reason": "not_reserved"}
+        try:
+            return self._sub.mark_clicked(self.site, self.prompt, root=self.root)
+        except Exception:                   # noqa: BLE001 - 记账失败不许带崩一次真发送
+            return {"ok": False, "reason": "mark_clicked_failed"}
 
     # ------------------------------------------------------------ 收尾
     def finish(self, result):

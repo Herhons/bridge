@@ -48,13 +48,14 @@ from comtypes import COMError
 import uiautomation as auto
 
 from . import exit_codes as ec
-from . import chip, failure, guard, heartbeat, human, sendgate, textcmp, tier_guard, ui, uilock
+from . import chip, evidence, failure, guard, heartbeat, human, precheck, sendgate, textcmp, tier_guard, ui, uilock
 from . import zoom as zoom_mod
 from .browser import ensure_site
 # 2026-11-12（R3-6）：气泡认领规则与 grok 共用一处实现，见 qi/bubble.py
 from .bubble import (MIN_PREFIX, TAIL_MARKS, already_answered as _already,
                      pick_reply as _pick, prompt_matches)
-from .conversation import SEND, STOP, Conversation, UserTookOver, session_id_of
+from .conversation import (SEND, STOP, Conversation, UserTookOver,
+                           _looks_like_partial_write, path_of, session_id_of)
 from .screen import ForegroundLost, Screen
 
 # 真机类引用（test_cardweb2 会 patch `gemini.Screen` 这个名字，这里不受影响，
@@ -78,6 +79,10 @@ BAR = {"答得好", "答得不好", "重做", "复制", "显示更多选项",
        "Expand", "Edit", "More options"}
 
 PLACEHOLDERS = {"问问 Gemini", "Ask Gemini"}
+
+#: 写入后等编辑器把值刷进 UIA 的时长（秒）。旧版是"写→读→清→再写"，
+#: 现在只读一次，这一拍必须留够；0.35 是 READBACK_SETTLE 实测值的下界。
+WRITE_SETTLE = 0.35
 
 # 「发起新对话」的可见名字。界面语言换过就加一条：找不到名称时才走模板。
 NEWCHAT_NAMES = ("发起新对话", "新对话", "新聊天", "New chat", "New Chat")
@@ -480,34 +485,231 @@ def _submit(screen, site, conv, view) -> None:
     screen.click(match)
 
 
-def write_prompt(screen, conv, view, prompt: str, *, tries: int = 3):
-    """把提问写进输入框，并**核对读回来的值**，不对就清空重来。
+class StagedUnsent(RuntimeError):
+    """写入后读回不一致：**已落证据、按条件清稿，绝不点击发送**。
 
-    2026-11-01 10:22 那轮 grok 报的是 `input_mismatch`：点进输入框/打字偶尔落空
-    （刚切完标签、页面还在重排时 composer 抢焦点慢半拍），旧逻辑判一次就整轮作废，
-    连"再试一次"都没有。这里：
-      · 每次重新读一版树再点（别拿着已经失效的节点去点）；
-      · 写歪了先 Ctrl+A + Delete 清干净，避免把上一次的半截草稿留在框里；
-      · 三次还不对就原样返回，交给调用方报 input_mismatch——绝不盲发。
+    CARD-v010-P0P1 之前这里是"读回不对就在同一个调用里再粘 2 次"，而每次重写前
+    都会 `Ctrl+A` + `Delete`。写完之后页面若被切到别的会话，那两下删掉的是**别人的草稿**。
+    现在把"清稿"从写入循环里彻底拿出来，交给 `clear_if_ours()` 的六条判据。
     """
-    written = None
-    for attempt in range(tries):
-        try:
-            conv.write(view, prompt)
-        except (RuntimeError, COMError):
-            if attempt + 1 >= tries:
-                raise
-            time.sleep(0.4)
-            view = conv.read()
-            continue
-        written = conv.read()
-        if textcmp.equal(prompt, written.value):
-            return written
-        screen.hotkey("ctrl", "a")
-        screen.press("delete")
-        time.sleep(0.3)
-        view = conv.read()
-    return written
+
+    stage = "staged_unsent"
+    delivery_state = "STAGED_UNSENT"
+
+    def __init__(self, reason: str, hint: str = "", *, compare: dict | None = None,
+                 draft_cleaned: bool = False, evidence_path: str | None = None,
+                 checks: list | None = None):
+        self.reason = str(reason or "text_mismatch")
+        self.hint = str(hint or self.reason)
+        self.compare = dict(compare or {})
+        self.draft_cleaned = bool(draft_cleaned)
+        self.evidence_path = evidence_path
+        self.checks = list(checks or [])
+        super().__init__(self.hint)
+
+    def as_result(self) -> dict:
+        out = {
+            "ok": False,
+            "stage": self.stage,
+            "delivery_state": self.delivery_state,
+            "attempt_consumed": False,
+            "sent": False,
+            "submission": "not_sent",
+            "reason": self.reason,
+            "draft_cleaned": self.draft_cleaned,
+            "evidence_path": self.evidence_path,
+            "link_target_unverifiable": bool(
+                self.compare.get("link_target_unverifiable")),
+            "hint": self.hint,
+        }
+        if self.compare:
+            out["compare"] = {"ok": self.compare.get("ok"),
+                              "reason": self.compare.get("reason"),
+                              "stats": self.compare.get("stats")}
+        if self.checks:
+            out["checks"] = self.checks
+        return out
+
+
+def _runtime_id(view) -> list | None:
+    """输入框控件的 RuntimeId。读不到返回 None（不猜）。"""
+    try:
+        rid = view.editor.control.GetRuntimeId()
+        return list(rid) if rid else None
+    except Exception:                        # noqa: BLE001 - 纯诊断，不许带崩主流程
+        return None
+
+
+def _overlap_ratio(a, b) -> float:
+    """两个 box 的交集占较小者面积的比例。读不到 box 就给 0。"""
+    try:
+        ax, ay, aw, ah = a
+        bx, by, bw, bh = b
+    except (TypeError, ValueError):
+        return 0.0
+    left, top = max(ax, bx), max(ay, by)
+    right, bottom = min(ax + aw, bx + bw), min(ay + ah, by + bh)
+    if right <= left or bottom <= top:
+        return 0.0
+    smaller = min(max(aw * ah, 1), max(bw * bh, 1))
+    return ((right - left) * (bottom - top)) / smaller
+
+
+def clear_if_ours(screen, conv, view, *, prompt: str, site: str,
+                  stamp: dict | None = None, mark=None) -> dict:
+    """只在**六条全过**时才按 Ctrl+A/Delete 清掉输入框。
+
+    返回 {"cleared": bool, "reason": str|None, "checks": [{"name","ok","reason"}]}。
+    reason 枚举：readback_failed / page_changed / session_drift /
+    composer_replaced / not_ours / user_active / clear_unverified。
+    """
+    checks: list = []
+
+    def add(name: str, ok: bool, reason: str = "", **detail) -> bool:
+        item = {"name": name, "ok": bool(ok), "reason": reason or None}
+        if detail:
+            item["detail"] = detail
+        checks.append(item)
+        return bool(ok)
+
+    def stop(reason: str) -> dict:
+        return {"cleared": False, "reason": reason, "checks": checks}
+
+    try:
+        fresh = conv.read()
+    except (RuntimeError, COMError) as exc:
+        add("readback", False, "readback_failed", error=str(exc))
+        return stop("readback_failed")
+
+    raw = getattr(fresh, "value", "") or ""
+    value = raw.strip()
+    if not value or value in PLACEHOLDERS:
+        add("draft_present", True, "already_empty")
+        return {"cleared": True, "reason": "already_empty", "checks": checks}
+
+    # 1) 页面还是写入时那一页
+    if stamp is not None and isinstance(screen, _ScreenClass):
+        verdict = sendgate.page_confirm(screen, site, stamp)
+        if not add("page_stable", verdict.get("ok"),
+                   "" if verdict.get("ok") else "page_changed",
+                   changed=verdict.get("changed")):
+            return stop("page_changed")
+    else:
+        add("page_stable", True, "unchecked")
+
+    # 2) 会话锚点没有漂移（都没有 id 时比 path）
+    try:
+        now_sid = session_id_of(getattr(fresh, "url", None))
+        was_sid = session_id_of(getattr(view, "url", None))
+        same = (now_sid == was_sid) if (now_sid or was_sid) else (
+            path_of(getattr(fresh, "url", "")) == path_of(getattr(view, "url", "")))
+    except Exception:                        # noqa: BLE001
+        same = False
+    if not add("session_anchor", same, "" if same else "session_drift",
+               send_sid=locals().get("was_sid"), now_sid=locals().get("now_sid")):
+        return stop("session_drift")
+
+    # 3) 还是同一个输入框（RuntimeId 优先，读不到退化为矩形重合）
+    rid_now, rid_was = _runtime_id(fresh), _runtime_id(view)
+    if rid_now and rid_was:
+        same_editor = rid_now == rid_was
+    else:
+        same_editor = _overlap_ratio(getattr(getattr(fresh, "editor", None), "box", None),
+                                     getattr(getattr(view, "editor", None), "box", None)) >= 0.8
+    if not add("composer_same", same_editor,
+               "" if same_editor else "composer_replaced"):
+        return stop("composer_replaced")
+
+    # 4) 框里那串字是我们的（等于 prompt，或是它的前缀）
+    ours = textcmp.equal(prompt, raw) or _looks_like_partial_write(prompt, raw)
+    if not add("draft_ours", ours, "" if ours else "not_ours",
+               chars=len(raw), prompt_chars=len(str(prompt or ""))):
+        return stop("not_ours")
+
+    # 5) 期间没有真人动键鼠
+    moved = guard.user_moved_since(mark)
+    if not add("user_idle", not moved, "user_active" if moved else ""):
+        return stop("user_active")
+
+    # 6) 清完必须读回为空
+    try:
+        cleared = _clear_draft(conv, fresh)
+    except Exception:                        # noqa: BLE001 - 清不掉只能记 False，不许带崩主流程
+        cleared = False
+    add("clear_verified", cleared, "" if cleared else "clear_unverified")
+    return {"cleared": cleared,
+            "reason": None if cleared else "clear_unverified",
+            "checks": checks}
+
+
+def write_prompt(screen, conv, view, prompt: str, *, tries: int = 1,
+                 stamp: dict | None = None, mark=None, site: str = "gemini",
+                 evidence_root=None):
+    """把提问写进输入框：**单次写入 + 一次延迟重读**，不一致就停手。
+
+    与旧实现的区别（CARD-v010-P0P1 第 4 条）：
+
+      · 旧：读回不一致 → Ctrl+A/Delete → 重写，最多 3 轮。删的时候不校验页面身份。
+      · 新：只写一次；不一致 → 落证据 → `clear_if_ours()` 六条全过才清 →
+            抛 `StagedUnsent`，**绝不点击发送**。
+
+    成功时仍返回读回的 view 对象（`tests/test_cardweb2.py` 与四处 mock 依赖这个契约）。
+    `tries` 仅为向后兼容保留，传入值不再改变行为。
+    """
+    del tries
+    conv.write(view, prompt)
+    time.sleep(WRITE_SETTLE)
+    written = conv.read()
+    verdict = textcmp.compare(prompt, written.value)
+    if verdict["ok"]:
+        return written
+
+    clear = clear_if_ours(screen, conv, written, prompt=prompt, site=site,
+                          stamp=stamp, mark=mark)
+    path = evidence.write_evidence(
+        site or "gemini",
+        {"delivery_state": "STAGED_UNSENT", "attempt_consumed": False,
+         "compare": {"ok": verdict.get("ok"), "reason": verdict.get("reason"),
+                     "stats": verdict.get("stats"), "diff": verdict.get("diff")},
+         "clear": {"cleared": clear.get("cleared"), "reason": clear.get("reason"),
+                   "checks": clear.get("checks")},
+         "session": {"url_before": getattr(view, "url", None),
+                     "url_after": getattr(written, "url", None)}},
+        stage="input_mismatch", prompt=prompt, root=evidence_root,
+    )
+    raise StagedUnsent(verdict.get("reason") or "text_mismatch",
+                       verdict.get("hint") or textcmp.describe(prompt, written.value),
+                       compare=verdict, draft_cleaned=bool(clear.get("cleared")),
+                       evidence_path=path, checks=clear.get("checks"))
+
+
+def accept_evidence(*, send_sid, prompt_found: bool, replies: int, baseline: int,
+                    busy: bool, url, mode: str = "new",
+                    draft_present: bool = False) -> tuple[bool, str | None]:
+    """点过发送之后，这一帧是否构成"端确实收下了"的硬证据。
+
+    CARD-v010-P0P1 第 3 条：旧逻辑是
+        `elif session_id_of(view.url) is not None: accepted = True`
+    —— 只要地址里有会话 id 就当真。`--continue` 时那个 id 是**上一轮**的，
+    于是一个字都没发出去也会被判 accepted 并把账本写成 accepted（永久禁发）。
+
+    现在只认四种证据，会话 id 这条路要求"发车前没有 id、发车后有 id"：
+      · prompt     —— 控件树里出现了本次提问；
+      · new_reply —— 回复条数比发车前多；
+      · busy       —— 页面正在生成；
+      · session    —— 仅 mode=new 且 send_sid is None 且已有 id 且输入框已清空。
+    """
+    if prompt_found:
+        return True, "prompt"
+    if replies > baseline:
+        return True, "new_reply"
+    if busy:
+        return True, "busy"
+    if mode == "new" and send_sid is None and not draft_present:
+        if session_id_of(url) is not None:
+            return True, "session"
+    return False, None
+
 
 
 def _copy_fallback(conv, root, reply: Block) -> str | None:
@@ -688,7 +890,7 @@ def _final_read(conv, prompt: str, baseline: int) -> dict | None:
 
 
 def _send_and_wait(screen, site, prompt: str, timeout: float,
-                   purpose: str | None = None) -> dict:
+                   purpose: str | None = None, mode: str = "new") -> dict:
     from qi import submissions
     state = {"ok": False, "submission": "not_sent", "sent": False}
     conv = Conversation(screen, site.name)
@@ -725,6 +927,17 @@ def _send_and_wait(screen, site, prompt: str, timeout: float,
         return {**state, "stage": "draft_present", "hint": "当前输入框已有草稿"}
     baseline = len(scan(before.root).replies())
 
+    # CARD-v010-P1B-P2：守卫必须在**写稿之前**。
+    # P0P1 把它放在 `write_prompt` 之后，一旦拒绝，输入框里已经留着我们的正文却直接
+    # return —— 既没清稿也没落账，用户看到的是"没发但框里有字"。
+    # 放在 uilock.section 之外：它只读，不需要持桌面锁。
+    # `require=()` 是有意的：写前没有读回，`prompt_match` 无意义；`journal_free` 会与
+    # 上面 `submissions.pending` 重复、并且改变 purpose=None 的既有行为。
+    blocked = precheck.run(endpoint="gemini", site=site.name, prompt=prompt,
+                           payload_sha256=precheck.digest(prompt))
+    if blocked is not None:
+        return {**state, **blocked}
+
     # 第 3 条：写入之前记页面指纹，写入之后、发送之前再比一次。
     # 只在真机（screen 是真 Screen 实例）时做——离线假件的 screen 是 StubScreen，跳过。
     # B13b：写入 → 读回 → 指纹 → 门禁 → 落账 → 发送，**一整段**（中途放锁必被抢前台）
@@ -732,11 +945,15 @@ def _send_and_wait(screen, site, prompt: str, timeout: float,
         stamp_before_write = (sendgate.page_stamp(screen, site.name)
                               if isinstance(screen, _ScreenClass) else None)
 
-        written = write_prompt(screen, conv, before, prompt)
-        if not textcmp.equal(prompt, written.value):
-            return {**state, "stage": "input_mismatch",
-                    "hint": textcmp.describe(prompt, written.value) or
-                            f"写进去的文本和提问对不上（{textcmp.lengths(prompt, written.value)}）"}
+        send_sid = session_id_of(getattr(before, "url", None))
+        try:
+            written = write_prompt(screen, conv, before, prompt,
+                                   stamp=stamp_before_write,
+                                   mark=getattr(conv, "_input_mark", None),
+                                   site=site.name)
+        except StagedUnsent as exc:
+            # 读回不一致：已按条件清稿并落证据，**绝不点击**（CARD-v010-P0P1 第 4 条）
+            return {**state, **exc.as_result()}
         state.update(submission="unknown", sent=None)
         # 第 3 条：发送阶段复核页面指纹，被换走 → 清掉半截文本 + concurrent_ui
         if stamp_before_write is not None:
@@ -761,18 +978,47 @@ def _send_and_wait(screen, site, prompt: str, timeout: float,
                             "code": tier_guard.TierUnconfirmed.code,
                             "changed": verdict["changed"], "page": verdict["now"],
                             "hint": "档位复核之后页面发生了导航/新对话/窗口切换，按卡面拒发"}
+        # CARD-v010-P1B-P2：守卫已前移到写稿之前（见 baseline 那一行下方）。
         try:
             if purpose is not None:
                 from qi import submissions
 
-                submissions.reserve("gemini", prompt,
-                                    scope=submissions.scope_from_view(
-                                        written, site=site.name,
-                                        hwnd=getattr(screen, "target_hwnd", None)))
-            _submit(screen, site, conv, written)
-        except UserTookOver as exc:
-            return {**state, "submission": "not_sent", "sent": False,
-                    "stage": "user_took_over", "hint": str(exc)}
+                try:
+                    submissions.reserve("gemini", prompt,
+                                        scope=submissions.scope_from_view(
+                                            written, site=site.name,
+                                            hwnd=getattr(screen, "target_hwnd", None)))
+                except submissions.TierUnconfirmed as exc:
+                    return {**exc.as_result(), "submission": "not_sent", "sent": False}
+                except OSError:
+                    return {**state, "stage": "interrupted", "sent": None,
+                            "submission": "unknown",
+                            "reason": "submission_state_unwritable",
+                            "hint": "无法持久化提交状态，已拒发"}
+            try:
+                _submit(screen, site, conv, written)
+            except UserTookOver as exc:
+                # `_submit` 明写"未点发送"：这一次**不算消耗**，退回可重试态。
+                # 旧代码直接 return，submitting 永久留在盘上，同一提问再也发不出去。
+                if purpose is not None:
+                    submissions.release("gemini", prompt, reason="user_took_over")
+                return {**state, "submission": "not_sent", "sent": False,
+                        "stage": "user_took_over", "hint": str(exc)}
+            except (RuntimeError, COMError):
+                # 发送键一个都不可用 / 找到多个按钮：一个键都没点，同样是"没发出"
+                if purpose is not None:
+                    submissions.release("gemini", prompt,
+                                        reason="send_button_unavailable")
+                raise
+            if purpose is not None:
+                # 从这里开始状态是"可能已发"，只允许进 unknown/accepted，不许再 release
+                submissions.mark_clicked("gemini", prompt)
+            # 点过之后才核销票据：校验通过但被抢走的那一次不该烧掉用户的授权。
+            # 必须带正文哈希——绑定了 payload_sha256 的票据，不传就永远核销失败。
+            precheck.consume_grant_token(target="gemini",
+                                         payload_sha256=precheck.digest(prompt))
+        except (RuntimeError, COMError):
+            raise
 
     deadline = time.monotonic() + timeout
     accepted = False
@@ -795,6 +1041,13 @@ def _send_and_wait(screen, site, prompt: str, timeout: float,
             # 已经发出去了，读不到只说明页面在重排/换路由（Gemini 答完才写会话 id）
             read_failures += 1
             if read_failures >= 12:
+                if purpose is not None:
+                    from qi import submissions
+
+                    # 已经点过发送又连续读不到页面：状态不明，落 unknown（不重发）
+                    submissions.finish("gemini", prompt,
+                                       {**state, "stage": "interrupted",
+                                        "submission": "unknown", "sent": None})
                 return {**state, "stage": "interrupted", "hint": str(exc)}
             time.sleep(1.0)
             continue
@@ -806,22 +1059,16 @@ def _send_and_wait(screen, site, prompt: str, timeout: float,
         if found is not None:
             at = found
         if not accepted:
-            if at is not None:
-                # 第 2 项：控件树里出现了这次发出的提问文本，就算 accepted
-                accepted, attribution = True, "prompt"
-                state.update(submission="accepted", sent=True)
-            elif len(page.replies()) > baseline:
-                # 认领不到提问（折叠/换布局）：页面确实多了一条回复，同样是"发出去了"的硬证据
-                accepted, attribution = True, "new_reply"
-                state.update(submission="accepted", sent=True)
-            elif view.busy:
-                # B19：页面已在生成（停止键在）＝ 确实收下了，只是提问块还没渲染出来
-                accepted, attribution = True, "busy"
-                state.update(submission="accepted", sent=True)
-            elif session_id_of(view.url) is not None:
-                # B19：地址里已经有会话 id（Gemini 是答完才写 id，但有些版本发送即写），
-                # 说明这一下确实进了某个会话
-                accepted, attribution = True, "session"
+            # CARD-v010-P0P1 第 3 条：旧逻辑"地址里有会话 id 就算发成功"在
+            # `--continue` 下会把上一轮的 id 当成本轮证据。判定收进纯函数，
+            # 会话 id 只在"发车前没有、发车后有、且输入框已清空"时才算。
+            accepted, attribution = accept_evidence(
+                send_sid=send_sid, prompt_found=(at is not None),
+                replies=len(page.replies()), baseline=baseline,
+                busy=bool(getattr(view, "busy", False)), url=getattr(view, "url", None),
+                mode=mode,
+                draft_present=draft_present(view.root))
+            if accepted:
                 state.update(submission="accepted", sent=True)
             else:
                 # B21：没有落点证据 → 先判"框里还有没有我们这段字"，再决定等还是重点。
@@ -835,18 +1082,19 @@ def _send_and_wait(screen, site, prompt: str, timeout: float,
                     cleared = _clear_draft(conv, view)
                     state["cleared_draft"] = cleared
                     try:
-                        again = write_prompt(screen, conv, conv.read(), prompt)
+                        again = write_prompt(screen, conv, conv.read(), prompt,
+                                             mark=getattr(conv, "_input_mark", None),
+                                             site=site.name)
+                    except StagedUnsent as exc:
+                        # 先接住它：StagedUnsent 是 RuntimeError 子类，
+                        # 放在下面的 except 里会被当成"重写失败"吞掉。
+                        return {**state, **exc.as_result(),
+                                "reason": f"retry_{exc.reason}"}
                     except (RuntimeError, COMError, UserTookOver) as exc:
                         return {**state, "stage": "submit_not_landed",
                                 "reason": "retry_failed", "detail": str(exc),
                                 "submission": "unknown", "sent": None,
                                 "hint": "首轮无落点，重写阶段失败（未再点击）"}
-                    if not textcmp.equal(prompt, again.value):
-                        # 读回对不上就不点：宁可报错，也不能拿着可疑的框去再发一次
-                        return {**state, "stage": "submit_not_landed",
-                                "reason": "retry_readback_mismatch",
-                                "submission": "not_sent", "sent": False,
-                                "hint": "重写后读回与提问不一致，未再点击"}
                     _submit(screen, site, conv, again)
                     landing_deadline = time.monotonic() + SUBMIT_LANDING_WAIT
                     time.sleep(0.4)
@@ -858,6 +1106,19 @@ def _send_and_wait(screen, site, prompt: str, timeout: float,
                     continue
                 if action == "fail":
                     stuck = draft_present(view.root)
+                    if purpose is not None:
+                        from qi import submissions
+
+                        if stuck:
+                            # 文字仍完整堵在输入框里 = 端根本没接受这次提交。
+                            # force 是"点了但确定没发出去"的正证据专用开关。
+                            submissions.release("gemini", prompt,
+                                                reason="draft_stuck", force=True)
+                        else:
+                            # 框已空却没有落点证据：状态不明，落账 unknown（禁止自动重发）
+                            submissions.finish("gemini", prompt,
+                                               {**state, "stage": "submit_not_landed",
+                                                "submission": "unknown", "sent": None})
                     return {**state, "stage": "submit_not_landed",
                             "reason": "draft_stuck" if stuck else "composer_empty",
                             "cleared_draft": state.get("cleared_draft"),
@@ -973,6 +1234,15 @@ def _send_and_wait(screen, site, prompt: str, timeout: float,
     if final is not None:
         return final
     kind = "still_generating" if state["sent"] and (last_busy or stable_text) else "no_reply"
+    if purpose is not None:
+        from qi import submissions
+
+        # 超时：点过发送、但没有落点证据 → 账本必须落 unknown（阻断自动重发）。
+        # 旧代码只 return，记录停在 submitting，没有 subtype，审计看不出"超时"。
+        if state.get("submission") == "unknown" or state.get("sent") is None:
+            submissions.finish("gemini", prompt,
+                               {**state, "stage": "timeout", "submission": "unknown",
+                                "sent": None})
     return {**state, "stage": "timeout", "timeout_kind": kind}
 
 
@@ -1109,7 +1379,8 @@ def ask(site, prompt: str, *, mode: str = "new", timeout: float = 180.0,
                     result = {"ok": False, "stage": "prepare_failed", "prepare": prepared,
                               "submission": "not_sent", "sent": False}
                 else:
-                    result = _send_and_wait(screen, site, prompt, timeout, purpose=purpose)
+                    result = _send_and_wait(screen, site, prompt, timeout,
+                                            purpose=purpose, mode=mode)
             except zoom_mod.ZoomNot100 as exc:
                 result = {**exc.as_result(), "submission": "not_sent", "sent": False}
             except ForegroundLost as exc:

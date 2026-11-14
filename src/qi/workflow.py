@@ -30,6 +30,7 @@ os.replace」原子替换；UTF-8 无 BOM 写出，读入兼容 BOM。同一秒�
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -50,6 +51,31 @@ FAILED, STUCK, VERIFYING = "failed", "stuck", "verifying"
 PASS, BLOCK, HOLD = "pass", "block", "hold"
 
 SUFFIX_LETTERS = "abcdefghijklmnopqrstuvwxyz"      # 修复卡后缀：b、c、d……（跳过 a）
+
+#: CARD-v010-P0P1：`docs/workflow/` 在 `.gitignore` 里，干净检出必然没有
+#: workflow.json。以前这里直接抛 DefinitionError，`server._transitions` 再包成
+#: 500 —— 于是"新克隆一份就跑不起来"。内置一份与仓库现行定义等价的默认表，
+#: **只在文件不存在时**兜底；文件存在但坏掉仍然显式报错（不掩盖真实损坏）。
+DEFAULT_DEFINITION: dict = {
+    "version": 1,
+    "states": ["draft", "sent", "running", "done", "failed",
+               "stuck", "verifying", "pass", "block", "hold"],
+    "terminal": ["pass"],
+    "transitions": {
+        "draft": ["sent"],
+        "sent": ["running", "stuck"],
+        "running": ["done", "failed", "stuck"],
+        "done": ["verifying"],
+        "failed": ["sent", "draft"],
+        "stuck": ["sent", "draft"],
+        "verifying": ["pass", "block", "hold"],
+        "block": [],
+        "hold": ["verifying"],
+        "pass": [],
+    },
+    "max_no_progress": 3,
+    "seats": {"plan": "红莉栖", "build": "workbuddy", "verify": "codex"},
+}
 
 
 class WorkflowError(Exception):
@@ -96,12 +122,18 @@ def definition_path(path: str | Path | None = None) -> Path:
     return Path(path) if path is not None else ROOT / DEFINITION_PATH
 
 
-def load_definition(path: str | Path | None = None) -> dict:
-    """读并校验工作流定义；格式不对就抛 DefinitionError。"""
+def load_definition(path: str | Path | None = None, *, fallback: bool = True) -> dict:
+    """读并校验工作流定义；格式不对就抛 DefinitionError。
+
+    `fallback=True`（默认）时，**只有文件不存在**才回退到 `DEFAULT_DEFINITION`；
+    读不了、不是 JSON、结构不对仍然抛错 —— 兜底不能变成"把损坏当默认"。
+    """
     target = definition_path(path)
     try:
         raw = target.read_bytes()
     except FileNotFoundError as exc:
+        if fallback:
+            return json.loads(json.dumps(DEFAULT_DEFINITION))   # 深拷贝，防调用方改坏常量
         raise DefinitionError(f"找不到工作流定义: {target}") from exc
     except OSError as exc:
         raise DefinitionError(f"读不了工作流定义: {target} ({exc})") from exc
@@ -188,6 +220,49 @@ def backup(target: Path, when: datetime | None = None) -> Path:
     return dest
 
 
+# ---------------------------------------------------------------- 状态版本（CARD-v010-P3）
+#
+# `revision` 是**写次数**（单调 +1），`state_sha256` 是**状态指纹**（同内容恒定）。
+# 两者都只放在 `data["workflow"]` 里：`progress.json` 的顶层键集合被
+# `tests/test_card05.py:308` 逐字钉死，顶层多一个键就红。
+
+REVISION_KEY = "revision"
+DIGEST_KEY = "state_sha256"
+
+
+def workflow_digest(node: dict) -> str:
+    """`data["workflow"]` 节点的指纹；**排除 revision/state_sha256 自身**。
+
+    这样"同一份状态"在不同 revision 上得到同一个 digest —— 指纹回答"内容变了没"，
+    revision 回答"写过几次"，两个语义不混。
+    """
+    body = {k: v for k, v in dict(node or {}).items()
+            if k not in (REVISION_KEY, DIGEST_KEY)}
+    blob = json.dumps(body, ensure_ascii=False, sort_keys=True,
+                      separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(blob).hexdigest()
+
+
+def stamp_workflow(data: dict, *, bump: bool = True) -> dict:
+    """唯一 bump 点：写盘前给 `data["workflow"]` 盖版本。**不碰顶层任何键**。"""
+    if not isinstance(data, dict):
+        raise ProgressError("要盖版本的内容不是对象")
+    node = data.get("workflow")
+    if not isinstance(node, dict):
+        node = {}
+        data["workflow"] = node
+    current = node.get(REVISION_KEY)
+    try:
+        revision = int(current) if current is not None else 0
+    except (TypeError, ValueError):
+        revision = 0
+    if bump:
+        revision += 1
+    node[REVISION_KEY] = revision
+    node[DIGEST_KEY] = workflow_digest(node)
+    return {REVISION_KEY: revision, DIGEST_KEY: node[DIGEST_KEY]}
+
+
 def save_progress(data: dict, path: str | Path | None = None,
                   when: datetime | None = None) -> Path:
     """先备份原文件，再临时文件 + os.replace 原子替换；UTF-8 无 BOM 写出。"""
@@ -195,6 +270,7 @@ def save_progress(data: dict, path: str | Path | None = None,
         raise ProgressError("要写的内容不是对象")
     target = progress_path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
+    stamp_workflow(data)          # CLI 写路径：revision 在这里 +1
     if target.exists():
         backup(target, when)
     tmp = target.with_name(target.name + ".tmp")
@@ -436,3 +512,233 @@ def summary(progress_path: str | Path | None = None) -> list[dict]:
         rows.append({"card": top, "state": status, "parent": None, "missing": [],
                      "no_progress": None, "source": "status"})
     return rows
+
+
+# ---------------------------------------------------------------- 持久协作契约（CARD-v010-P1B-P2）
+#
+# 会审要求：任何等待状态都必须能回答四个问题——等谁、等到什么时候、什么条件唤醒、
+# 超时去哪儿。没有这四样，协调进程一退出，"在等"就变成了"没发生"。
+#
+# 不新增状态：`on_timeout` 映射到既有状态（blocked→block、needs_human→hold、
+# waiting_retry→stuck）。理由是 `states` 列表被 `tests/test_card05.py` 逐字钉死，
+# 加状态等于改既有契约。
+
+ON_TIMEOUT = {"blocked": BLOCK, "needs_human": HOLD, "waiting_retry": STUCK}
+
+#: 等待四要素的字段名（顺序即落盘顺序，便于人读）。
+WAIT_FIELDS = ("waiting_on", "deadline_at", "wake_condition", "on_timeout")
+
+#: 算"真正的业务推进"的状态。`draft` 不算、`block/hold` 算显式停车。
+ADVANCED_STATES = (SENT, RUNNING, DONE, VERIFYING, PASS)
+PARKED_STATES = (HOLD, BLOCK)
+
+
+def _parse_iso(value) -> datetime | None:
+    try:
+        stamp = datetime.fromisoformat(str(value))
+    except (TypeError, ValueError):
+        return None
+    if stamp.tzinfo is None:
+        stamp = stamp.replace(tzinfo=BEIJING)
+    return stamp
+
+
+def waiting_of(record: dict) -> dict | None:
+    """读出一张卡的等待四要素；缺任何一项都不算"有效等待"。"""
+    raw = (record or {}).get("waiting")
+    if not isinstance(raw, dict):
+        return None
+    values = {key: raw.get(key) for key in WAIT_FIELDS}
+    if not values["waiting_on"] or not values["wake_condition"]:
+        return None
+    if values["on_timeout"] not in ON_TIMEOUT:
+        return None
+    if _parse_iso(values["deadline_at"]) is None:
+        return None
+    return values
+
+
+@_transaction
+def set_waiting(card, *, waiting_on: str, deadline_at: str, wake_condition: str,
+                on_timeout: str, progress_path=None, workflow_path=None) -> dict:
+    """把一张卡挂到等待态，并**强制**写全四要素。
+
+    缺任何一项直接 `MoveRejected` —— 半个等待比没有等待更危险：协调进程退出后
+    没人知道该等谁、等到几点。
+    """
+    for name, value in (("waiting_on", waiting_on), ("deadline_at", deadline_at),
+                        ("wake_condition", wake_condition), ("on_timeout", on_timeout)):
+        if not str(value or "").strip():
+            raise MoveRejected(f"等待契约缺字段: {name}")
+    if str(on_timeout) not in ON_TIMEOUT:
+        raise MoveRejected(f"on_timeout 只能是 {'/'.join(ON_TIMEOUT)}")
+    when = _parse_iso(deadline_at)
+    if when is None:
+        raise MoveRejected(f"deadline_at 不是合法时间: {deadline_at!r}")
+
+    data = load_progress(progress_path)
+    _ensure_card(data, card)
+    cards = _cards(data, create=True)
+    record = _record(cards[card])
+    record["waiting"] = {"waiting_on": str(waiting_on), "deadline_at": when.isoformat(),
+                         "wake_condition": str(wake_condition),
+                         "on_timeout": str(on_timeout)}
+    record["waiting"]["since"] = beijing_now()
+    cards[card] = record
+    save_progress(data, progress_path)
+    return {"card": card, "state": record["state"], "waiting": record["waiting"]}
+
+
+def check_timers_locked(data: dict, *, table: dict, now=None) -> dict:
+    """无锁内核：**调用方必须已经持有 progress 锁**。
+
+    原地改 `data`，**不写盘**（写盘与盖版本由调用方负责）。`/workflow/tick` 需要
+    "读 → 计时器 → guard → 一次写"在同一把锁里完成，而 `progress.locked` 在
+    Windows 上不可重入（msvcrt 同字节区间二次加锁会 5s 超时），所以必须把循环体
+    从带锁的 `check_timers` 里拆出来。
+    """
+    stamp_now = _parse_iso(now) if now else datetime.now(BEIJING)
+    if stamp_now is None:
+        stamp_now = datetime.now(BEIJING)
+    cards = _cards(data, create=False)
+    moved, skipped = [], []
+    for card, raw in list(cards.items()):
+        record = _record(raw)
+        waiting = waiting_of(record)
+        if waiting is None:
+            continue
+        deadline = _parse_iso(waiting["deadline_at"])
+        if deadline is None or deadline > stamp_now:
+            continue
+        target = ON_TIMEOUT[waiting["on_timeout"]]
+        current = record["state"]
+        fallback = None
+        if target not in table.get(current, []):
+            # 跳转表是既有契约（`running` 只有 done/failed/stuck 三条出边），
+            # 硬迁会破表。退一步落到 `stuck`（它本来就是"需要监工"的既有状态），
+            # 并把原定目标写进卡片，交给人决定下一步。
+            if STUCK in table.get(current, []):
+                fallback, target = target, STUCK
+            else:
+                skipped.append({"card": card, "from": current, "to": target,
+                                "reason": f"not_allowed:{current}->{target}"})
+                continue
+        missing = list(record.get("missing") or [])
+        if target == HOLD and not missing:
+            missing = [f"timeout:{waiting['on_timeout']}"]
+        _transition(data, cards, card, target, now=beijing_now(), missing=missing)
+        cards[card]["waiting"] = None
+        if fallback:
+            cards[card]["timeout_target"] = fallback
+        moved.append({"card": card, "from": current, "to": target,
+                      "reason": (f"fallback_stuck:{fallback}" if fallback
+                                 else f"timeout:{waiting['on_timeout']}")})
+    return {"now": stamp_now.isoformat(), "checked": len(cards),
+            "moved": moved, "skipped": skipped}
+
+
+@_transaction
+def check_timers(now=None, *, progress_path=None, workflow_path=None,
+                 transitions: dict | None = None) -> dict:
+    """把所有已过期的等待迁移到 `on_timeout` 指定的状态。
+
+    一次只推进一次（不级联），写盘一次。目标边不存在时**不硬迁**，记 `skipped`：
+    例如 `failed` 没有 `hold` 边，硬迁会让状态机自己破自己的表。
+    """
+    definition = ({"transitions": transitions}
+                  if transitions is not None else load_definition(workflow_path))
+    data = load_progress(progress_path)
+    out = check_timers_locked(data, table=definition["transitions"], now=now)
+    if out["moved"]:
+        save_progress(data, progress_path)
+    return {"ok": True, **out}
+
+
+def _card_of(data: dict, card: str | None) -> tuple[str | None, dict | None]:
+    cards = _cards(data, create=False)
+    if card is not None:
+        raw = cards.get(str(card))
+        return str(card), (_record(raw) if isinstance(raw, dict) else None)
+    if len(cards) == 1:
+        name = next(iter(cards))
+        return name, _record(cards[name])
+    return None, None
+
+
+def guard_coordinator_exit(before: dict, after: dict, *, card: str | None = None,
+                           now=None) -> dict:
+    """协调者退出前的守门：非终态不许"什么也没发生"就结束回合。
+
+    三种情形算正常退出：
+      · advanced —— 推进到了新的业务阶段；
+      · waiting  —— 挂了一个**未过期**的有效等待对象；
+      · parked   —— 显式停在 hold/block（交给人的状态）。
+    否则返回 ok=False，调用方应把该卡迁到 `block` 并写 `blocker_reason`。
+    """
+    name, was = _card_of(before or {}, card)
+    _, now_card = _card_of(after or {}, card)
+    if now_card is None:
+        return {"ok": False, "reason": "coordinator_exited_without_dispatch_or_wait",
+                "detail": "card_missing", "card": name, "to": BLOCK}
+    old_state = str((was or {}).get("state") or "")
+    new_state = str(now_card.get("state") or "")
+    advanced = new_state != old_state and new_state in ADVANCED_STATES
+    if new_state == PASS:
+        return {"ok": True, "reason": "terminal_pass", "card": name,
+                "advanced": True, "waiting": None, "parked": False}
+    waiting = waiting_of(now_card)
+    if waiting is not None:
+        deadline = _parse_iso(waiting["deadline_at"])
+        stamp_now = _parse_iso(now) if now else datetime.now(BEIJING)
+        alive = deadline is not None and deadline > (stamp_now or datetime.now(BEIJING))
+    else:
+        alive = False
+    parked = new_state in PARKED_STATES
+    ok = bool(advanced or alive or parked)
+    reason = ("advanced" if advanced else
+              "waiting" if alive else
+              "parked" if parked else
+              "coordinator_exited_without_dispatch_or_wait")
+    return {"ok": ok, "reason": reason, "card": name, "from": old_state,
+            "to": new_state, "advanced": advanced,
+            "waiting": waiting if alive else None, "parked": parked,
+            **({} if ok else {"blocker_reason": reason, "suggest": BLOCK})}
+
+
+def require_verified(record: dict, *, level: str | None = None) -> None:
+    """进 `verifying` 前必须有 L3。
+
+    **默认不启用**：`require_verified` 只在调用方显式打开时生效（`verify_gate`）。
+    一开就会让 `tests/test_card05.py` 的 11 条合法边用例全红——它们的历史卡片里
+    没有任何证据字段，这是"判据齐备但默认关"的已知取舍。
+    """
+    value = level if level is not None else ((record or {}).get("evidence") or {}).get("level")
+    if str(value or "") != "L3":
+        raise MoveRejected(f"l3_required: 进 verifying 必须有 L3 证据（当前 {value!r}）")
+
+
+def apply_guard_locked(data: dict, card: str, *, reason: str, table: dict,
+                       now=None) -> dict:
+    """把 guard 的建议落到一张卡上：**能迁才迁**到 `block`。
+
+    调用方必须已持 progress 锁（与 `check_timers_locked` 同一约束）。
+    跳转表里 `block` 只有 `verifying` 一条入边，所以 `sent/running/stuck/draft`
+    上必然 `applied=False` + `not_allowed:<from>->block` —— 这不是保守，是唯一与
+    现实一致的答案；`apply_guard=true` 只在 `verifying` 卡上真的有效。
+    """
+    cards = _cards(data, create=False)
+    raw = cards.get(card)
+    if not isinstance(raw, dict):
+        return {"applied": False, "from": None, "to": None, "detail": "card_missing"}
+    record = _record(raw)
+    current = record["state"]
+    if current == BLOCK:
+        return {"applied": False, "from": current, "to": current,
+                "detail": "already_blocked"}
+    if BLOCK not in table.get(current, []):
+        return {"applied": False, "from": current, "to": current,
+                "detail": f"not_allowed:{current}->{BLOCK}"}
+    stamp = now or beijing_now()
+    _transition(data, cards, card, BLOCK, now=stamp, missing=[])
+    cards[card]["blocker_reason"] = str(reason or "")
+    return {"applied": True, "from": current, "to": BLOCK, "detail": None}

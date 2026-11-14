@@ -15,6 +15,11 @@ Chrome 是 125%；2026-11-02 CARD-06b 开工时实测同一窗口又是 **125%**
    （stage=zoom_not_100），退出并留证，不硬着头皮找图。
 3. **多尺度只是兜底**：限定 0.8–1.25，且不能替代唯一性校验
    （同一模板多处命中仍算失败，见 `qi/screen.py::find_unique`）。
+4. **发键前必须自己核对前台**（CARD-v010-FINAL-POLISH）。键盘输入是发给
+   **前台窗口**的：目标不在前台时按 Ctrl+0，等于往用户正在用的窗口里打字符。
+   `screen.hotkey` 内部虽也断言，但那是可被 `require_foreground` 关掉的开关，
+   而且它抛的 `ForegroundLost` 会被本模块吞成"Ctrl+0 发不出去"，留证里看不出
+   "其实一次都没敢发"。所以这里要有自己的、写进 facts 的前台事实。
 """
 
 from __future__ import annotations
@@ -48,7 +53,9 @@ class ZoomNot100(RuntimeError):
 
     def as_result(self) -> dict:
         return {"ok": False, "stage": self.stage, "code": self.code,
-                "hint": str(self), "zoom": self.facts}
+                "hint": str(self), "zoom": self.facts,
+                # 缩放预检发生在任何 UI 动作之前：从来没有占用过提交配额。
+                "attempt_consumed": False}
 
 
 def clamp_scales(scales=None) -> tuple[float, ...]:
@@ -107,6 +114,42 @@ def is_browser(hwnd) -> bool | None:
     return name in BROWSER_PROCS
 
 
+class _Win32:
+    """只用到一个 Win32 调用的最小注入点。
+
+    不直接 patch `ctypes.windll`：`qi/window.py` 的 `_API` 范式更稳——测试换一个
+    对象即可，不必碰全局 ctypes，也不会和其他用例互相干扰。
+    """
+
+    def foreground(self) -> int:
+        from ctypes import wintypes
+
+        user32 = ctypes.windll.user32
+        # 不设 restype 时 ctypes 按 c_int 解释，HWND 超过 2^31 会被截断成负数。
+        user32.GetForegroundWindow.restype = wintypes.HWND
+        return int(user32.GetForegroundWindow() or 0)
+
+
+_API = _Win32()
+
+
+def is_foreground(hwnd, *, api=None) -> bool | None:
+    """目标窗口现在是不是前台。读不到返回 None（不猜）。
+
+    `None` 与 `False` 必须分开：前者是"不知道"，后者是"确定不是"。
+    `ensure()` 对两者都不发键（发键前不能"不知道"），但留证要能区分。
+    """
+    if not hwnd:
+        return None
+    try:
+        fg = int((api or _API).foreground())
+    except Exception:                       # noqa: BLE001 - 诊断信息不许带崩主流程
+        return None
+    if not fg:
+        return None                         # 0 = 桌面 / 锁屏，等同于读不到
+    return fg == int(hwnd)
+
+
 def percent(hwnd) -> int | None:
     """读页面缩放（百分数）。读不到返回 None。
 
@@ -134,14 +177,19 @@ def ensure(screen, *, verbose: bool = False, settle: float = 0.8,
            attempts: int = 2) -> dict:
     """确保页面缩放是 100%。返回 facts；不满足时抛 `ZoomNot100`。
 
-    facts: {"ok", "before", "after", "pressed", "browser", "skipped"}
+    facts: {"ok", "before", "after", "pressed", "browser", "skipped",
+            "foreground", "focus_attempted", "foreground_blocked"}
     · 非浏览器/读不到窗口 → skipped（桌面端不该被这一条拦住）；
     · 浏览器但读不到缩放 → 拒（fail-closed，不假装 100%）；
-    · 不是 100% → 只对浏览器窗口发 Ctrl+0 → 重新读 → 仍不是 100% → 抛。
+    · 不是 100% → 核对目标在前台 → 只对浏览器窗口发 Ctrl+0 → 重新读 → 仍不是 → 抛。
+    · 不在前台 → **一次键都不发**：先按 `require_foreground` 的约定尝试一次
+      `screen.focus()`，recheck 仍不在前台就抛（facts.foreground_blocked=True）。
     """
     hwnd = getattr(screen, "target_hwnd", None)
     facts = {"ok": True, "before": None, "after": None, "pressed": False,
-             "browser": None, "skipped": ""}
+             "browser": None, "skipped": "",
+             "foreground": None, "focus_attempted": False,
+             "foreground_blocked": False}
     if not hwnd:
         facts["skipped"] = "no_window"
         return facts
@@ -164,6 +212,27 @@ def ensure(screen, *, verbose: bool = False, settle: float = 0.8,
                          facts)
     after = before
     for attempt in range(max(1, int(attempts))):
+        # 每一轮都查：第一次发键前要查，第二次发键前也要（中间可能被用户抢走）。
+        # 开关与 `Screen._assert_foreground` 同口径——调用方显式写了
+        # `require_foreground = False` 的场景（离线替身）不该被这一条拦住。
+        if getattr(screen, "require_foreground", True):
+            fg = is_foreground(hwnd)
+            if fg is not True and attempt == 0:
+                focus = getattr(screen, "focus", None)
+                if callable(focus):
+                    facts["focus_attempted"] = True
+                    try:
+                        focus()               # 调用方刚也做过；这里只补一次同样的尝试
+                    except Exception:         # noqa: BLE001 - 抢不到就按"没前台"处理
+                        pass
+                    fg = is_foreground(hwnd)
+            facts["foreground"] = fg
+            if fg is not True:
+                facts["foreground_blocked"] = True
+                raise ZoomNot100(
+                    f"页面缩放 {before}%，但目标窗口不在前台"
+                    f"（hwnd={hwnd}，前台判定={fg}）；不发 Ctrl+0（会打进别的窗口）",
+                    facts)
         try:
             screen.hotkey("ctrl", "0")       # 只对已绑定的浏览器窗口，只发这一种
         except Exception as exc:              # noqa: BLE001 - 发不出去就是没修好

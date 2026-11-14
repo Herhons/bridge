@@ -11,7 +11,7 @@
  * - job_id 存 storage.local（带创建时间，24h 清理）；重开面板先跑一轮 /jobs/<id>。
  * - 轮询用 PollScheduler：单例定时器，连点/重开都不叠加。
  */
-import { BridgeError, JOB_TTL_MS, ask, endpoints as fetchEndpoints, health, job as fetchJob, moveCard, workflow as fetchWorkflow } from "./bridge-api.js";
+import { BridgeError, JOB_TTL_MS, ask, cancelJob, endpoints as fetchEndpoints, health, job as fetchJob, moveCard, resolveSubmission, workflow as fetchWorkflow } from "./bridge-api.js";
 import { PollScheduler } from "./poll-scheduler.js";
 
 const DRAFT_KEY = "bridge.v009.interfaceDraft";
@@ -21,6 +21,7 @@ const JOBS_KEY = "bridge.v009.jobs";
    也只会动 progress-test.json，碰不到正式 progress.json。 */
 const TEST_KEY = "bridge.v009.testMode";
 const WORKFLOW_KEY = "bridge.v009.workflow";
+const PENDING_KEY = "bridge.v009.pendingAsk";
 const ERRORS_KEY = "bridge.v009.errors";
 const WORKFLOW_TEST_FILE = "progress-test.json";
 /* 只用来给「推进」按钮选一个默认目标；合法与否由服务端状态机裁决（非法迁移返回 409）。
@@ -52,7 +53,7 @@ const PURPOSES = [
   ["review", "会审", "purpose-review"],
   ["accept", "验收", "purpose-accept"],
 ];
-const TERMINAL = new Set(["done", "partial", "failed"]);
+const TERMINAL = new Set(["done", "partial", "failed", "cancelled"]);
 const $ = (id) => document.getElementById(id);
 
 /* ------------------------------------------------------------------ 小工具 */
@@ -503,7 +504,7 @@ function renderAttachments() {
     chip.append(label, node("span", "attachment-size", fileSize(attachment.size)), remove);
     list.append(chip);
   }
-  if (attachments.length) list.append(node("p", "field-hint", "仅暂存文件名和大小，未读取或上传内容；关闭面板后清除。"));
+  if (attachments.length) list.append(node("p", "field-hint", "已读取 UTF-8 正文并计算 SHA-256，随提问提交到本机后端；正文暂存于本机浏览器存储，任务结束后清除。"));
 }
 
 /* ------------------------------------------------------------------ 后端状态 */
@@ -565,9 +566,17 @@ function renderEndpointList() {
 function jobLabel(status) {
   return {
     queued: "排队中", running: "执行中", done: "已完成", partial: "部分完成",
-    failed: "失败", lost: "任务已丢失",
+    failed: "失败", cancelled: "已取消", lost: "任务已丢失",
   }[status] || status || "未知";
 }
+
+/* 取消回执的三个终态 → 人话。后端只在"全部确认停止"时才给 cancelled，
+   其余两种必须如实显示，不能都写成"已取消"。 */
+const CANCEL_TEXT = {
+  cancelled: "已取消",
+  cancel_pending: "本地已停，目标端生成待确认",
+  cancel_failed: "取消失败：本地驱动仍在运行",
+};
 
 /* 端脚本返回的 stage → 给人看的中文。
    放在这里而不是新开一个文件：静态断言只扫固定那几个 JS 文件，
@@ -575,6 +584,8 @@ function jobLabel(status) {
 const STAGE_LABELS = {
   answered: "已回答",
   already_answered: "页面已有本轮回答",
+  /* CARD-v010-P3B：载荷写盘失败时整轮拒绝，一个字节都没发出去 */
+  precheck_refused: "前置检查未通过（未发送）",
   read: "已读取",
   timeout: "等回复超时",
   interrupted: "收集中断",
@@ -649,6 +660,108 @@ function errorText(item) {
 
 function isActive(entry) {
   return !entry.lost && !TERMINAL.has(entry.status);
+}
+
+/* CARD-v010-P3B：能不能取消。判据与服务端 `TERMINAL_JOB_STATES` 对齐。 */
+function canCancel(entry) {
+  return Boolean(entry && entry.job_id) && entry.status !== "cancelled" && isActive(entry);
+}
+
+/* 账本写进 job 的值是 "UNKNOWN"（`DELIVERY_UNKNOWN` 只是常量名）。 */
+function needsResolve(item) {
+  const use = (item && item.use) || {};
+  return use.delivery_state === "UNKNOWN" || use.submission === "unknown";
+}
+
+function jobActionButtons(entry) {
+  const bar = node("div", "job-actions");
+  const cancel = button("subtle-button", "取消");
+  cancel.addEventListener("click", (event) => {
+    // 行本身也是按钮：不截断冒泡就会顺手把这条任务选中/切走。
+    event.stopPropagation();
+    void cancelTask(entry);
+  });
+  bar.append(cancel);
+  return bar;
+}
+
+async function cancelTask(entry) {
+  if (!token) {
+    needPair("请先配对：粘贴 server.json 里的 token。");
+    return;
+  }
+  try {
+    const data = await cancelJob(token, entry.job_id, "user_cancelled_from_sidepanel");
+    const state = data.cancel_state || "cancel_pending";
+    const text = CANCEL_TEXT[state] || `取消：${state}`;
+    $("result-status").textContent = text;
+    toast(text);
+    jobCache.delete(entry.job_id);
+    poll.kick();
+  } catch (error) {
+    if (error instanceof BridgeError && error.kind === "not_found") {
+      toast("任务已不存在（后端可能重启过）。");
+      return;
+    }
+    if (error instanceof BridgeError && error.status === 409) {
+      // 409（job_finished / lock_busy）是业务性拒绝，不是服务端故障。
+      // 以前按 kind === "bad_request" 判断，但 classify() 把 409 归到 "server"，
+      // 那个分支永远不会命中。
+      toast("任务已经结束或正在收尾，无法取消。");
+      poll.kick();
+      return;
+    }
+    toast(`取消失败：${error instanceof BridgeError ? error.message : "未知错误"}`);
+  }
+}
+
+/* 未知投递的两个人工裁决。received 必须带可复核引用，这里记录的是
+   "人在面板上确认过"这一事实（后端只校验非空，不判断内容真伪）。 */
+function resolveActionButtons(record, endpoint) {
+  const bar = node("div", "job-actions");
+  const yes = button("subtle-button", "确认已送达");
+  yes.addEventListener("click", () => void resolveDelivery(record, endpoint, "received"));
+  const no = button("subtle-button", "确认未送达（允许重试）");
+  no.addEventListener("click", () => void resolveDelivery(record, endpoint, "not_delivered"));
+  if (!record.prompt) {
+    // 没有正文就算不出摘要，核对入口必须关掉而不是发一个空 sha 上去。
+    yes.disabled = true;
+    no.disabled = true;
+  }
+  bar.append(yes, no);
+  return bar;
+}
+
+async function promptDigest(text) {
+  const buffer = new TextEncoder().encode(String(text || ""));
+  const digest = await crypto.subtle.digest("SHA-256", buffer);
+  return [...new Uint8Array(digest)]
+    .map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+async function resolveDelivery(record, endpoint, verdict) {
+  if (!token) {
+    needPair("请先配对：粘贴 server.json 里的 token。");
+    return;
+  }
+  const sha = await promptDigest(record.prompt);
+  try {
+    await resolveSubmission(token, {
+      endpoint,
+      promptSha256: sha,
+      verdict,
+      reason: verdict === "received"
+        ? "user_confirmed_in_sidepanel"
+        : "user_confirmed_not_delivered",
+      evidenceRef: verdict === "received" ? `manual_ui_confirm:${record.job_id}` : undefined,
+    });
+    toast(verdict === "received" ? "已记为已送达：不会再重发。" : "已记为未送达：可以重新提交。");
+    jobCache.delete(record.job_id);
+    poll.kick();
+  } catch (error) {
+    const detail = error instanceof BridgeError ? (error.code || error.message) : "未知错误";
+    toast(`核对失败：${detail}`);
+  }
 }
 
 function pruneJobs(list) {
@@ -734,7 +847,8 @@ async function loadWorkflow() {
   if (!file || !token) return;
   try {
     const data = await fetchWorkflow(token, file);
-    const next = { file, data: data.data || {}, mtime: data.mtime };
+    const next = { file, data: data.data || {}, mtime: data.mtime,
+                 revision: data.revision, state_sha256: data.state_sha256 };
     workflowMirror = next;
     // 落盘镜像：插件重载 / Service Worker 重启后先渲染旧值，再等这一轮网络刷新。
     try {
@@ -773,7 +887,7 @@ async function moveWorkflowCard(card, to) {
       toast("progress-test.json 已被外部修改，已刷新；请确认后再点一次。");
       return;
     }
-    await moveCard(token, { file, card, to });
+    await moveCard(token, { file, card, to, expectedRevision: fresh.revision });
     await loadWorkflow();
     toast(`卡片 ${card} → ${to}`);
   } catch (error) {
@@ -847,10 +961,13 @@ function renderJobs() {
   $("jobs-count").textContent = `${trackedJobs.length} 个`;
   $("jobs-empty").hidden = trackedJobs.length > 0;
   const rows = trackedJobs.slice().sort((a, b) => b.created_at - a.created_at).map((entry) => {
+    // CARD-v010-P3B：动作按钮放**兄弟**节点。job-row 本身是 <button>，
+    // 嵌套按钮是非法 HTML，点击还会冒泡把这条任务切成选中。
+    const wrap = node("div", "job-entry");
+    wrap.setAttribute("role", "listitem");
     const row = node("button", `job-row${entry.job_id === selectedJobId ? " is-active" : ""}`);
     row.type = "button";
     row.dataset.jobId = entry.job_id;
-    row.setAttribute("role", "listitem");
     row.setAttribute("aria-pressed", String(entry.job_id === selectedJobId));
     const head = node("span", "job-head");
     head.append(node("span", `job-dot is-${entry.status || "queued"}`));
@@ -866,7 +983,9 @@ function renderJobs() {
       renderJobs();
       renderOutput();
     });
-    return row;
+    wrap.append(row);
+    if (canCancel(entry)) wrap.append(jobActionButtons(entry));
+    return wrap;
   });
   holder.replaceChildren(...rows);
 }
@@ -878,6 +997,10 @@ async function pollJob(entry) {
     jobCache.set(entry.job_id, record);
     entry.status = record.status || entry.status;
     entry.lost = false;
+    // CARD-v010-P3B：任务到终态，本地就不该再挂着"未完结提交"。
+    if (TERMINAL.has(record.status) && pendingAsk && pendingAsk.job_id === entry.job_id) {
+      void clearPending();
+    }
   } catch (error) {
     if (!(error instanceof BridgeError)) return;
     if (error.kind === "not_found") {
@@ -989,6 +1112,8 @@ function outputRows(record, tab) {
       rows.push(node("p", "output-text", item.reply ? String(item.reply).slice(0, 2000) : "（暂无回复）"));
       const beat = progressText(item);
       if (beat) rows.push(node("p", "output-line quiet", beat));
+      // CARD-v010-P3B：投递状态未知时，只有人能裁决"到底发没发出去"。
+      if (needsResolve(item)) rows.push(resolveActionButtons(record, name));
     }
     return rows;
   }
@@ -1009,6 +1134,12 @@ function outputRows(record, tab) {
 }
 
 /* ------------------------------------------------------------------ 提交 */
+/* 发给后端的附件形状：只留后端认的四个键，去掉本地用于渲染的 id。 */
+function outboundAttachments() {
+  return attachments.map(({ name, size, content, sha256 }) =>
+    ({ name, size, content, sha256 }));
+}
+
 function selectedEndpoints() {
   const names = [];
   for (const seat of state.seats) {
@@ -1049,11 +1180,25 @@ async function startAsk() {
   $("result-status").textContent = "正在提交…";
   try {
     const requestId = id();
+  // CARD-v010-P3B：提交**之前**落盘**完整**正文。旧格式只存 120 字前缀，
+  // 重发时正文与首次不一致，后端指纹比对必然 409 `idempotency_conflict`，
+  // 恢复逻辑等于永远走不通。
+  try {
+    await writeLocal(PENDING_KEY, {
+      version: 2, request_id: requestId, job_id: null,
+      at: Date.now(), created_at: Date.now(),
+      purpose: state.purpose, endpoints: names,
+      prompt: state.prompt.trim(), attachments: outboundAttachments(),
+    });
+  } catch { /* 落盘失败不阻断提交 */ }
     const data = await ask(token, {
       endpoints: names,
       prompt: state.prompt.trim(),
       purpose: state.purpose,
       requestId,
+      // CARD-v010-FIX-AUDIT BUG-2：附件内容以前只在这里被丢弃，
+      // 面板显示"已添加附件"、后端只收到正文，附件等于没上传。
+      attachments: outboundAttachments(),
     });
     const entry = {
       job_id: data.job_id,
@@ -1067,6 +1212,15 @@ async function startAsk() {
       // 只作诊断与重复提交识别，**不做错误去重主键**（一个 request_id 可能对应多端）。
       request_id: requestId,
     };
+    // CARD-v010-P3B：拿到 job_id 立刻回写。下次开面板只需 GET，不必再发一次 /ask。
+    try {
+      await writeLocal(PENDING_KEY, {
+        version: 2, request_id: requestId, job_id: data.job_id,
+        at: Date.now(), created_at: entry.created_at,
+        purpose: state.purpose, endpoints: names,
+        prompt: state.prompt.trim(), attachments: outboundAttachments(),
+      });
+    } catch { /* 同上：落盘失败不影响本次提交 */ }
     trackedJobs = pruneJobs(trackedJobs.filter((item) => item.job_id !== entry.job_id).concat(entry));
     selectedJobId = entry.job_id;
     await persistJobs();
@@ -1124,6 +1278,8 @@ async function saveToken() {
   $("pair-state").textContent = "已配对";
   await Promise.all([loadEndpoints(), refreshHealth()]);
   poll.kick();
+  // 未配对时挂起的提交在配对成功之后才可能恢复。
+  void recoverPendingAsk();
 }
 
 async function clearToken() {
@@ -1209,11 +1365,24 @@ function bindEvents() {
     saveDraft();
   });
   $("attach-button").addEventListener("click", () => $("attachment-input").click());
-  $("attachment-input").addEventListener("change", (event) => {
-    for (const file of event.target.files || []) {
-      attachments.push({ id: id(), name: file.name, size: file.size });
-    }
+  $("attachment-input").addEventListener("change", async (event) => {
+    const picked = [...(event.target.files || [])];
     event.target.value = "";
+    for (const file of picked) {
+      if (file.size > 1024 * 1024) { toast(`${file.name} 超过 1 MiB，已跳过`); continue; }
+      if (attachments.length >= 10) { toast("最多 10 个附件"); break; }
+      try {
+        const buffer = await file.arrayBuffer();
+        const text = new TextDecoder("utf-8", { fatal: true }).decode(buffer);
+        const digest = await crypto.subtle.digest("SHA-256", buffer);
+        const sha256 = [...new Uint8Array(digest)]
+          .map((b) => b.toString(16).padStart(2, "0")).join("");
+        attachments.push({ id: id(), name: file.name, size: file.size,
+                           content: text, sha256 });
+      } catch {
+        toast(`${file.name} 不是 UTF-8 文本，已跳过`);
+      }
+    }
     renderAttachments();
   });
   $("start-button").addEventListener("click", startAsk);
@@ -1300,6 +1469,11 @@ function bindEvents() {
     renderRoles();
     $("draft-status").textContent = "已同步本机插件配置";
   });
+  // CARD-v010-P3B：断线/关侧栏重开的恢复入口。
+  // 挂这里而不是 initialize()：initialize 的源码会被 health_deadline_harness
+  // 按文本切片塞进固定 vm 上下文执行，里面新增任何标识符都会 ReferenceError；
+  // bindEvents 不在切片范围内，且 harness 里它是空替身。
+  void recoverPendingAsk();
 }
 
 /* ------------------------------------------------------------------ 启动 */
@@ -1375,3 +1549,112 @@ async function initialize() {
 }
 
 void initialize();
+
+
+// ---------------------------------------------------------------- 断线恢复（CARD-v010-P3B）
+let pendingAsk = null;
+let pendingChecked = false;
+
+async function clearPending() {
+  pendingAsk = null;
+  pendingChecked = true;
+  try {
+    await removeLocal(PENDING_KEY);
+  } catch { /* 清不掉最多下次再提示一次，不影响任务本身 */ }
+}
+
+/* 用本地存档补一条任务记录。`created_at` 必须是数字：pruneJobs 按
+   `typeof created_at === "number"` 过滤，后端给的是 ISO 字符串，直接用会被静默丢掉。 */
+function pendingEntry(stored) {
+  const stamp = Number(stored.created_at);
+  return {
+    job_id: stored.job_id,
+    // 时钟偏差或旧存档可能落在 24h 窗口之外，pruneJobs 会把刚恢复的任务立刻丢掉；
+    // 落到窗口外就按"现在"算，宁可时间不准也不能让恢复出来的任务消失。
+    created_at: (Number.isFinite(stamp) && Date.now() - stamp < JOB_TTL_MS)
+      ? stamp : Date.now(),
+    purpose: stored.purpose || "review",
+    endpoints: Array.isArray(stored.endpoints) ? stored.endpoints : [],
+    prompt: String(stored.prompt || "").slice(0, PROMPT_PREVIEW),
+    status: "queued",
+    lost: false,
+    request_id: stored.request_id,
+  };
+}
+
+/* 把一条 pending 接回面板：复用 pollJob，才能同时拿到 404/401/offline 的既有处理。 */
+async function adoptJob(stored) {
+  let entry = trackedJobs.find((item) => item.job_id === stored.job_id);
+  if (!entry) {
+    entry = pendingEntry(stored);
+    trackedJobs = pruneJobs(trackedJobs.concat(entry));
+  }
+  selectedJobId = entry.job_id;
+  await pollJob(entry);
+  await persistJobs();
+  renderJobs();
+  renderOutput();
+  if (TERMINAL.has(entry.status) || entry.lost) {
+    await clearPending();
+    toast("上次的任务已经结束。");
+    return;
+  }
+  poll.interval = ACTIVE_INTERVAL_MS;
+  poll.kick();
+  toast(`已恢复上次的任务：${entry.job_id}`);
+}
+
+async function recoverPendingAsk() {
+  if (pendingChecked) return;
+  pendingChecked = true;
+  if (!token) {
+    // 未配对：保留存档，配对成功后 saveToken 会再叫一次。
+    pendingChecked = false;
+    return;
+  }
+  let stored = null;
+  try {
+    stored = await readLocal(PENDING_KEY);
+  } catch {
+    return;                     // 读不到就当没有，下次开面板再试
+  }
+  if (!stored || !stored.request_id) return;
+  pendingAsk = stored;
+  try {
+    if (stored.job_id) {
+      await adoptJob(stored);
+      return;
+    }
+    // 上一轮停在 /ask 返回之前。只有"存的是完整正文 + 没有附件"才允许重发：
+    // 旧格式只有 120 字前缀，重发正文与首次不一致，必然撞 409。
+    // CARD-v010-FIX-AUDIT BUG-2：v2 记录的 attachments 必须是**数组**（旧记录是
+    // 数字条数，无法重建内容）。不是数组就只能人工确认：带着"不知道有没有附件"
+    // 的正文重发，比不恢复更危险。
+    if (stored.version !== 2 || !Array.isArray(stored.attachments)
+        || !Array.isArray(stored.endpoints) || !stored.endpoints.length) {
+      toast("上次提交结果未知，请手动确认后再提交。");
+      return;
+    }
+    const data = await ask(token, {
+      endpoints: stored.endpoints,
+      prompt: stored.prompt,
+      purpose: stored.purpose,
+      requestId: stored.request_id,
+      attachments: stored.attachments,
+    });
+    stored = { ...stored, job_id: data.job_id, created_at: Date.now() };
+    pendingAsk = stored;
+    try {
+      await writeLocal(PENDING_KEY, stored);
+    } catch { /* 回写失败不回滚已创建的 job */ }
+    await adoptJob(stored);
+  } catch (error) {
+    // 允许下次开面板/配对后重试，同时照常播报离线与未授权。
+    pendingChecked = false;
+    if (error instanceof BridgeError && error.kind === "offline") {
+      toast("后端离线，上次的提交还没核对完。");
+    } else if (error instanceof BridgeError && error.kind === "unauthorized") {
+      needPair("请重新配对：token 无效或已被 rotate。");
+    }
+  }
+}

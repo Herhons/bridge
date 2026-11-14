@@ -90,11 +90,14 @@ export function endpoints(token) {
 }
 
 /** /ask：purpose 必填（test/review/accept），request_id 用于后端去重。 */
-export function ask(token, { endpoints: names, prompt, purpose, requestId }) {
+export function ask(token, { endpoints: names, prompt, purpose, requestId,
+                            attachments, stageConfig, workflowRole, timeout }) {
   return call("/ask", {
     token,
     method: "POST",
-    body: { endpoints: names, prompt, purpose, request_id: requestId },
+    body: { endpoints: names, prompt, purpose, request_id: requestId,
+            attachments, stage_config: stageConfig, workflow_role: workflowRole },
+    timeout: timeout || (attachments && attachments.length ? 15000 : undefined),
   });
 }
 
@@ -120,10 +123,29 @@ export function workflow(token, file) {
  * 状态机校验、写后复核、文件锁、非法迁移 409，服务端全都做好了；
  * 前端只负责把 `file` 限定在白名单内，不重复实现一遍。
  */
-export function moveCard(token, { file, card, to, create }) {
+export function moveCard(token, { file, card, to, create, expectedRevision }) {
   return call("/workflow", {
     token,
     method: "POST",
-    body: { file, card, to, create },
+    body: { file, card, to, create, expected_revision: expectedRevision },
+  });
+}
+
+
+/** CARD-v010-P3：取消任务。三态回执由后端给，前端如实展示。 */
+export function cancelJob(token, jobId, reason = "") {
+  return call(`/jobs/${encodeURIComponent(jobId)}/cancel`, {
+    token, method: "POST", body: { reason },
+    // CARD-v010-FIX-AUDIT BUG-4：后端要杀掉驱动进程树并逐个确认退出，
+    // 之前沿用 3s 默认超时，会出现"取消其实成功了、前端却报超时失败"。
+    timeout: 15000,
+  });
+}
+
+/** CARD-v010-P3：未知投递裁决。received 必须带证据引用。 */
+export function resolveSubmission(token, { endpoint, promptSha256, verdict, reason, evidenceRef }) {
+  return call("/submissions/resolve", {
+    token, method: "POST",
+    body: { endpoint, prompt_sha256: promptSha256, verdict, reason, evidence_ref: evidenceRef },
   });
 }

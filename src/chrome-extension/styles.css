@@ -245,6 +245,10 @@ body.sidepanel { width: 100%; min-width: 0; height: 100vh; overflow: hidden; }
 .job-row { display: flex; flex-direction: column; gap: 3px; align-items: stretch; border: 1px solid #eceef6; border-radius: 8px; background: #fff; padding: 7px 9px; text-align: left; }
 .job-row:hover { border-color: #cfc9f2; background: #fcfbff; }
 .job-row.is-active { border-color: #dcd8fb; background: linear-gradient(105deg, #f5f3ff, #fbfaff); }
+/* CARD-v010-P3B：任务行 + 行外动作按钮（按钮不能在 .job-row 里面，那是嵌套 <button>） */
+.job-entry { display: flex; align-items: center; gap: 4px; }
+.job-entry > .job-row { flex: 1 1 auto; min-width: 0; }
+.job-actions { display: flex; flex: 0 0 auto; gap: 2px; flex-wrap: wrap; }
 .job-head { display: flex; align-items: center; gap: 7px; font-size: 10px; color: #4c5169; }
 .job-dot { width: 5px; height: 5px; border-radius: 50%; background: #b3b0c4; flex: 0 0 auto; }
 .job-dot.is-running, .job-dot.is-queued { background: #6d63e0; }

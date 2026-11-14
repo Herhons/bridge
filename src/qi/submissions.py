@@ -33,6 +33,7 @@ does not erase an ambiguous previous submission. No prompt body is stored.
 import hashlib
 import json
 import os
+import re
 import time
 from pathlib import Path
 
@@ -75,9 +76,37 @@ LEVELS = (LEVEL_L1, LEVEL_L2, LEVEL_L3)
 _LEVEL_ORDER = {LEVEL_L1: 1, LEVEL_L2: 2, LEVEL_L3: 3}
 
 
+_SHA_RE = re.compile(r"^[0-9a-f]{64}$")
+
+
+def path_for_sha(endpoint, sha256, *, root=None):
+    """按**正文摘要**定位账本。文件名本来就是 `<端>-<sha>.json`，不需要遍历目录。
+
+    CARD-v010-P1B-P2 的 `resolve-delivery` 只拿得到 sha（记录里不存正文），
+    所以必须有这条入口；`path_for()` 变成它的薄包装，行为一个字节不变。
+    """
+    key = str(sha256 or "").strip().lower()
+    if not _SHA_RE.match(key):
+        raise ValueError(f"sha256 不合法：{sha256!r}（需要 64 位小写 hex）")
+    return (Path(root or tier_guard.ROOT) / "runs/submissions"
+            / (str(endpoint) + "-" + key + ".json"))
+
+
 def path_for(endpoint, prompt, *, root=None):
-    key = hashlib.sha256(str(prompt).encode("utf-8")).hexdigest()
-    return Path(root or tier_guard.ROOT) / "runs/submissions" / (str(endpoint) + "-" + key + ".json")
+    return path_for_sha(endpoint, hashlib.sha256(str(prompt).encode("utf-8")).hexdigest(),
+                        root=root)
+
+
+def read_sha(endpoint, sha256, *, root=None):
+    """按摘要读记录。语义与 `read()` 完全一致（不归一、坏文件返回 None）。"""
+    path = path_for_sha(endpoint, sha256, root=root)
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError):
+        return None
+    return value if isinstance(value, dict) else None
 
 
 def read(endpoint, prompt, *, root=None):
@@ -401,6 +430,11 @@ def _skeleton(state, *, scope=None, job_id=None, request_id=None, now=None):
         "v2_state": state,
         "level": None,
         "submission_count": 0 if state in (STATE_DRAFT, STATE_FAILED_RETRYABLE) else 1,
+        # CARD-v010-P0P1：`submitting` 只代表"打算发"，不代表"已经点过发送"。
+        # 两者混为一谈时，所有"没点成"的早退路径都会把同一提问永久封死。
+        # 只有 accepted / unknown / failed_terminal 才意味着"这一次真的出去了"。
+        "attempt_consumed": state in (STATE_ACCEPTED, STATE_UNKNOWN,
+                                      STATE_FAILED_TERMINAL),
         "attempts": [],
         "evidence": {},
         "pid": os.getpid(),
@@ -495,6 +529,104 @@ def begin(endpoint, prompt, *, root=None, scope=None, job_id=None,
     """
     return reserve(endpoint, prompt, root=root, scope=scope,
                    job_id=job_id, request_id=request_id, now=now)
+
+
+#: 结果层的投递状态（CARD-v010-P0P1）。与账本 v2_state 是两套词汇：
+#: 这一套回答"这一轮到底走到哪一步"，v2_state 回答"这条提问还能不能再发"。
+DELIVERY_NOT_SENT = "NOT_SENT"
+DELIVERY_PRECHECK_REFUSED = "PRECHECK_REFUSED"
+DELIVERY_STAGED_UNSENT = "STAGED_UNSENT"
+DELIVERY_ATTEMPTING = "ATTEMPTING"
+DELIVERY_UNKNOWN = "UNKNOWN"
+DELIVERY_ACCEPTED = "ACCEPTED"
+DELIVERY_ANSWERED = "ANSWERED"
+DELIVERY_FAILED_TERMINAL = "FAILED_TERMINAL"
+
+DELIVERY_STATES = (DELIVERY_NOT_SENT, DELIVERY_PRECHECK_REFUSED,
+                   DELIVERY_STAGED_UNSENT, DELIVERY_ATTEMPTING,
+                   DELIVERY_UNKNOWN, DELIVERY_ACCEPTED,
+                   DELIVERY_ANSWERED, DELIVERY_FAILED_TERMINAL)
+
+
+def delivery_state_of(record) -> str:
+    """账本记录 -> 投递状态。**纯函数**，不读盘、不写盘、不新增持久化字段。
+
+    这样老记录（含 `legacy=True` 的 v1 迁移记录）自动获得映射，不需要迁移脚本；
+    也不会出现"字段与 v2_state 各说各话"的第二真相。
+    """
+    if not record:
+        return DELIVERY_NOT_SENT
+    view = normalize(record) or {}
+    state = view.get("v2_state")
+    if state == STATE_ACCEPTED:
+        return DELIVERY_ANSWERED if view.get("level") == LEVEL_L3 else DELIVERY_ACCEPTED
+    if state == STATE_UNKNOWN:
+        return DELIVERY_UNKNOWN
+    if state == STATE_SUBMITTING:
+        return (DELIVERY_UNKNOWN if record.get("attempt_consumed")
+                else DELIVERY_ATTEMPTING)
+    if state == STATE_FAILED_TERMINAL:
+        return DELIVERY_FAILED_TERMINAL
+    return DELIVERY_NOT_SENT
+
+
+def mark_clicked(endpoint, prompt, *, root=None, now=None) -> dict:
+    """**点击动作已经发出**之后调用：把 `submitting` 记成"这一次真的消耗掉了"。
+
+    不往 `attempts` 追加条目——`_validate` 限制 `kind=="submit"` 至多一条
+    （重试只能记 `kind="retry"`），追加会让写盘直接失败。
+    """
+    path = path_for(endpoint, prompt, root=root)
+    stamp = now if now is not None else time.time()
+    with tier_guard.file_lock(path.with_suffix(".lock")):
+        value = read(endpoint, prompt, root=root)
+        if value is None:
+            return {"ok": False, "reason": "record_missing"}
+        view = normalize(value) or {}
+        if view.get("v2_state") != STATE_SUBMITTING:
+            return {"ok": False, "reason": "not_submitting",
+                    "state": view.get("v2_state")}
+        record = dict(value)
+        record["attempt_consumed"] = True
+        record["clicked_at"] = stamp
+        record["updated_at"] = stamp
+        _write(path, record)
+    return {"ok": True, "attempt_consumed": True, "state": STATE_SUBMITTING}
+
+
+def release(endpoint, prompt, *, reason: str = "", root=None, now=None,
+            force: bool = False) -> dict:
+    """把"打算发但**证明没点成**"的 `submitting` 退回可重试态。
+
+    默认只在 `attempt_consumed is False` 时允许：一旦真点过发送，状态就是"可能已发"，
+    必须留在 unknown/accepted 一侧，绝不能被一次早退改写成可重发。
+
+    `force=True` 只给**点了但确定没发出去**的正证据用（当前唯一场景：
+    发送后限定时间内文字仍完整堵在输入框里 —— 端根本没接受这次提交）。
+    调用方必须在调用处写明是哪条证据，不许拿它当"重试开关"。
+    """
+    path = path_for(endpoint, prompt, root=root)
+    stamp = now if now is not None else time.time()
+    with tier_guard.file_lock(path.with_suffix(".lock")):
+        value = read(endpoint, prompt, root=root)
+        if value is None:
+            return {"ok": False, "reason": "record_missing"}
+        view = normalize(value) or {}
+        if view.get("v2_state") != STATE_SUBMITTING:
+            return {"ok": False, "reason": "not_submitting",
+                    "state": view.get("v2_state")}
+        if value.get("attempt_consumed") and not force:
+            return {"ok": False, "reason": "attempt_consumed",
+                    "state": STATE_SUBMITTING}
+        record = _upgrade(value, STATE_FAILED_RETRYABLE, now=stamp)
+        record["submission_count"] = 0
+        record["attempt_consumed"] = False
+        record["release_reason"] = str(reason or "")
+        record["released_at"] = stamp
+        record["updated_at"] = stamp
+        _write(path, record)
+    return {"ok": True, "state": STATE_FAILED_RETRYABLE,
+            "reason": str(reason or ""), "attempt_consumed": False}
 
 
 def mark_level(endpoint, prompt, level, evidence=None, *, root=None, now=None):
@@ -629,6 +761,10 @@ def finish(endpoint, prompt, result, *, root=None, scope=None, now=None):
         # 终态/可重试态会改变 submission_count 的期望值，显式对齐
         record["submission_count"] = 0 if new_state in (
             STATE_DRAFT, STATE_FAILED_RETRYABLE) else 1
+        # 走到 accepted/unknown/failed_terminal，说明这一次确实点过发送；
+        # 只有"证明没发出去"的可重试态才允许保持 False。
+        record["attempt_consumed"] = new_state in (
+            STATE_ACCEPTED, STATE_UNKNOWN, STATE_FAILED_TERMINAL)
 
         clean = clean_scope(scope)
         if clean and "scope_after" not in record:
@@ -751,3 +887,98 @@ def summary(record):
             "has_scope": bool(view.get("scope")),
             "has_scope_after": bool(view.get("scope_after")),
             "session_id": bool((clean_scope(view.get("scope")) or {}).get("session_id"))}
+
+
+# ---------------------------------------------------------------- 未知投递裁决（CARD-v010-P1B-P2）
+#
+# 会审要求：`unknown` 不能靠"再发一次"来自证。必须由人/外部证据给出裁决，
+# 而且两种裁决的**后果完全相反**：received 继续禁发，not_delivered 才允许重试。
+# 记录里不存正文，所以入口只接受 sha256 —— 也避免正文进命令行与日志。
+
+VERDICTS = ("received", "not_delivered")
+
+
+class ResolutionRejected(Exception):
+    """裁决被拒。HTTP 层按 `.status` 映射；CLI 按 `.reason` 映射退出码。"""
+
+    def __init__(self, reason: str, hint: str = "", *, status: int = 409):
+        self.reason = str(reason)
+        self.hint = str(hint or reason)
+        self.status = int(status)
+        super().__init__(self.hint)
+
+    def as_result(self) -> dict:
+        return {"ok": False, "stage": "resolve_rejected",
+                "reason": self.reason, "hint": self.hint}
+
+
+def resolve_unknown(endpoint, prompt_sha, verdict, *, reason, evidence_ref=None,
+                    root=None, now=None, actor="") -> dict:
+    """只裁决 `unknown`。received -> accepted(L2)；not_delivered -> failed_retryable。
+
+    三条硬约束：
+      · 只有 `v2_state == unknown` 可被裁决，别的状态一律 409（不许拿它当"重试开关"）；
+      · `received` 必须带 `evidence_ref`（422）—— 不碰屏幕时不允许凭状态自证；
+      · `attempts` 一个字节不动（`_validate` 只数 `kind=="submit"`，保留 1 条不会触发
+        `duplicate_submit_attempt`）。
+    """
+    if verdict not in VERDICTS:
+        raise ResolutionRejected("bad_verdict",
+                                 f"verdict 只能是 {'/'.join(VERDICTS)}", status=400)
+    text = str(reason or "").strip()
+    if not text:
+        raise ResolutionRejected("reason_required", "必须说明裁决依据", status=400)
+    ref = str(evidence_ref or "").strip()
+    if verdict == "received" and not ref:
+        raise ResolutionRejected(
+            "evidence_ref_required",
+            "received 必须给出可复核的证据引用；不允许凭状态自证", status=422)
+
+    path = path_for_sha(endpoint, prompt_sha, root=root)
+    stamp = now if now is not None else time.time()
+    with tier_guard.file_lock(path.with_suffix(".lock")):
+        value = read_sha(endpoint, prompt_sha, root=root)
+        if value is None:
+            raise ResolutionRejected("record_missing", "找不到这条提交记录", status=404)
+        view = normalize(value) or {}
+        if view.get("v2_state") != STATE_UNKNOWN:
+            raise ResolutionRejected(
+                "not_unknown",
+                f"当前状态是 {view.get('v2_state')!r}，只有 unknown 可被裁决", status=409)
+
+        record = dict(value)                 # 不用 _upgrade：它会丢掉 resolution/resolutions
+        before = {"state": record.get("state"),
+                  "v2_state": view.get("v2_state"), "level": record.get("level")}
+        entry = {"at": stamp, "from": STATE_UNKNOWN, "verdict": verdict,
+                 "reason": text, "evidence_ref": ref or None, "actor": str(actor or "")}
+        merged = dict(record.get("evidence") or {})
+        if verdict == "received":
+            record["v2_state"] = STATE_ACCEPTED
+            record["state"] = _v1_name(STATE_ACCEPTED)
+            record["level"] = LEVEL_L2       # 目标端确认收到 = L2；L3 需要完整回答的结构证据
+            record["submission_count"] = 1
+            record["attempt_consumed"] = True
+            merged["l2"] = {"basis": "resolve_delivery", "evidence_ref": ref,
+                            "reason": text, "actor": str(actor or ""), "at": stamp}
+            entry["to"] = STATE_ACCEPTED
+        else:
+            record["v2_state"] = STATE_FAILED_RETRYABLE
+            record["state"] = _v1_name(STATE_FAILED_RETRYABLE)
+            record["submission_count"] = 0
+            record["attempt_consumed"] = False
+            merged["resolution"] = {**entry, "to": STATE_FAILED_RETRYABLE}
+            entry["to"] = STATE_FAILED_RETRYABLE
+        record["evidence"] = merged
+        record["resolution"] = verdict
+        record["resolved_at"] = stamp
+        record["resolutions"] = list(record.get("resolutions") or []) + [entry]
+        record["updated_at"] = stamp
+        _write(path, record)                 # _validate 兜底：违反不变量就抛
+
+    return {"ok": True, "endpoint": str(endpoint), "prompt_sha256": str(prompt_sha),
+            "path": str(path), "from": before,
+            "to": {"state": record.get("state"), "v2_state": record["v2_state"],
+                   "level": record.get("level")},
+            "verdict": verdict,
+            "delivery_state": delivery_state_of(record),
+            "blocking": record["v2_state"] in BLOCKING_STATES}

@@ -17,6 +17,8 @@
 | **7** | **窗口最小化且恢复失败**：`stage=window_minimized` | 各端取窗口处 |
 | **8** | **UI 前台锁被占**：`stage=ui_busy`（`runs\ui.lock` 被另一个自动化占着，等超时） | `uilock.run`（各 `*_use` / `*_choose`） |
 | **9** | **发送中途前台被换走**：`stage=concurrent_ui`（已清草稿退出） | 各 `*_use` 发送链路 |
+| **11** | **前置守卫拒绝**：`stage=precheck_refused`（一个字节都没进 UI，`attempt_consumed=False`） | `qi.precheck` / `qi.payload`（CARD-v010-P0P1 第 2、3、6 条） |
+| **12** | **写进去了但读回不一致**：`stage=staged_unsent`（已按条件清稿、**没有点击**） | `qi.gemini.write_prompt`（CARD-v010-P0P1 第 4 条） |
 
 ### 冲突核对（做卡时逐脚本 grep 过）
 
@@ -42,6 +44,8 @@
 | `window_minimized` | 7 | 最小化且没能恢复 |
 | `ui_busy` | 8 | `runs\ui.lock` 被另一个自动化占着（CARD-09f 第 1 条，独立于让位 4） |
 | `concurrent_ui` | 9 | 发送中途前台标签/文档被换走，已清草稿（CARD-09f 第 3 条） |
+| `precheck_refused` | 11 | 前置守卫拒绝：载荷哈希不符 / 用户正在用电脑且无票据 / 票据过期或已用。**不写账、不消耗配额**（CARD-v010-P0P1） |
+| `staged_unsent` | 12 | 写入后读回不一致：已落证据、按条件清稿、未点击发送（CARD-v010-P0P1 第 4 条） |
 | `already_answered` | 0 | 对话里已有本提问之后的回复，只读不发送（CARD-09f 第 6 条） |
 | `zoom_not_100` | 1 | 页面缩放不是 100% 且 Ctrl+0 之后仍不是（CARD-06b 第 6 条） |
 | `human_check` | 1 | 页面停在人机验证 / Unknown error，需要人来处理（CARD-06b 第 8 条） |

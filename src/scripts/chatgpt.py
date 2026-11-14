@@ -153,4 +153,5 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    from qi import payload
+    raise SystemExit(payload.run(main, endpoint="chatgpt"))

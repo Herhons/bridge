@@ -49,6 +49,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import copy
+import hashlib
 import hmac
 import inspect
 import json
@@ -76,9 +77,18 @@ PURPOSES = ("test", "review", "accept")
 DIMENSION_ORDER = ("model", "effort", "think")
 DIMENSION_FLAGS = {"model": "--model", "effort": "--effort", "think": "--think"}
 WORKFLOW_FILES = ("progress.json", "progress-test.json")
-TERMINAL_JOB_STATES = ("done", "partial", "failed")
 
-MAX_BODY = 1024 * 1024
+#: CARD-v010-P3：能力握手（**只能挂在 /endpoints**；/health 是精确 {ok,version} 契约）
+CONTRACT_VERSION = "v010-p3"
+CAPABILITIES = ("cancel_job", "resolve_submission", "idempotent_request_id",
+                "atomic_workflow_revision", "attachments_content", "workflow_tick")
+TERMINAL_JOB_STATES = ("done", "partial", "failed", "cancelled")
+
+#: 一次 `POST /jobs/<id>/cancel` 的墙钟上限（含所有端的 taskkill + 等待）。
+#: 前端 `cancelJob` 给 15s，这里留足余量；不随席位数增长。
+CANCEL_BUDGET = 5.0
+
+MAX_BODY = 8 * 1024 * 1024      # CARD-v010-P3：附件正文，1MiB 不够
 JOB_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 CARD_RE = re.compile(r"^[A-Za-z0-9_.-]{1,32}$")
 REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
@@ -87,6 +97,10 @@ EXTENSION_ID_RE = re.compile(r"^[a-p]{32}$")     # Chrome 扩展 ID 只用 a-p �
 
 DEFAULT_CONFIG = {
     "port": DEFAULT_PORT,
+    # CARD-v010-P1B-P2：用户活跃门禁默认关（开会把无人值守的会审在用户碰鼠标时打断）。
+    # 只在 docs/bridge_server.json 或 /ask body 显式打开时下发。
+    "idle_gate": False,
+    "idle_seconds": 2.0,
     "queue_limit": 20,
     "memory_jobs": 50,
     "choose_timeout": 120.0,
@@ -128,18 +142,239 @@ DEFAULT_CONFIG = {
     "allow_test_faults": False,
     # B26：启动时把上一次进程留下的 queued/running 标成 failed(interrupted_by_restart)。
     # 关掉它只是不做修复，僵尸 job 仍然永久停在原状态 —— 默认开。
+    "max_attachments": 10,
+    "attachment_bytes_limit": 1024 * 1024,
+    "attachments_total_limit": 4 * 1024 * 1024,
+    "stage_config_bytes_limit": 8192,
     "recover_interrupted_jobs": True,
 }
+
+
+ATTACH_ROLES = ("summary", "builder", "reviewer")
+_NAME_BAD = set('\\/:*?"<>|')
+
+
+def _safe_attachment_name(raw) -> str:
+    name = "".join("_" if (ch in _NAME_BAD or ord(ch) < 32 or ord(ch) == 127) else ch
+                   for ch in str(raw or "").strip())
+    return name[:120]
+
+
+def _fence_for(content: str) -> str:
+    """围栏长度 = 内容里最长连续反引号 + 1（最少 3），结构上无法逃逸。"""
+    longest = run = 0
+    for ch in content:
+        run = run + 1 if ch == "`" else 0
+        longest = max(longest, run)
+    return "`" * max(3, longest + 1)
+
+
+def compose_prompt(prompt: str, attachments: list[dict]) -> str:
+    """把附件正文拼到 prompt 尾部，并附一份可对账的摘要块。"""
+    if not attachments:
+        return prompt
+    parts = [prompt, ""]
+    for item in attachments:
+        fence = _fence_for(item["content"])
+        parts += [f"## 附件：{item['name']}", fence, item["content"], fence, ""]
+    parts.append("## 附件摘要")
+    for item in attachments:
+        parts.append(f"- {item['name']} · {item['bytes']} B · sha256={item['sha256']}")
+    return "\n".join(parts)
+
+
+def normalize_attachments(value, *, config) -> list[dict]:
+    """校验并归一附件。**只有 name/size 没有 content 一律拒绝**（不许假装上传）。"""
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise RequestError(400, "bad_attachments", "attachments must be a list")
+    limit = int(config.get("max_attachments") or 10)
+    if len(value) > limit:
+        raise RequestError(400, "too_many_attachments", f"at most {limit} attachments")
+    per = int(config.get("attachment_bytes_limit") or 1024 * 1024)
+    total_cap = int(config.get("attachments_total_limit") or 4 * 1024 * 1024)
+    out, names, total = [], set(), 0
+    for raw in value:
+        if not isinstance(raw, dict):
+            raise RequestError(400, "bad_attachments", "attachment must be an object")
+        name = _safe_attachment_name(raw.get("name"))
+        if not name or name in (".", ".."):
+            raise RequestError(400, "bad_attachment_name", "attachment name is empty")
+        if name in names:
+            raise RequestError(400, "duplicate_attachment", f"duplicate: {name}")
+        names.add(name)
+        content = raw.get("content")
+        if not isinstance(content, str):
+            # 卡面点名的 reason：只有名字/大小 = 假装已上传
+            raise RequestError(400, "attachment_content_missing",
+                               f"attachment {name} has no content; "
+                               "send UTF-8 text, not just name/size")
+        blob = content.encode("utf-8")
+        if not blob:
+            raise RequestError(400, "empty_attachment", f"attachment {name} is empty")
+        if len(blob) > per:
+            raise RequestError(413, "attachment_too_large",
+                               f"attachment {name} exceeds {per} bytes")
+        total += len(blob)
+        if total > total_cap:
+            raise RequestError(413, "attachments_too_large",
+                               f"attachments exceed {total_cap} bytes in total")
+        digest = hashlib.sha256(blob).hexdigest()
+        claimed = str(raw.get("sha256") or "").strip().lower()
+        if claimed and claimed != digest:
+            raise RequestError(400, "attachment_sha_mismatch",
+                               f"attachment {name} sha256 mismatch")
+        out.append({"name": name, "content": content, "bytes": len(blob),
+                    "sha256": digest})
+    return out
+
+
+def normalize_contract(payload, *, allowed, config) -> dict | None:
+    """角色/阶段配置入合同。只做记录与合法性校验，不在这里分派。
+
+    CARD-v010-P3B：`stage_config` 收两种写法——
+      · 对象形态 `{"builder": {"endpoint": "workbuddy", "model": "..."}}`（P3 起的原形）
+      · 字符串简写 `{"builder": "workbuddy"}`（调用方最自然的写法）
+    简写在 `allowed` 校验**之前**折成对象，两种写法此后走完全相同的分支，
+    所以 `endpoint_not_allowed` 的错误码与判定一个字都不变。
+    """
+    stage = payload.get("stage_config")
+    role = payload.get("workflow_role")
+    if role is not None:
+        role = str(role).strip()
+        if role not in ATTACH_ROLES:
+            raise RequestError(400, "bad_workflow_role",
+                               f"workflow_role must be one of {', '.join(ATTACH_ROLES)}")
+    if stage is None and role is None:
+        return None
+    if stage is None:
+        stage = {}
+    if not isinstance(stage, dict):
+        raise RequestError(400, "bad_stage_config", "stage_config must be an object")
+    # 构造新 dict，不原地改调用方传进来的对象（payload 可能被复用）
+    normalized: dict = {}
+    for key, value in stage.items():
+        if isinstance(value, str) and value.strip():
+            value = {"endpoint": value.strip().lower()}
+        normalized[key] = value
+    stage = normalized
+    blob = json.dumps(stage, ensure_ascii=False)
+    if len(blob.encode("utf-8")) > int(config.get("stage_config_bytes_limit") or 8192):
+        raise RequestError(400, "bad_stage_config", "stage_config is too large")
+    for key, value in stage.items():
+        if key not in ATTACH_ROLES:
+            raise RequestError(400, "bad_stage_config",
+                               f"unknown role: {key!r}")
+        if not isinstance(value, dict):
+            raise RequestError(400, "bad_stage_config", f"{key} must be an object")
+        endpoint = value.get("endpoint")
+        if endpoint is not None and str(endpoint).strip().lower() not in allowed:
+            raise RequestError(400, "endpoint_not_allowed",
+                               f"unknown endpoint in stage_config: {endpoint}")
+    return {"stage_config": stage or None, "workflow_role": role or None}
+
+
+def resolve_role_target(contract, endpoints) -> tuple[list, str | None]:
+    """把角色配置落成**实际要跑的端点**。返回 (order, resolved_role_target)。
+
+    只看 `workflow_role` 指的那一个角色：4 席会审里 `workflow_role="summary"`
+    而 `stage_config` 只配了 `builder` 时不该被拦（P3 的 T3-3 就是这个形状）。
+    判据用"配置端点是否在 order 里"而不是"order 恰好等于它"——多端 job 本来就
+    该扇出，只有"要派给 A、order 里却一个 A 都没有"才算冲突。
+    """
+    role = (contract or {}).get("workflow_role")
+    block = ((contract or {}).get("stage_config") or {}).get(role) if role else None
+    configured = str((block or {}).get("endpoint") or "").strip().lower() or None
+    if not configured:
+        return list(endpoints), None
+    if not endpoints:
+        return [configured], configured
+    if configured not in endpoints:
+        raise RequestError(
+            400, "role_endpoint_mismatch",
+            f"workflow_role={role} 配置的执行端点是 {configured}，"
+            f"但本次 order 是 {endpoints}",
+            {"workflow_role": role, "configured": configured,
+             "requested": list(endpoints)})
+    return list(endpoints), configured
+
+
+def _request_fingerprint(endpoints, prompt, purpose, options,
+                         role_target=None) -> str:
+    body = {"endpoints": sorted({str(e).lower() for e in endpoints}),
+            "prompt": str(prompt), "purpose": str(purpose),
+            "idle_gate": bool((options or {}).get("idle_gate", False))}
+    # 只在真指定了角色目标时纳入：不带 contract 的请求（含全部历史指纹）
+    # 算出的串一个字不变，重放语义不会被这次改动改写。
+    if role_target:
+        body["role_target"] = str(role_target).strip().lower()
+    blob = json.dumps(body, ensure_ascii=False, sort_keys=True,
+                      separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(blob).hexdigest()
+
+
+def _idempotency_diff(existing: dict, *, endpoints, prompt, purpose,
+                      options, role_target=None) -> tuple[str, list]:
+    """同 ID 是否同内容。'same' / 'differs' / 'unknown'（历史记录无法证明）。
+
+    `unknown` 必须按旧语义复用：`tests/test_rework09a_idempotency.py:48` 的 251 条
+    历史 job 只有 {job_id, request_id, status}，把它们判成冲突会全线 409。
+    """
+    stored = existing.get("request_fingerprint")
+    if isinstance(stored, str):
+        want = _request_fingerprint(endpoints, prompt, purpose, options, role_target)
+        if stored == want:
+            return "same", []
+        # 指纹不同时，尽量给出字段级差异（调用方与审计都需要知道"哪里不一样"）
+        diff = []
+        if isinstance(existing.get("prompt"), str) and existing["prompt"] != str(prompt):
+            diff.append("prompt")
+        if isinstance(existing.get("order"), list) and sorted(
+                {str(e).lower() for e in existing["order"]}) != sorted(
+                {str(e).lower() for e in endpoints}):
+            diff.append("endpoints")
+        if existing.get("purpose") is not None and str(existing["purpose"]) != str(purpose):
+            diff.append("purpose")
+        if (str(existing.get("resolved_role_target") or "").strip().lower()
+                != str(role_target or "").strip().lower()):
+            diff.append("role_target")
+        return "differs", diff or ["fingerprint"]
+    old_prompt = existing.get("prompt")
+    old_order = existing.get("order")
+    if not isinstance(old_prompt, str) or not isinstance(old_order, list):
+        return "unknown", []
+    diff = []
+    if old_prompt != str(prompt):
+        diff.append("prompt")
+    if sorted({str(e).lower() for e in old_order}) != sorted(
+            {str(e).lower() for e in endpoints}):
+        diff.append("endpoints")
+    if existing.get("purpose") is not None and str(existing["purpose"]) != str(purpose):
+        diff.append("purpose")
+    return ("differs", diff) if diff else ("same", [])
 
 
 class RequestError(Exception):
     """HTTP 层能直接翻译成状态码的错误。"""
 
-    def __init__(self, status: int, code: str, message: str):
+    def __init__(self, status: int, code: str, message: str,
+                 detail: dict | None = None):
         self.status = status
         self.code = code
         self.message = message
+        self.detail = dict(detail) if detail else None
         super().__init__(f"{code}: {message}")
+
+
+class IdempotencyConflict(RequestError):
+    """同 request_id 但正文/端点不同。"""
+
+    def __init__(self, job_id, diff):
+        super().__init__(409, "idempotency_conflict",
+                         "same request_id was already used with a different payload",
+                         {"reason": "payload_differs", "existing_job_id": job_id,
+                          "diff": list(diff)})
 
 
 class QueueFull(RequestError):
@@ -551,8 +786,13 @@ def clear_pid(pid: int | None = None) -> None:
 
 
 # ---------------------------------------------------------------- 子进程
-def terminate_tree(target) -> None:
-    """杀整棵进程树：UI 脚本可能自己再起子进程，只杀父进程会留孤儿。"""
+def terminate_tree(target, *, timeout: float = 15.0) -> None:
+    """杀整棵进程树：UI 脚本可能自己再起子进程，只杀父进程会留孤儿。
+
+    CARD-v010-FIX-AUDIT BUG-4：`timeout` 是**关键字参数**（否则现有
+    `terminate_tree(pid)` 的位置调用会撞上）。取消路径按剩余预算传更小的值，
+    否则一次 cancel 在 `taskkill` 上就能耗掉 15 秒。
+    """
     pid = getattr(target, "pid", target)
     try:
         pid = int(pid)
@@ -562,7 +802,7 @@ def terminate_tree(target) -> None:
         try:
             subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)],
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                           check=False, timeout=15)
+                           check=False, timeout=max(0.5, float(timeout)))
         except (OSError, subprocess.SubprocessError):
             pass
     else:                                    # pragma: no cover - 本机是 Windows
@@ -585,16 +825,25 @@ def _accepts_tick(runner) -> bool:
     测试里的假 runner 只声明 `(cmd, *, timeout, cwd, env)`；硬塞 `tick` 会 TypeError。
     不吞异常、不改签名，先问清楚再传。
     """
+    return _accepts_kwarg(runner, "tick")
+
+
+def _accepts_kwarg(runner, name: str) -> bool:
+    """runner 认不认识某个 kwarg。
+
+    测试里的假 runner 只声明 `(cmd, *, timeout, cwd, env)`；硬塞新 kwarg 会 TypeError。
+    不吞异常、不改签名，先问清楚再传。`on_spawn` 与 `tick` 共用这一套探测。
+    """
     try:
         params = inspect.signature(runner).parameters
     except (TypeError, ValueError):
         return False
-    return "tick" in params or any(
+    return name in params or any(
         item.kind is inspect.Parameter.VAR_KEYWORD for item in params.values())
 
 
 def run_process(cmd: list[str], *, timeout: float, cwd=None, env=None,
-                tick=None, tick_interval: float = 1.5) -> dict:
+                tick=None, tick_interval: float = 1.5, on_spawn=None) -> dict:
     """跑一个固定脚本，参数数组、shell=False；超时就杀整棵树。
 
     `tick` 给了就在等子进程期间每隔 `tick_interval` 调一次（心跳用）。
@@ -616,6 +865,11 @@ def run_process(cmd: list[str], *, timeout: float, cwd=None, env=None,
             return {"ok": False, "timeout": False, "exit_code": None, "stdout": "",
                     "stderr": f"{type(exc).__name__}: {exc}",
                     "elapsed": round(time.monotonic() - started, 3)}
+        if on_spawn is not None:
+            try:
+                on_spawn(proc)          # 登记失败不许带崩一次真发送
+            except Exception:           # noqa: BLE001
+                pass
         try:
             if launch.context is not None:
                 launch.bind(proc.pid)
@@ -652,7 +906,8 @@ def run_process(cmd: list[str], *, timeout: float, cwd=None, env=None,
         elapsed = round(time.monotonic() - started, 3)
         return {"ok": (not timed_out) and proc.returncode == 0, "timeout": timed_out,
                 "exit_code": None if timed_out else proc.returncode,
-                "stdout": _decode(out), "stderr": _decode(err), "elapsed": elapsed}
+                "stdout": _decode(out), "stderr": _decode(err), "elapsed": elapsed,
+                "pid": proc.pid}
 
 # ---------------------------------------------------------------- job 引擎
 class Engine:
@@ -672,6 +927,12 @@ class Engine:
         self._order: "list[str]" = []
         self._lock = threading.RLock()
         self._workflow_lock = threading.RLock()
+        # CARD-v010-P3：实例标识进 /endpoints（/health 是"只有 ok+version"的公开契约）
+        self.instance_id = secrets.token_hex(8)
+        # CARD-v010-P1B-P2：票据只存内存，绝不落 job json / 日志
+        self._grants: dict[str, str] = {}
+        # 活着的驱动子进程：(job_id, endpoint) -> {"proc","pid","at"}
+        self._live: dict[tuple[str, str], dict] = {}
         self._queue: "queue.Queue[str | None]" = queue.Queue()
         self._worker: threading.Thread | None = None
         self._stopping = threading.Event()
@@ -731,6 +992,9 @@ class Engine:
                                    for purpose in PURPOSES}
             rows.append({"name": str(name), "dimensions": table})
         return {"purposes": list(PURPOSES), "endpoints": rows,
+                "instance_id": self.instance_id,
+                "contract_version": CONTRACT_VERSION,
+                "capabilities": list(CAPABILITIES),
                 "note": "从 docs\\tiers.json 读；空列表表示本端没登记该用途的档位"}
 
     # ------------------------------------------------------------ 提交
@@ -744,8 +1008,12 @@ class Engine:
         allowed = self.allowed_endpoints()
 
         endpoints = payload.get("endpoints")
-        if not isinstance(endpoints, list) or not endpoints:
-            raise RequestError(400, "bad_endpoints", "endpoints must be a non-empty list")
+        if endpoints is None:
+            # CARD-v010-P3B：允许完全由 stage_config + workflow_role 决定执行端。
+            # 两者都没有时，下面的 `if not order` 会照旧报 bad_endpoints。
+            endpoints = []
+        if not isinstance(endpoints, list):
+            raise RequestError(400, "bad_endpoints", "endpoints must be a list")
         cleaned: list[str] = []
         for item in endpoints:
             name = str(item or "").strip().lower()
@@ -782,19 +1050,58 @@ class Engine:
 
         # B26：显式重试。默认 False，幂等语义一个字节不变；
         # 只有在调用方明确要求、且旧 job 是被重启打断的，才允许再排一次。
-        return self.submit(cleaned, prompt, purpose, request_id=request_id,
-                           retry=bool(payload.get("retry")))
+        options: dict = {}
+        idle_gate = payload.get("idle_gate")
+        if isinstance(idle_gate, bool):
+            options["idle_gate"] = idle_gate
+        token = payload.get("grant_token")
+        if isinstance(token, str) and token.strip():
+            # 只进内存（submit 会把它从 options 里摘掉再落盘）
+            options["grant_token"] = token.strip()
+        attachments = normalize_attachments(payload.get("attachments"),
+                                            config=self.config)
+        contract = normalize_contract(payload, allowed=allowed, config=self.config)
+        # CARD-v010-P3B：角色配置不再只是"落盘记录"，它决定这次到底派给谁。
+        order, resolved_role_target = resolve_role_target(contract, cleaned)
+        if not order:
+            raise RequestError(400, "bad_endpoints", "endpoints must be a non-empty list")
+        final_prompt = compose_prompt(prompt, attachments)
+        if attachments:
+            contract = dict(contract or {})
+            contract["attachments"] = [{k: item[k] for k in ("name", "bytes", "sha256")}
+                                       for item in attachments]
+            digest_src = [{"name": item["name"], "sha256": item["sha256"]}
+                          for item in attachments]
+            contract["attachments_digest"] = hashlib.sha256(
+                json.dumps(digest_src, ensure_ascii=False, sort_keys=True,
+                           separators=(",", ":")).encode("utf-8")).hexdigest()
+        return self.submit(order, final_prompt, purpose, request_id=request_id,
+                           retry=bool(payload.get("retry")), options=options,
+                           contract=contract,
+                           resolved_role_target=resolved_role_target)
 
     def submit(self, endpoints: list[str], prompt: str, purpose: str, *,
                request_id: str | None = None,
-               retry: bool = False) -> tuple[dict, bool]:
+               retry: bool = False,
+               options: dict | None = None,
+               contract: dict | None = None,
+               resolved_role_target: str | None = None) -> tuple[dict, bool]:
         with self._lock, tier_guard.file_lock(self.root / "runs/jobs/requests.lock"):
             superseded = None
             if request_id:
                 found = self._find_request(request_id)
                 if found:
                     if not (retry and _retryable_after_restart(found)):
-                        return found, True
+                        verdict, diff = _idempotency_diff(
+                            found, endpoints=endpoints, prompt=prompt,
+                            purpose=purpose, options=options,
+                            role_target=resolved_role_target)
+                        if verdict == "differs":
+                            raise IdempotencyConflict(found.get("job_id"), diff)
+                        reused = copy.deepcopy(found)
+                        # 只加在返回副本上，不写盘：GET /jobs/<id> 不该出现它
+                        reused["idempotent_reused"] = (True if verdict == "same" else None)
+                        return reused, True
                     # 显式重试：旧 job 不删，打上 superseded_by，`_find_request`
                     # 之后只认新的那条（否则同一个 request_id 会指回旧记录）。
                     superseded = found
@@ -816,6 +1123,11 @@ class Engine:
                 "started_at": None,
                 "finished_at": None,
                 "order": list(endpoints),
+                # 只放非敏感开关；票据绝不进 job json（会落盘、会进日志）。
+                "options": {k: v for k, v in dict(options or {}).items()
+                            if k != "grant_token"},
+                "request_fingerprint": _request_fingerprint(
+                    endpoints, prompt, purpose, options, resolved_role_target),
                 "endpoints": {
                     name: {"status": "queued", "reply": None, "error": None,
                            "error_code": None, "exit_code": None,
@@ -829,7 +1141,19 @@ class Engine:
                     for name in endpoints
                 },
             }
+            # P3B：这次实际按哪个角色的配置选定了端点。顶层键而不是塞进 contract，
+            # 是因为 contract 的断言（T3-3）按 stage_config 的形状逐字比对。
+            if resolved_role_target:
+                job["resolved_role_target"] = str(resolved_role_target)
             # Durable acceptance precedes memory visibility and any dispatch.
+            token = (options or {}).get("grant_token")
+            if token:
+                self._grants[job_id] = str(token)
+            if contract:
+                job["contract"] = dict(contract)
+                if contract.get("attachments"):
+                    job["contract"]["attachments"] = self._store_attachments(
+                        job_id, contract["attachments"])
             self._persist(job, required=True)
             if superseded is not None:
                 superseded["superseded_by"] = job_id
@@ -864,6 +1188,24 @@ class Engine:
                 self.jobs.pop(job_id, None)
             else:
                 index += 1
+
+    def _store_attachments(self, job_id: str, attachments: list[dict]) -> list[dict]:
+        """把附件正文另存一份供下游/审计。**写失败只告警不拒收**：
+        正文已经随 `job["prompt"]` 落在 runs/jobs 里，这份只是冗余副本。"""
+        folder = self.root / "runs" / "payload" / "attachments" / str(job_id)
+        rows = []
+        for index, item in enumerate(attachments):
+            row = {k: item.get(k) for k in ("name", "bytes", "sha256")}
+            path = folder / f"{index:02d}-{item.get('name') or 'attachment'}.txt"
+            try:
+                folder.mkdir(parents=True, exist_ok=True)
+                path.write_text(str(item.get("content") or ""), encoding="utf-8")
+                row["path"] = str(path.relative_to(self.root))
+            except OSError as exc:
+                sys.stderr.write(f"[bridge] attachment store failed: {exc}\n")
+                row["path"] = None
+            rows.append(row)
+        return rows
 
     def _persist(self, job: dict, *, required=False) -> None:
         try:
@@ -1027,11 +1369,113 @@ class Engine:
             except Exception:                # noqa: BLE001 - 一个 job 崩了不许停worker
                 self._patch(job_id, status="failed", finished_at=now_iso())
 
+    def cancel_receipt(self, endpoint: str, job: dict, *,
+                       deadline: float | None = None) -> dict:
+        """取消回执：三项如实报告，不碰屏幕、不假报。
+
+        `target_operation_stopped` 只看账本：`attempt_consumed=True` 时**永远**只能说
+        "无法证明停止"——Bridge 看不到远端生成状态，宣称已停就是伪造证据。
+        `client_detached` 恒 None：本服务不跟踪 HTTP 客户端生命周期。
+        """
+        from . import submissions as sub
+
+        prompt = str(job.get("prompt") or "")
+        record = sub.read(str(endpoint), prompt, root=self.root) if prompt else None
+        view = (sub.normalize(record) or {}) if record else {}
+        consumed = bool((record or {}).get("attempt_consumed"))
+        entry = self._live.get((str(job.get("job_id")), str(endpoint))) or {}
+        proc = entry.get("proc")
+        pid = entry.get("pid")
+        stopped = False
+        reason = None
+        if proc is not None:
+            budget = 5.0 if deadline is None else max(
+                0.0, min(2.0, deadline - time.monotonic()))
+            try:
+                stopped = proc.wait(timeout=budget) is not None
+            except Exception:            # noqa: BLE001 - 超时/句柄失效都算"未能确认"
+                stopped = proc.poll() is not None
+            if not stopped:
+                reason = "local_driver_alive"
+        else:
+            reason = "pid_unknown"
+        return {"client_detached": None, "client_detached_basis": "not_tracked",
+                "local_driver_stopped": bool(stopped), "pid": pid,
+                "local_driver_reason": reason,
+                "target_operation_stopped": (not consumed) if record is not None else True,
+                "attempt_consumed": consumed,
+                "submission_state": view.get("v2_state")}
+
+    def cancel_job(self, job_id: str, reason: str = "") -> dict:
+        """三级协同取消：先落盘禁新派发 → 定点杀本地 worker → 三级状态如实回报。"""
+        job = self.get_job(job_id)
+        if job is None:
+            raise RequestError(404, "job_not_found", f"no such job: {job_id}")
+        if job.get("status") in TERMINAL_JOB_STATES and job.get("status") != "cancelled":
+            raise RequestError(409, "job_finished", f"job already {job['status']}")
+        # `_patch` 只认内存里的 job；从磁盘读出来的（例如服务重启后）必须先登记，
+        # 否则取消会"返回成功但一个字节都没写"。
+        with self._lock:
+            self.jobs.setdefault(job_id, job)
+
+        # ① 先落盘：从此刻起任何新派发都要看到它
+        self._patch(job_id, cancel_requested={"at": now_iso(),
+                                              "reason": str(reason or ""),
+                                              "source": "http"})
+        # ② 定点杀：只杀登记过的驱动进程树，绝不按进程名通杀。
+        # 预算贯穿整个循环：4 席各给 5s 的话总耗时能到 80s，而前端只等 15s。
+        deadline = time.monotonic() + CANCEL_BUDGET
+        receipts = {}
+        for name in list(job.get("order") or []):
+            entry = self._live.get((str(job_id), str(name))) or {}
+            pid = entry.get("pid")
+            if pid:
+                terminate_tree(pid, timeout=max(
+                    0.5, min(3.0, deadline - time.monotonic())))
+            receipts[str(name)] = self.cancel_receipt(str(name), job, deadline=deadline)
+
+        # ③ 三级状态：全部可确认才算 cancelled
+        values = list(receipts.values())
+        if any(v["local_driver_reason"] == "local_driver_alive" for v in values):
+            state = "cancel_failed"
+        elif values and all(v["local_driver_stopped"] and v["target_operation_stopped"]
+                            for v in values):
+            state = "cancelled"
+        elif all(not v["pid"] and v["target_operation_stopped"] for v in values) or not values:
+            state = "cancelled"
+        else:
+            state = "cancel_pending"
+
+        if state == "cancelled":
+            for name in list(job.get("order") or []):
+                entry = self.get_job(job_id) or {}
+                ep = (entry.get("endpoints") or {}).get(str(name)) or {}
+                if ep.get("status") in ("queued", "running"):
+                    self._patch(job_id, str(name), status="cancelled",
+                                error_code="cancelled", finished_at=now_iso())
+            self._patch(job_id, status="cancelled", finished_at=now_iso(),
+                        cancel_state=state, cancelled_at=now_iso())
+        else:
+            self._patch(job_id, cancel_state=state)
+        return {"ok": True, "job_id": job_id, "cancel_state": state,
+                "reason": str(reason or ""), "receipts": receipts}
+
     def stop(self) -> None:
         self._stopping.set()
         self._queue.put(None)
 
     def _patch(self, job_id: str, endpoint: str | None = None, **fields):
+        """唯一的写入口。**取消守卫也在这里**，因为只有这里持锁。
+
+        CARD-v010-FIX-AUDIT BUG-3：取消之后 worker 线程仍在跑，它收尾时会写
+        `done`/`failed`。四个收尾点（`_fail` / `_run_endpoint` 的 else /
+        `_run_job` 汇总 / `_loop` 兜底）各自"先读后写"都是非原子的，分别加
+        `if` 只能把窗口缩小；判定与写入必须在同一把锁里才算封住。
+
+        判据用 `cancel_requested`（`cancel_job` 第一步就落盘的那个键），而不是
+        `status == "cancelled"`：取消的落盘与终态写入之间本来就有窗口，
+        用前者才能覆盖"已请求取消、status 还没改"的中间态。
+        """
         with self._lock:
             job = self.jobs.get(job_id)
             if job is None:
@@ -1039,6 +1483,20 @@ class Engine:
             target = job["endpoints"].get(endpoint) if endpoint else job
             if target is None:
                 return None
+            new_status = fields.get("status")
+            if new_status is not None and new_status != "cancelled":
+                if target.get("status") == "cancelled":
+                    # 已经证实取消的，不许被任何收尾逻辑改写
+                    fields["status"] = "cancelled"
+                    fields["error_code"] = "cancelled"
+                elif job.get("cancel_requested"):
+                    # 已请求取消：worker 的 done/failed 一律降级为 cancelled，
+                    # 但不吞掉同时写入的 use/reply/error 等事实字段。
+                    fields["status"] = "cancelled"
+                    fields["error_code"] = "cancelled"
+                    if endpoint is None:
+                        fields.setdefault(
+                            "cancel_state", job.get("cancel_state") or "cancel_pending")
             target.update(fields)
             self._persist(job)
             return copy.deepcopy(target)
@@ -1116,6 +1574,15 @@ class Engine:
         statuses = [((job.get("endpoints") or {}).get(name) or {}).get("status")
                     for name in job.get("order") or []]
         quorum = self._quorum(job)
+        # CARD-v010-FIX-AUDIT BUG-3：取消过的一律收敛到 cancelled。
+        # `_patch` 的守卫本来也能兜住，但这里显式写出来，才能让"入队即取消"
+        # （每端在入口就被标 cancelled）不再依赖隐式行为，并把 cancel_state 落下来。
+        if (job.get("cancel_requested") or job.get("status") == "cancelled"
+                or any(status == "cancelled" for status in statuses)):
+            self._patch(job_id, status="cancelled", finished_at=now_iso(),
+                        quorum=quorum,
+                        cancel_state=job.get("cancel_state") or "cancel_pending")
+            return
         if statuses and all(status == "done" for status in statuses):
             final = "done"
         elif quorum["met"]:
@@ -1126,6 +1593,11 @@ class Engine:
 
     def _run_endpoint(self, job_id: str, endpoint: str) -> None:
         started = time.monotonic()
+        current = self.get_job(job_id) or {}
+        if current.get("cancel_requested"):
+            self._patch(job_id, endpoint, status="cancelled",
+                        error_code="cancelled", finished_at=now_iso())
+            return
         self._patch(job_id, endpoint, status="running", started_at=now_iso())
         job = self.get_job(job_id) or {}
         purpose = str(job.get("purpose") or "")
@@ -1183,7 +1655,10 @@ class Engine:
                                           str(choose.get("error_message") or "choose failed"),
                                           exit_code=choose.get("exit_code"), step="choose")
 
-                use = self._run_use(endpoint, prompt, purpose, deadline, job_id=job_id)
+                use = self._run_use(
+                    endpoint, prompt, purpose, deadline, job_id=job_id,
+                    grant_token=(self._grants.get(job_id) if job_id else None),
+                    idle_gate=(job.get("options") or {}).get("idle_gate"))
                 self._patch(job_id, endpoint, use=use, exit_code=use.get("exit_code"),
                             reply=use.get("reply"))
                 if not use.get("ok"):
@@ -1443,7 +1918,8 @@ class Engine:
         return out
 
     def _run_use(self, endpoint: str, prompt: str, purpose: str, deadline: float,
-                 job_id: str | None = None) -> dict:
+                 job_id: str | None = None, *, grant_token: str | None = None,
+                 idle_gate: bool | None = None) -> dict:
         script = self.root / "src" / "scripts" / f"{endpoint}.py"
         out = {"ok": False, "stage": None, "reply": None, "exit_code": None,
                "timeout": False, "elapsed": 0.0, "error_code": None,
@@ -1465,8 +1941,43 @@ class Engine:
             out.update(error_code="endpoint_timeout", error_message="insufficient outer reply budget")
             return out
         timeout = min(reply_budget + overhead, remaining)
-        cmd = [self.python, str(script), "use", prompt, "--purpose", purpose,
-               "--timeout", str(max(1, int(min(reply_budget, timeout))))]
+        # CARD-v010-P0P1 第 2 条：正文不再走 argv。长文/中文/引号/换行在 .cmd 拼接与
+        # 控制台代码页上都会被改写（#7 截断事故）。改成 UTF-8 文件 + SHA-256，
+        # 命令行只留路径；子进程读完先校验哈希，再进任何 UI 操作。
+        payload_dir = self.root / "runs" / "payload"
+        stem = f"{endpoint}-{os.getpid()}-{time.time_ns()}"
+        prompt_path = payload_dir / f"{stem}.json"
+        result_path = payload_dir / f"{stem}.result.json"
+        prompt_sha = hashlib.sha256(str(prompt).encode("utf-8")).hexdigest()
+        try:
+            payload_dir.mkdir(parents=True, exist_ok=True)
+            prompt_path.write_text(
+                json.dumps({"v": 1, "endpoint": endpoint, "prompt": prompt,
+                            "prompt_sha256": prompt_sha, "purpose": purpose,
+                            "job_id": str(job_id or "")},
+                           ensure_ascii=False),
+                encoding="utf-8")
+        except OSError as exc:
+            # CARD-v010-P3B：写不进去就必须停，**绝不回退 argv**。
+            # 回退会把多行/超长正文交给 Windows 命令行（约 32k 上限 + 引号/代码页
+            # 转义），截断后子进程仍然"收下并发送"，事后无法分辨发出去的是全本还是
+            # 残本。这里宁可整轮判 PRECHECK_REFUSED：没发出去是确定事实，
+            # 发出去半截是不可逆事故。
+            out.update(ok=False, sent=False, stage="precheck_refused",
+                       delivery_state="PRECHECK_REFUSED", attempt_consumed=False,
+                       reason="payload_file_write_failed",
+                       error_code="payload_file_write_failed",
+                       error_message=f"{type(exc).__name__}: {exc}")
+            return out
+        cmd = [self.python, str(script), "use",
+               "--payload-file", str(prompt_path),
+               "--payload-sha256", prompt_sha,
+               "--result-file", str(result_path)]
+        cmd += ["--purpose", purpose,
+                "--timeout", str(max(1, int(min(reply_budget, timeout))))]
+        if grant_token:
+            # 由 payload.preflight 摘走并写 BRIDGE_GRANT_TOKEN；不进日志。
+            cmd += ["--grant-token", str(grant_token)]
         # T2-1：把 job 身份下发给子进程，子进程据此写 L1 证据（`source="env"`）。
         # child_launch 的 env 是**整份替换**，所以必须带上 os.environ。
         record = self.get_job(job_id) if job_id else None
@@ -1475,6 +1986,17 @@ class Engine:
                "BRIDGE_REQUEST_ID": str((record or {}).get("request_id") or ""),
                "BRIDGE_PURPOSE": purpose,
                "BRIDGE_ENDPOINT": endpoint}
+        if idle_gate if idle_gate is not None else bool(self.config.get("idle_gate")):
+            env["BRIDGE_IDLE_GATE"] = "1"
+            try:
+                env["BRIDGE_IDLE_SECONDS"] = str(float(self.config.get("idle_seconds") or 2.0))
+            except (TypeError, ValueError):
+                env["BRIDGE_IDLE_SECONDS"] = "2.0"
+        # argv 只是镜像：即使某个端的外壳还没接 payload.run，env 也不会让它
+        # `unrecognized arguments` 直接报错（rollout 顺序的保险）。
+        env["BRIDGE_PAYLOAD_FILE"] = str(prompt_path)
+        env["BRIDGE_PAYLOAD_SHA256"] = prompt_sha
+        env["BRIDGE_RESULT_FILE"] = str(result_path)
         if int(self.config.get("endpoint_concurrency") or 1) > 1:
             # 三个开关一起下发：分段持锁 / 不抢前台 / 一端一窗
             # B26：exclusive 端由父进程整段持锁，子进程**不能**再按 section 抢锁，
@@ -1508,8 +2030,17 @@ class Engine:
         if job_id and _accepts_tick(self.runner):
             self._patch(job_id, endpoint, progress={"stage": "dispatching"})
             kwargs["tick"] = _tick
-        result = self.runner(cmd, **kwargs)
-        if job_id:
+        key = (str(job_id), str(endpoint)) if job_id else None
+        if key is not None and _accepts_kwarg(self.runner, "on_spawn"):
+            def _spawned(proc, _key=key):
+                self._live[_key] = {"proc": proc, "pid": getattr(proc, "pid", None),
+                                    "at": time.time()}
+            kwargs["on_spawn"] = _spawned
+        try:
+            result = self.runner(cmd, **kwargs)
+        finally:
+            if key is not None:
+                self._live.pop(key, None)
             # 留最后一帧当排障证据，然后删文件（下次同 job 不会读到旧帧）
             last = heartbeat.read(job_id, endpoint, root=self.root)
             if last:
@@ -1519,7 +2050,23 @@ class Engine:
                 heartbeat.path_for(job_id, endpoint, self.root).unlink()
             except OSError:
                 pass
-        parsed = parse_last_json(result.get("stdout") or "")
+        # CARD-v010-P0P1：result-file 是结构化真相，stdout 只是兜底。
+        # 子进程一旦接了 `payload.run`，这里就不再依赖"stdout 最后一行是单行 JSON"。
+        result_doc = None
+        try:
+            result_doc = json.loads(result_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            result_doc = None
+        try:
+            result_path.unlink()
+        except OSError:
+            pass
+        try:
+            prompt_path.unlink()
+        except OSError:
+            pass
+        parsed = (result_doc if isinstance(result_doc, dict)
+                  else parse_last_json(result.get("stdout") or ""))
         out.update({"exit_code": result.get("exit_code"),
                     "timeout": bool(result.get("timeout")),
                     "elapsed": result.get("elapsed"),
@@ -1546,10 +2093,20 @@ class Engine:
                    # B26：prompt_gone 的现场（当时有几条回复动作条 / 提问 / 读到第几次）
                    "misses", "copies", "prompts",
                    # B26：判据未开的端也留下"看到了什么"，攒够证据才能加 PROFILES
-                   "reject_facts")
+                   "reject_facts",
+                   # CARD-v010-P0P1：投递语义的新字段。只加这 6 个，不一次性
+                   # 把 20 多个键灌进 job（job 记录会膨胀几十倍）。
+                   "delivery_state", "attempt_consumed", "draft_cleaned",
+                   "evidence_path", "link_target_unverifiable", "checks")
                   if parsed.get(key) is not None}
         if detail:
             out["detail"] = detail
+        # 第 7 条：`sent` / `submission` / `url` / `mode` 以前在这里被丢掉，
+        # 事后审计只剩"失败"两个字。这四个是"到底发没发"的最小事实集，提到顶层。
+        for key in ("sent", "submission", "url", "mode", "delivery_state",
+                    "attempt_consumed", "draft_cleaned"):
+            if parsed.get(key) is not None:
+                out[key] = parsed[key]
         if result.get("exit_code") != 0 or not parsed.get("ok"):
             out.update(error_code=str(parsed.get("stage") or "use_failed"),
                        error_message=truncate(parsed.get("hint") or parsed.get("error")
@@ -1559,6 +2116,100 @@ class Engine:
         return out
 
     # ------------------------------------------------------------ 工作流
+    def _guard_round(self, data, before, *, card, now, apply, table) -> list:
+        """对每张卡跑一次反静默退出判定。**默认只报告**，`apply=True` 才尝试迁移。"""
+        from . import workflow as wf
+
+        cards = wf._cards(data, create=False)
+        names = [card] if card else list(cards)
+        rows = []
+        for name in names:
+            after = {"workflow": {"cards": {name: wf._record(cards.get(name) or {})}}}
+            verdict = wf.guard_coordinator_exit(before, after, card=name, now=now)
+            row = {"card": name, "ok": bool(verdict.get("ok")),
+                   "reason": verdict.get("reason"), "from": verdict.get("from"),
+                   "to": verdict.get("to"), "applied": False, "applied_to": None,
+                   "suggest": verdict.get("suggest"), "detail": None}
+            if not row["ok"]:
+                if row["from"] == row["to"] == "stuck":
+                    row["detail"] = "stale_card"
+                if apply:
+                    moved = wf.apply_guard_locked(data, name, reason=str(row["reason"]),
+                                                  table=table, now=now)
+                    row["applied"] = bool(moved.get("applied"))
+                    row["applied_to"] = moved.get("to") if row["applied"] else None
+                    row["detail"] = moved.get("detail") or row["detail"]
+            rows.append(row)
+        return rows
+
+    def workflow_tick(self, payload: dict) -> dict:
+        """单锁内跑"计时器 → guard → 一次写"（`progress.locked` 不可重入）。"""
+        from . import workflow as wf
+
+        name = str(payload.get("file") or "progress.json")
+        path = self.workflow_path(name)
+        now = payload.get("now")
+        if now is not None and wf._parse_iso(now) is None:
+            raise RequestError(400, "bad_now", "now must be an ISO timestamp")
+        card = payload.get("card")
+        card = str(card).strip() if card is not None else None
+        before = payload.get("before")
+        if before is not None and not isinstance(before, dict):
+            raise RequestError(400, "bad_before", "before must be an object")
+        apply_guard = bool(payload.get("apply_guard"))
+        dry_run = bool(payload.get("dry_run"))
+        table = self._transitions()
+
+        with self._workflow_lock, progress.locked(file_path=path):
+            snapshot = self.workflow_read(name)
+            if not snapshot.get("exists"):
+                return {"file": name, "exists": False, "now": wf.beijing_now(),
+                        "checked": 0, "moved": [], "skipped": [], "guard": [],
+                        "wrote": False, "revision": 0, "state_sha256": None}
+            data = snapshot["data"]
+            out = wf.check_timers_locked(data, table=table, now=now)
+            guard = (self._guard_round(data, before, card=card, now=now,
+                                       apply=apply_guard, table=table)
+                     if before is not None else [])
+            applied = any(item.get("applied") for item in guard)
+            wrote = bool(out["moved"] or applied)
+            if wrote and not dry_run:
+                wf.stamp_workflow(data)
+                atomic_write_json(path, data)
+        node = data.get("workflow") if isinstance(data.get("workflow"), dict) else {}
+        return {"file": name, "exists": True, "now": out["now"],
+                "checked": out["checked"], "moved": out["moved"],
+                "skipped": out["skipped"], "guard": guard,
+                "wrote": bool(wrote and not dry_run),
+                "revision": int(node.get("revision") or 0),
+                "state_sha256": node.get("state_sha256")}
+
+    def resolve_submission(self, payload: dict) -> dict:
+        """POST /submissions/resolve：未知投递裁决（CARD-v010-P1B-P2）。"""
+        from . import submissions as sub
+
+        endpoint = str(payload.get("endpoint") or "").strip().lower()
+        sha = str(payload.get("prompt_sha256") or "").strip().lower()
+        verdict = str(payload.get("verdict") or "").strip()
+        if not endpoint or not sha:
+            raise RequestError(400, "bad_args", "endpoint / prompt_sha256 required")
+        try:
+            return sub.resolve_unknown(
+                endpoint, sha, verdict,
+                reason=str(payload.get("reason") or ""),
+                evidence_ref=payload.get("evidence_ref"),
+                root=self.root, actor=str(payload.get("actor") or ""))
+        except sub.ResolutionRejected as exc:
+            raise RequestError(exc.status, exc.reason, exc.hint) from exc
+        except TimeoutError as exc:
+            # CARD-v010-FIX-AUDIT BUG-5：账本锁 5s 拿不到是可重试冲突，
+            # 不是服务端故障。以前它会落到 do_POST 的兜底变成 500。
+            raise RequestError(409, "submission_lock_busy",
+                               "提交账本正被另一个进程持有，稍后重试",
+                               {"retry_after": 1}) from exc
+        except ValueError as exc:
+            raise RequestError(400, "bad_sha256", str(exc)) from exc
+
     def workflow_path(self, name: str) -> Path:
         if name not in WORKFLOW_FILES:
             raise RequestError(400, "bad_file",
@@ -1570,7 +2221,8 @@ class Engine:
         try:
             raw = path.read_bytes()
         except FileNotFoundError:
-            return {"file": name, "exists": False, "data": {}, "mtime": None}
+            return {"file": name, "exists": False, "data": {}, "mtime": None,
+                    "revision": 0, "state_sha256": None}
         except OSError as exc:
             raise RequestError(500, "workflow_unreadable", str(exc)) from exc
         if raw.startswith(b"\xef\xbb\xbf"):
@@ -1581,14 +2233,26 @@ class Engine:
             raise RequestError(500, "workflow_bad_json", str(exc)) from exc
         if not isinstance(data, dict):
             raise RequestError(500, "workflow_bad_json", "top level is not an object")
+        node = data.get("workflow") if isinstance(data.get("workflow"), dict) else {}
         return {"file": name, "exists": True, "data": data,
                 "mtime": datetime.fromtimestamp(path.stat().st_mtime, timezone.utc)
-                .isoformat(timespec="seconds")}
+                .isoformat(timespec="seconds"),
+                "revision": int(node.get("revision") or 0),
+                "state_sha256": (node.get("state_sha256")
+                                 if isinstance(node.get("state_sha256"), str) else None)}
 
     def _transitions(self) -> dict:
+        # CARD-v010-P0P1：`docs/workflow/` 被 gitignore，干净检出没有这个文件。
+        # 以前这里 read_json 拿到 None 就 500，等于"克隆下来服务直接不可用"。
+        # 统一走 workflow.load_definition()：文件缺失回内置默认表，文件坏掉仍然报错。
+        from . import workflow as wf
+
         path = self.root / "docs" / "workflow" / "workflow.json"
-        data = read_json(path)
-        transitions = (data or {}).get("transitions")
+        try:
+            definition = wf.load_definition(path)
+        except wf.DefinitionError as exc:
+            raise RequestError(500, "workflow_config_error", str(exc)) from exc
+        transitions = definition.get("transitions")
         if not isinstance(transitions, dict):
             raise RequestError(500, "workflow_config_error",
                                f"cannot read transitions from {path}")
@@ -1626,6 +2290,21 @@ class Engine:
                 node = data.get("workflow")
                 if not isinstance(node, dict):
                     node = {}
+                # CARD-v010-P3：锁内的原子版本校验。读盘刚拿到 current，中间没有 await，
+                # 所以这是真正的 CAS，而不是"先 GET 再 POST"的两段式。
+                expected = payload.get("expected_revision")
+                if expected is not None:
+                    if (not isinstance(expected, int) or isinstance(expected, bool)
+                            or expected < 0):
+                        raise RequestError(400, "bad_expected_revision",
+                                           "expected_revision must be a non-negative int")
+                    current_rev = int(node.get("revision") or 0)
+                    if current_rev != expected:
+                        raise RequestError(
+                            409, "revision_mismatch",
+                            f"revision is {current_rev}, expected {expected}",
+                            {"current_revision": current_rev,
+                             "state_sha256": node.get("state_sha256")})
                 cards = node.get("cards")
                 if not isinstance(cards, dict):
                     cards = {}
@@ -1645,9 +2324,12 @@ class Engine:
                     node["cards"] = cards
                     data["workflow"] = node
                     wf.sync_top(data, card, "draft", now)
+                    wf.stamp_workflow(data)
                     atomic_write_json(path, data)
                     return {"file": name, "card": card, "from": None, "to": "draft",
-                            "created": True, "state": "draft"}
+                            "created": True, "state": "draft",
+                            "revision": int(node.get("revision") or 0),
+                            "state_sha256": node.get("state_sha256")}
 
                 current = str(record.get("state") or "")
                 if current == target:
@@ -1685,6 +2367,7 @@ class Engine:
                 data["workflow"] = node
                 # B26：顶层 status 与卡片一起改，否则 autopush 还在推已结束的卡。
                 wf.sync_top(data, card, target, now)
+                wf.stamp_workflow(data)
                 atomic_write_json(path, data)
 
                 check = self.workflow_read(name)["data"]
@@ -1692,7 +2375,9 @@ class Engine:
                        .get(card) or {}).get("state")
                 if got == target:
                     return {"file": name, "card": card, "from": current, "to": target,
-                            "created": False, "state": target, "repair_card": repair}
+                            "created": False, "state": target, "repair_card": repair,
+                            "revision": int(node.get("revision") or 0),
+                            "state_sha256": node.get("state_sha256")}
                 last_error = RequestError(500, "write_conflict",
                                           "concurrent writer overwrote the transition")
             raise last_error or RequestError(500, "write_conflict", "workflow write failed")
@@ -1760,9 +2445,13 @@ class BridgeHandler(BaseHTTPRequestHandler):
             self.send_header(key, value)
         self.end_headers()
 
-    def _error(self, status: int, code: str, message: str) -> None:
+    def _error(self, status: int, code: str, message: str,
+               detail: dict | None = None) -> None:
         extra = {"WWW-Authenticate": "Bearer"} if status == 401 else None
-        self._send_json(status, {"ok": False, "error": code, "message": message}, extra)
+        body = {"ok": False, "error": code, "message": message}
+        if detail:
+            body.update(detail)
+        self._send_json(status, body, extra)
 
     def _guard(self) -> bool:
         """Host / Origin / token 三件事都在这里判。返回 False 表示已经回过错。"""
@@ -1844,6 +2533,10 @@ class BridgeHandler(BaseHTTPRequestHandler):
             self._route_get(route, parts)
         except RequestError as exc:
             self._error(exc.status, exc.code, exc.message)
+        except TimeoutError as exc:
+            # 任何持锁路由（/ask、/workflow、/workflow/tick …）遇到锁竞争
+            # 都应得到"可重试"，而不是 500。
+            self._error(409, "lock_busy", f"等锁超时：{exc}", {"retry_after": 1})
         except Exception as exc:                   # noqa: BLE001 - 兜底，不让线程裸崩
             self._error(500, "internal_error", f"{type(exc).__name__}: {exc}")
 
@@ -1889,7 +2582,23 @@ class BridgeHandler(BaseHTTPRequestHandler):
                 job, duplicate = self.engine.request_ask(payload)
                 self._send_json(202, {"ok": True, "job_id": job["job_id"],
                                       "status": job["status"], "duplicate": duplicate,
+                                      "idempotent_reused": job.get("idempotent_reused"),
                                       "created_at": job["created_at"]})
+                return
+            if route.startswith("/jobs/") and route.endswith("/cancel"):
+                job_id = unquote(route[len("/jobs/"):-len("/cancel")]).strip("/")
+                if not JOB_ID_RE.match(job_id):
+                    raise RequestError(400, "bad_job_id", f"invalid job id: {job_id}")
+                result = self.engine.cancel_job(job_id, str(payload.get("reason") or ""))
+                self._send_json(200, {"ok": True, **result})
+                return
+            if route == "/submissions/resolve":
+                result = self.engine.resolve_submission(payload)
+                self._send_json(200, {"ok": True, **result})
+                return
+            if route == "/workflow/tick":
+                result = self.engine.workflow_tick(payload)
+                self._send_json(200, {"ok": True, **result})
                 return
             if route == "/workflow":
                 result = self.engine.workflow_move(payload)
@@ -1906,6 +2615,10 @@ class BridgeHandler(BaseHTTPRequestHandler):
             self._error(404, "not_found", f"no route: {route}")
         except RequestError as exc:
             self._error(exc.status, exc.code, exc.message)
+        except TimeoutError as exc:
+            # 任何持锁路由（/ask、/workflow、/workflow/tick …）遇到锁竞争
+            # 都应得到"可重试"，而不是 500。
+            self._error(409, "lock_busy", f"等锁超时：{exc}", {"retry_after": 1})
         except Exception as exc:                   # noqa: BLE001 - 兜底，不让线程裸崩
             self._error(500, "internal_error", f"{type(exc).__name__}: {exc}")
 

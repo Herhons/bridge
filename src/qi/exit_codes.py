@@ -49,6 +49,10 @@ UI_LOCK_BUSY = 8      # CARD-09f：runs\ui.lock 被另一个自动化占着，�
 CONCURRENT_UI = 9     # CARD-09f：发送中途前台标签/文档被换走，已清草稿退出
 #: B15：tabs 模式下认不出"哪个标签是我的"。**fail-closed**，不猜一个就往上写字。
 TAB_UNBOUND = 10
+#: CARD-v010-P0P1 第 2/3 条：前置守卫拒绝（**一个字节都没进 UI**，不消耗配额）
+PRECHECK_REFUSED = 11
+#: CARD-v010-P0P1 第 4 条：写进输入框但读回不一致，已按条件清稿、**没有点击**
+STAGED_UNSENT = 12
 
 # stage -> 退出码。只收「卡面上写死了的」和「新增的」，
 # 收得太全反而会变成第二份真相（各脚本的 stage 名本来就不统一）。
@@ -107,6 +111,9 @@ STAGE_CODES: dict[str, int] = {
     "input_not_landed": FAIL,     # 粘贴/键入没落地：编辑器里始终没有这段文字
     "submit_not_landed": FAIL,    # 点了发送，限定时间内没有任何落点证据
     "newchat_not_landed": FAIL,   # 点了「发起新对话」，但页面仍是旧会话
+    # CARD-v010-P0P1：两道新闸门各自占码，方便调用方区分"没发"和"写歪了"
+    "precheck_refused": PRECHECK_REFUSED,   # 守卫拒绝：没进 UI、没消耗配额
+    "staged_unsent": STAGED_UNSENT,         # 写进去了但读回不一致：已清稿、未点击
 }
 
 # 给 docs 与测试用的一行说明
@@ -121,6 +128,8 @@ LABELS: dict[int, str] = {
     WINDOW_MINIMIZED: "窗口最小化且恢复失败",
     UI_LOCK_BUSY: "UI 前台锁被另一个自动化占着（runs\\ui.lock），等超时",
     CONCURRENT_UI: "发送中途前台标签/文档被换走，已清草稿退出",
+    PRECHECK_REFUSED: "前置守卫拒绝：一个字节都没进 UI，不消耗发送配额",
+    STAGED_UNSENT: "写进输入框但读回不一致，已按条件清稿、未点击发送",
 }
 
 

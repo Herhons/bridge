@@ -863,3 +863,171 @@ def gate_or_exit(endpoint: str, purpose: str, *, reread=None, out=print,
                     "readback": result["receipt"].get("readback"),
                     "drift": result["drift"]}, ensure_ascii=False))
     return None
+
+
+# ---------------------------------------------------------------- 一次性作用域授权票据
+#
+# CARD-v010-P0P1 第 6 条：用户正在用电脑时想放行**一次**发送，不能再靠"关掉整道
+# 门禁"。票据是**单次即焚**的作用域凭证：绑定 target + action（可选绑定载荷哈希），
+# 有 TTL，用一次就置 used=True。
+#
+# 为什么放在这个文件：`file_lock` / `_root` / `utc_now` / `parse_utc` / `FUTURE_SKEW`
+# 都在这儿，而且回执本来就是"一次性 + TTL + 消费"的同一套语义。
+
+GRANT_TTL = 120.0
+GRANT_FIELDS = ("grant_id", "target", "action", "payload_sha256", "created_at",
+                "expires_at", "used", "used_at", "reason", "pid")
+
+
+def grant_dir(*, root=None) -> Path:
+    return _root(root) / "runs" / "grants"
+
+
+def grant_path(grant_id, *, root=None) -> Path:
+    name = str(grant_id or "").strip().lower()
+    if not _SAFE.match(name):
+        raise ValueError(f"票据 id 不合法：{grant_id!r}（只允许小写字母/数字/下划线）")
+    return grant_dir(root=root) / f"{name}.json"
+
+
+def read_grant(grant_id, *, root=None) -> dict | None:
+    try:
+        value = json.loads(grant_path(grant_id, root=root).read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def issue_grant(*, target: str, action: str = "use", payload_sha256: str | None = None,
+                ttl: float = GRANT_TTL, reason: str = "", root=None,
+                now: float | None = None) -> dict:
+    """签发一张单次票据。返回 {"ok": True, "grant_id": ..., "expires_at": ...}。"""
+    import uuid
+
+    target_name = str(target or "").strip().lower()
+    action_name = str(action or "use").strip().lower()
+    if not _SAFE.match(target_name):
+        raise ValueError(f"target 不合法：{target!r}")
+    if not _SAFE.match(action_name):
+        raise ValueError(f"action 不合法：{action!r}")
+    ttl_value = max(1.0, float(ttl))
+    stamp = now if now is not None else time.time()
+    grant_id = uuid.uuid4().hex[:16]
+    record = {
+        "grant_id": grant_id,
+        "target": target_name,
+        "action": action_name,
+        "payload_sha256": (str(payload_sha256).strip().lower()
+                           if payload_sha256 else None),
+        "created_at": utc_now(),
+        "expires_at": datetime.fromtimestamp(
+            stamp + ttl_value, timezone.utc).isoformat(timespec="microseconds"),
+        "used": False,
+        "used_at": None,
+        "reason": str(reason or ""),
+        "pid": os.getpid(),
+    }
+    path = grant_path(grant_id, root=root)
+    with file_lock(path.with_suffix(".lock")):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(path.name + f".{os.getpid()}.tmp")
+        try:
+            with tmp.open("w", encoding="utf-8") as handle:
+                json.dump(record, handle, ensure_ascii=False)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(tmp, path)
+        finally:
+            tmp.unlink(missing_ok=True)
+    return {"ok": True, "grant_id": grant_id, "expires_at": record["expires_at"],
+            "target": target_name, "action": action_name, "ttl": ttl_value}
+
+
+def check_grant(grant_id, *, target: str = "", action: str = "",
+                payload_sha256: str | None = None, root=None,
+                now: float | None = None) -> dict:
+    """校验票据：存在、未用、未过期、作用域匹配。**只读**，不置 used。"""
+    record = read_grant(grant_id, root=root)
+    if record is None:
+        return {"ok": False, "reason": "grant_missing",
+                "hint": f"找不到票据 {grant_id}"}
+    if record.get("used"):
+        return {"ok": False, "reason": "grant_used",
+                "hint": "这张票据已经用过了（单次即焚）", "grant": record}
+    expires = parse_utc(record.get("expires_at"))
+    stamp = now if now is not None else time.time()
+    if expires is None:
+        return {"ok": False, "reason": "grant_bad_expiry", "grant": record}
+    if stamp > expires.timestamp() + FUTURE_SKEW:
+        return {"ok": False, "reason": "grant_expired",
+                "hint": f"票据已于 {record.get('expires_at')} 过期", "grant": record}
+    if target and str(record.get("target") or "") != str(target).strip().lower():
+        return {"ok": False, "reason": "grant_target_mismatch",
+                "hint": f"票据是给 {record.get('target')} 的，本次是 {target}",
+                "grant": record}
+    if action and str(record.get("action") or "") != str(action).strip().lower():
+        return {"ok": False, "reason": "grant_action_mismatch", "grant": record}
+    bound = record.get("payload_sha256")
+    if bound:
+        if not payload_sha256:
+            return {"ok": False, "reason": "grant_payload_required",
+                    "hint": "票据绑定了载荷哈希，本次调用没提供", "grant": record}
+        if str(bound).lower() != str(payload_sha256).strip().lower():
+            return {"ok": False, "reason": "grant_payload_mismatch",
+                    "hint": "本次正文与票据绑定的哈希不一致", "grant": record}
+    return {"ok": True, "reason": None, "grant": record}
+
+
+def consume_grant(grant_id, *, target: str = "", action: str = "",
+                  payload_sha256: str | None = None, root=None,
+                  now: float | None = None) -> dict:
+    """原子核销：校验通过才置 used=True。单次消费即焚。"""
+    verdict = check_grant(grant_id, target=target, action=action,
+                          payload_sha256=payload_sha256, root=root, now=now)
+    if not verdict.get("ok"):
+        return verdict
+    path = grant_path(grant_id, root=root)
+    stamp = now if now is not None else time.time()
+    with file_lock(path.with_suffix(".lock")):
+        record = read_grant(grant_id, root=root)
+        if record is None:
+            return {"ok": False, "reason": "grant_missing"}
+        if record.get("used"):
+            return {"ok": False, "reason": "grant_used"}
+        record["used"] = True
+        record["used_at"] = utc_now()
+        tmp = path.with_name(path.name + f".{os.getpid()}.tmp")
+        try:
+            with tmp.open("w", encoding="utf-8") as handle:
+                json.dump(record, handle, ensure_ascii=False)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(tmp, path)
+        finally:
+            tmp.unlink(missing_ok=True)
+    return {"ok": True, "grant_id": grant_id, "used_at": record["used_at"]}
+
+
+def list_grants(*, root=None, include_used: bool = False,
+                now: float | None = None) -> list[dict]:
+    """只读列出票据（默认只列未过期且未使用的）。"""
+    folder = grant_dir(root=root)
+    stamp = now if now is not None else time.time()
+    out: list[dict] = []
+    if not folder.is_dir():
+        return out
+    for path in sorted(folder.glob("*.json")):
+        try:
+            record = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(record, dict):
+            continue
+        expires = parse_utc(record.get("expires_at"))
+        expired = expires is None or stamp > expires.timestamp() + FUTURE_SKEW
+        if not include_used and (record.get("used") or expired):
+            continue
+        out.append({**record, "expired": expired})
+    return out
