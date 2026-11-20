@@ -95,7 +95,8 @@ def load_state() -> dict:
                  "conversation_rounds": 0, "total_rounds": 0,
                  "next_gemini_profile": "test", "force_council": False,
                  "last_round": 0, "last_task_id": "", "last_decision": "",
-                 "last_executor": "", "last_rc": 0, "last_error_tail": ""},
+                 "last_executor": "", "last_rc": 0, "last_reply": "",
+                 "last_error_tail": ""},
     }
     if path.exists():
         try:
@@ -167,8 +168,11 @@ def parse_instruction(text: str) -> dict:
             result["task_id"] = value[:120]
         elif key == "PAYLOAD":
             end = matches[idx + 1].start() if idx + 1 < len(matches) else len(text)
-            result["payload"] = (
-                value if value else text[match.end(2):end].strip("\r\n ")
+            # Inline text after "PAYLOAD:" plus every remaining line up to the
+            # next recognized key -> one multiline payload.
+            tail = text[match.end(2):end].strip("\r\n ")
+            result["payload"] = "\n".join(
+                part for part in (value, tail) if part
             )
     return result
 
@@ -353,10 +357,12 @@ def build_prompt(kickoff: str, state: dict, round_no: int, stats: str) -> str:
             "上一轮结果（不要再下发相同任务）：\n"
             "last_round=%s last_task_id=%s last_decision=%s "
             "last_executor=%s last_rc=%s\n"
+            "last_reply=%s\n"
             "last_error_tail(<=15行)：\n%s"
             % (meta.get("last_round", round_no - 1),
                meta.get("last_task_id", ""), meta.get("last_decision", ""),
-               meta.get("last_executor", ""), meta.get("last_rc", 0), tail)
+               meta.get("last_executor", ""), meta.get("last_rc", 0),
+               str(meta.get("last_reply") or "")[:350], tail)
         )
     return cap_text(
         "【过夜自迭代轮次 %d｜%s@%s】\n%s\n\n门禁与状态：\n%s\n"
@@ -460,6 +466,7 @@ def main() -> int:
             detail = ""
             executor = ""
             last_rc = 0
+            last_reply = ""
 
             if decision in ("DISPATCH_OPENCODE", "DISPATCH_WORKBUDDY"):
                 wanted = "opencode" if decision.endswith("OPENCODE") else "workbuddy"
@@ -482,8 +489,16 @@ def main() -> int:
                         detail += " | fallback %s ok=%s" % (
                             other, bool(fallback.get("ok"))
                         )
+                        if last_rc == 0:
+                            last_reply = str(
+                                fallback.get("reply") or fallback.get("raw") or ""
+                            )[:350]
                     if pick_executor(state) is None:
                         reason = "BOTH_EXECUTORS_COOLED"
+                elif last_rc == 0:
+                    # Successful dispatch: keep the executor's own words for
+                    # next round's summary instead of burying them under gates.
+                    last_reply = text[:350]
 
             elif decision == "APPLY_PATCH":
                 ok, detail = apply_patch(instr["payload"], rdir)
@@ -537,6 +552,7 @@ def main() -> int:
                 "last_decision": decision,
                 "last_executor": executor,
                 "last_rc": last_rc,
+                "last_reply": last_reply[:350],
                 "last_error_tail": "\n".join(tail_lines)[:600],
             })
             log_friction(
