@@ -19,6 +19,7 @@ Fixes & capabilities in v0.2.3:
 from __future__ import annotations
 
 import argparse
+import ctypes
 import json
 import os
 import re
@@ -66,6 +67,114 @@ EXIT_CODES = {
     "tier_unconfirmed": 5,
     "duplicate": 6,
 }
+
+FILE_DIALOG_CLASS = "#32770"
+FILE_NAME_CONTROL_ID = 1148
+OPEN_BUTTON_CONTROL_ID = 1
+WM_SETTEXT = 0x000C
+BM_CLICK = 0x00F5
+
+
+def _win32_user32():
+    """Return user32 with fixed argtypes; never activates or focuses a window."""
+    if os.name != "nt":
+        raise UIAError("PLATFORM_UNSUPPORTED", "Native file dialog requires Windows")
+    u32 = ctypes.windll.user32
+    try:
+        u32.FindWindowExW.argtypes = [
+            ctypes.c_void_p, ctypes.c_void_p,
+            ctypes.c_wchar_p, ctypes.c_wchar_p,
+        ]
+        u32.FindWindowExW.restype = ctypes.c_void_p
+        u32.GetDlgItem.argtypes = [ctypes.c_void_p, ctypes.c_int]
+        u32.GetDlgItem.restype = ctypes.c_void_p
+        u32.GetWindowThreadProcessId.argtypes = [
+            ctypes.c_void_p, ctypes.POINTER(ctypes.c_ulong),
+        ]
+        u32.GetWindowThreadProcessId.restype = ctypes.c_ulong
+        u32.IsWindow.argtypes = [ctypes.c_void_p]
+        u32.IsWindow.restype = ctypes.c_int
+    except AttributeError:
+        pass
+    return u32
+
+
+def _window_pid(user32, hwnd: int) -> int:
+    pid = ctypes.c_ulong(0)
+    user32.GetWindowThreadProcessId(int(hwnd), ctypes.byref(pid))
+    return int(pid.value)
+
+
+def find_file_dialog_window(
+    owner_pid: int,
+    *,
+    timeout: float = 10.0,
+    poll: float = 0.15,
+    user32=None,
+) -> int:
+    """Find a top-level #32770 window owned by *owner_pid* without focusing it."""
+    u32 = user32 or _win32_user32()
+    deadline = time.monotonic() + float(timeout)
+    while time.monotonic() < deadline:
+        hwnd = 0
+        while True:
+            hwnd = u32.FindWindowExW(None, hwnd, FILE_DIALOG_CLASS, None)
+            if not hwnd:
+                break
+            if int(owner_pid) <= 0 or _window_pid(u32, hwnd) == int(owner_pid):
+                return int(hwnd)
+        time.sleep(poll)
+    raise UIAError(
+        "DIALOG_NOT_FOUND",
+        "#32770 dialog for pid %s did not appear within %.1fs" % (owner_pid, timeout),
+    )
+
+
+def _dialog_edit_hwnd(user32, dialog_hwnd: int) -> int:
+    direct = user32.GetDlgItem(dialog_hwnd, FILE_NAME_CONTROL_ID)
+    if direct:
+        return int(direct)
+    combo_ex = user32.FindWindowExW(dialog_hwnd, 0, "ComboBoxEx32", None)
+    combo = user32.FindWindowExW(combo_ex or dialog_hwnd, 0, "ComboBox", None)
+    edit = user32.FindWindowExW(combo or combo_ex or dialog_hwnd, 0, "Edit", None)
+    return int(edit) if edit else 0
+
+
+def fill_windows_file_dialog(
+    paths: list[str],
+    *,
+    owner_pid: int,
+    timeout: float = 10.0,
+    poll: float = 0.15,
+    user32=None,
+) -> str:
+    """Fill a native #32770 Open dialog and press its Open button, headless.
+
+    Uses targeted WM_SETTEXT / BM_CLICK messages only: no global clipboard,
+    no SetForegroundWindow, no physical keyboard, no focus stealing.
+    """
+    u32 = user32 or _win32_user32()
+    dialog_hwnd = find_file_dialog_window(
+        owner_pid, timeout=timeout, poll=poll, user32=u32
+    )
+    absolute = [os.path.abspath(os.path.expanduser(str(p))) for p in paths]
+    filename_text = " ".join('"%s"' % p for p in absolute)
+
+    edit_hwnd = _dialog_edit_hwnd(u32, dialog_hwnd)
+    if not edit_hwnd:
+        raise UIAError("TARGET_NOT_FOUND", "File name edit control (ID 1148) not found")
+    u32.SendMessageW(edit_hwnd, WM_SETTEXT, 0, ctypes.c_wchar_p(filename_text))
+
+    button_hwnd = u32.GetDlgItem(dialog_hwnd, OPEN_BUTTON_CONTROL_ID)
+    if not button_hwnd:
+        raise UIAError("TARGET_NOT_FOUND", "Open button (ID 1) not found")
+    u32.SendMessageW(int(button_hwnd), BM_CLICK, 0, 0)
+
+    deadline = time.monotonic() + float(timeout)
+    while time.monotonic() < deadline and u32.IsWindow(dialog_hwnd):
+        time.sleep(poll)
+    return "#32770:file_dialog"
+
 
 DEFAULT_EXCLUDE_COMPOSER_NAMES = (
     "地址和搜索栏",
@@ -561,6 +670,59 @@ class EndpointDriver:
             snap = self.take_snap(win.hwnd)
         return methods
 
+    def attach_files(
+        self,
+        win: WindowInfo,
+        snap: Snapshot,
+        paths: list[str],
+        *,
+        headed: bool,
+    ) -> list[str]:
+        """Public attachment hook grouped around one native file dialog.
+
+        Endpoints without an ``attach_button`` selector fail fast with a clear
+        NotImplementedError. Stubbed dialog_fn keeps the legacy per-file path
+        for offline tests; production uses the headless #32770 primitive once
+        for the whole quoted multi-file argument.
+        """
+        if not paths:
+            return []
+        selectors = self.cfg.get("selectors") or {}
+        if not selectors.get("attach_button"):
+            raise NotImplementedError(
+                "endpoint %s has no attach_button selector; --attach is not supported"
+                % self.name
+            )
+        if self._dialog_fn is not None:
+            return self._attach_files(win, snap, paths, headed=headed)
+
+        btn = self._find_attach_control(snap, "attach_button")
+        if btn is None:
+            raise UIAError("TARGET_NOT_FOUND", f"No attach_button found for {self.name}")
+        self._click_or_fallback(
+            btn, win.hwnd, self.cfg.get("templates", {}).get("attach_button"),
+            headed=headed,
+        )
+        self._sleep(0.35)
+
+        menu_cfg = selectors.get("attach_menu_item") or {}
+        if menu_cfg:
+            snap_m = self.take_snap(win.hwnd)
+            item = self._find_attach_control(snap_m, "attach_menu_item")
+            if item is None:
+                self._send_esc()
+                raise UIAError("TARGET_NOT_FOUND", f"No attach_menu_item found for {self.name}")
+            self._click_or_fallback(item, win.hwnd, None, headed=headed)
+            self._sleep(0.35)
+
+        method = fill_windows_file_dialog(
+            paths,
+            owner_pid=int(getattr(win, "pid", 0) or 0),
+            timeout=float(self.cfg.get("attach_dialog_timeout", 10.0)),
+        )
+        self._sleep(float(self.cfg.get("attach_wait_seconds", 1.0)))
+        return [method]
+
     def _find_new_chat_button(self, snap: Snapshot) -> UINode | None:
         sel = self.cfg.get("selectors", {}).get("new_chat", {})
         names = sel.get("names")
@@ -838,6 +1000,11 @@ class EndpointDriver:
         for ap in attach_paths:
             if not Path(ap).is_file():
                 return {"ok": False, "endpoint": self.name, "error": "missing_resource", "message": f"Attachment not found: {ap}", "reply": ""}
+        if attach_paths and not ((self.cfg.get("selectors") or {}).get("attach_button")):
+            raise NotImplementedError(
+                "endpoint %s has no attach_button selector; --attach is not supported"
+                % self.name
+            )
 
         clean_prompt = self.prepare_prompt(prompt)
         if not clean_prompt.strip():
@@ -915,7 +1082,7 @@ class EndpointDriver:
                         warnings.append(f"model_switch_failed:{model_switch_info.get('reason')}")
 
                 if attach_paths:
-                    attach_methods = self._attach_files(win, before_snap, attach_paths, headed=use_headed)
+                    attach_methods = self.attach_files(win, before_snap, attach_paths, headed=use_headed)
                     before_snap = self.take_snap(win.hwnd)
 
                 composer = self._find_composer(before_snap)

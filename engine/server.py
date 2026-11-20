@@ -7,6 +7,7 @@ Shares the exact same endpoint registry and EndpointDriver execution path as
 from __future__ import annotations
 
 import json
+import os
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Callable
@@ -22,6 +23,26 @@ class BridgeHTTPServer(ThreadingHTTPServer):
         super().__init__(server_address, handler_cls)
         self.dispatcher = dispatcher
         self.endpoint_names = endpoint_names
+
+
+def normalize_request_attach(value: Any) -> list[str]:
+    """Normalize ``attach`` / ``files`` request fields to validated abs paths."""
+    if value is None:
+        return []
+    entries = [value] if isinstance(value, str) else value
+    if not isinstance(entries, list):
+        raise ValueError("attach/files must be a string or a list of paths")
+    resolved: list[str] = []
+    for entry in entries:
+        for part in str(entry).split(","):
+            if not part.strip():
+                continue
+            raw = os.path.expanduser(part.strip())
+            absolute = os.path.abspath(raw)
+            if not os.path.isfile(absolute):
+                raise FileNotFoundError("Attachment not found: %s" % absolute)
+            resolved.append(absolute)
+    return resolved
 
 
 class BridgeRequestHandler(BaseHTTPRequestHandler):
@@ -81,6 +102,10 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
             if not prompt.strip():
                 self._send_json(400, {"ok": False, "error": "empty_prompt"})
                 return
+            raw_attach = body.get("attach")
+            if raw_attach is None:
+                raw_attach = body.get("files")
+
             if bool(body.get("confirm", False)):
                 targets = [ep] if ep else [str(t).strip().lower() for t in (endpoints or [])]
                 if not targets:
@@ -95,10 +120,19 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
                         "endpoints": targets,
                         "model": body.get("model"),
                         "profile": body.get("profile"),
-                        "attach": body.get("attach"),
+                        "attach": raw_attach,
                         "preview": preview,
                     },
                 )
+                return
+
+            try:
+                attach_paths = normalize_request_attach(raw_attach)
+            except FileNotFoundError as exc:
+                self._send_json(400, {"ok": False, "error": "missing_resource", "message": str(exc)})
+                return
+            except ValueError as exc:
+                self._send_json(400, {"ok": False, "error": "invalid_attach", "message": str(exc)})
                 return
 
             opts = {
@@ -109,7 +143,7 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
                 "profile": body.get("profile"),
                 "free_only": bool(body.get("free_only", False)),
                 "force": bool(body.get("force", False)),
-                "attach": body.get("attach"),
+                "attach": attach_paths or None,
                 "prompt": prompt,
             }
             if ep:

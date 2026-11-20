@@ -17,6 +17,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -71,6 +72,33 @@ def dispatch(action: str, endpoint: str, opts: dict[str, Any] | None = None, *, 
             limit=int(opts.get("limit", 300)),
         )
     return {"ok": False, "endpoint": endpoint, "error": "unknown_action", "message": f"Unknown action: {action}"}
+
+
+def normalize_attach_paths(
+    values: list[str] | str | None,
+    *,
+    base_dir: str | Path | None = None,
+) -> list[str]:
+    """Expand, absolutize and validate attachment paths before any UI work.
+
+    Comma-separated entries and repeated ``--attach`` flags are flattened.
+    Raises FileNotFoundError as soon as any path does not resolve to a file.
+    """
+    if not values:
+        return []
+    entries = [values] if isinstance(values, str) else list(values)
+    resolved: list[str] = []
+    for entry in entries:
+        for part in str(entry).split(","):
+            if not part.strip():
+                continue
+            raw = os.path.expanduser(part.strip())
+            candidate = raw if os.path.isabs(raw) else str((Path(base_dir) if base_dir else Path.cwd()) / raw)
+            absolute = os.path.abspath(candidate)
+            if not os.path.isfile(absolute):
+                raise FileNotFoundError("Attachment not found: %s" % absolute)
+            resolved.append(absolute)
+    return resolved
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -157,9 +185,21 @@ def main(argv: list[str] | None = None, *, driver_factory=get_driver) -> int:
         return 0
 
     if args.command == "ask":
-        prompt = args.prompt
-        if args.prompt_file:
-            prompt = Path(args.prompt_file).read_text(encoding="utf-8")
+        try:
+            attach_paths = normalize_attach_paths(args.attach)
+            prompt_file = (
+                os.path.abspath(os.path.expanduser(str(args.prompt_file)))
+                if args.prompt_file else None
+            )
+            prompt = args.prompt
+            if prompt_file:
+                prompt = Path(prompt_file).read_text(encoding="utf-8")
+        except (FileNotFoundError, OSError) as exc:
+            safe_print_json(
+                {"ok": False, "error": "missing_resource", "message": str(exc), "reply": ""},
+                indent=None, stream=sys.stderr,
+            )
+            return 3
         targets = [t.strip().lower() for t in args.endpoint.split(",") if t.strip()]
         opts = {
             "prompt": prompt,
@@ -171,7 +211,7 @@ def main(argv: list[str] | None = None, *, driver_factory=get_driver) -> int:
             "free_only": args.free_only,
             "confirm": args.confirm,
             "force": args.force,
-            "attach": args.attach,
+            "attach": attach_paths or None,
         }
         if len(targets) == 1:
             res = dispatch("ask", targets[0], opts, driver_factory=driver_factory)
