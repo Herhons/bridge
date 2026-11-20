@@ -343,7 +343,7 @@ def build_prompt(kickoff: str, state: dict, round_no: int, stats: str) -> str:
     return cap_text(
         "【过夜自迭代轮次 %d｜%s@%s】\n%s\n\n门禁与状态：\n%s\n"
         "请严格按 DECISION / GEMINI_PROFILE_NEXT / TASK_ID / PAYLOAD 四行块回复。"
-        % (round_no, BRANCH, head, kickoff[:260], stats[:220]), 600
+        % (round_no, BRANCH, head, kickoff[:340], stats[:100]), 600
     )
 
 
