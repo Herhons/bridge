@@ -34,6 +34,7 @@ from engine.base import (  # noqa: E402
     safe_print_json,
     save_reply_file,
 )
+from engine.config import run_doctor  # noqa: E402
 from engine.ledger import SubmissionLedger  # noqa: E402
 from engine.server import create_server  # noqa: E402
 
@@ -114,6 +115,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_snap.add_argument("--limit", type=int, default=300)
 
     p_list = sub.add_parser("list", help="List all 10 registered endpoints")
+    sub.add_parser("doctor", help="Validate configs, model policy, ratio boxes, and template PNGs")
     p_list.add_argument("--json", action="store_true", dest="as_json")
 
     p_ledger = sub.add_parser("ledger", help="Inspect or clear the duplicate-submission ledger")
@@ -131,6 +133,11 @@ def main(argv: list[str] | None = None, *, driver_factory=get_driver) -> int:
     configure_stdio_utf8()
     parser = build_parser()
     args = parser.parse_args(argv)
+
+    if args.command == "doctor":
+        res = {"version": __version__, **run_doctor(ENDPOINT_NAMES)}
+        safe_print_json(res)
+        return 0 if res["ok"] else 1
 
     if args.command == "list":
         if args.as_json:

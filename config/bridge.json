@@ -1,5 +1,5 @@
 {
-  "version": "0.2.4",
+  "version": "0.2.5",
   "host": "127.0.0.1",
   "port": 18765,
   "default_timeout": 180.0,
