@@ -52,6 +52,7 @@ from engine.uia import (
     set_node_text,
     snapshot_delta,
     take_snapshot,
+    upload_via_file_dialog,
 )
 from engine.vision import capture_window, match_template
 from engine.window import WindowInfo, find_window, focus_window, launch_app_id, launch_url_in_chrome
@@ -173,6 +174,7 @@ class EndpointDriver:
         confirm_fn: Callable[[str, str, str | None], bool] | None = None,
         hotkey_fn: Callable[..., None] | None = None,
         scroll_fn: Callable[[tuple[int, int, int, int] | None], bool] | None = None,
+        dialog_fn: Callable[[str], str] | None = None,
         sleep_fn: Callable[[float], None] = time.sleep,
         lock_path: Path | None = None,
         ledger_path: Path | None = None,
@@ -191,6 +193,7 @@ class EndpointDriver:
         self._confirm_fn = confirm_fn or _default_confirm
         self._hotkey_fn = hotkey_fn
         self._scroll_fn = scroll_fn
+        self._dialog_fn = dialog_fn
         self._sleep = sleep_fn
         self._lock_path = lock_path
         self._evidence_dir = evidence_dir or (RUNS_DIR / "fail")
@@ -515,6 +518,43 @@ class EndpointDriver:
                 return True
         return False
 
+    def _find_attach_control(self, snap: Snapshot, key: str) -> UINode | None:
+        sel = self.cfg.get("selectors", {}).get(key) or {}
+        if not sel:
+            return None
+        hits = snap.find(
+            roles=sel.get("roles") or ["ButtonControl", "MenuItemControl", "GroupControl"],
+            names=sel.get("names") or None,
+            name_contains=sel.get("name_contains") or None,
+            automation_ids=sel.get("automation_ids") or None,
+            ratio_box=sel.get("anchor_box_ratio"),
+            enabled_only=True,
+        )
+        return hits[-1] if hits else None
+
+    def _attach_files(self, win: WindowInfo, snap: Snapshot, paths: list[str], *, headed: bool) -> list[str]:
+        methods: list[str] = []
+        menu_cfg = self.cfg.get("selectors", {}).get("attach_menu_item") or {}
+        for fp in paths:
+            btn = self._find_attach_control(snap, "attach_button")
+            if btn is None:
+                raise UIAError("TARGET_NOT_FOUND", f"No attach_button found for {self.name}")
+            self._click_or_fallback(btn, win.hwnd, self.cfg.get("templates", {}).get("attach_button"), headed=headed)
+            self._sleep(0.35)
+            if menu_cfg:
+                snap_m = self.take_snap(win.hwnd)
+                item = self._find_attach_control(snap_m, "attach_menu_item")
+                if item is None:
+                    self._send_esc()
+                    raise UIAError("TARGET_NOT_FOUND", f"No attach_menu_item found for {self.name}")
+                self._click_or_fallback(item, win.hwnd, None, headed=headed)
+                self._sleep(0.35)
+            m = self._dialog_fn(fp) if self._dialog_fn is not None else upload_via_file_dialog(fp)
+            methods.append(m)
+            self._sleep(0.5)
+            snap = self.take_snap(win.hwnd)
+        return methods
+
     def _find_new_chat_button(self, snap: Snapshot) -> UINode | None:
         sel = self.cfg.get("selectors", {}).get("new_chat", {})
         names = sel.get("names")
@@ -757,6 +797,7 @@ class EndpointDriver:
         free_only: bool = False,
         confirm: bool = False,
         force: bool = False,
+        attach: list[str] | None = None,
     ) -> dict[str, Any]:
         started = time.monotonic()
         budget = float(timeout or self.cfg.get("timeout") or self.bridge_cfg.get("default_timeout", 180.0))
@@ -780,6 +821,11 @@ class EndpointDriver:
                 effective_model = prof_model
             if prof_free:
                 effective_free_only = True
+
+        attach_paths = [str(Path(p)) for p in (attach or []) if str(p).strip()]
+        for ap in attach_paths:
+            if not Path(ap).is_file():
+                return {"ok": False, "endpoint": self.name, "error": "missing_resource", "message": f"Attachment not found: {ap}", "reply": ""}
 
         clean_prompt = self.prepare_prompt(prompt)
         if not clean_prompt.strip():
@@ -854,6 +900,10 @@ class EndpointDriver:
                         before_snap = self.take_snap(win.hwnd)
                     elif model_switch_info.get("attempted"):
                         warnings.append(f"model_switch_failed:{model_switch_info.get('reason')}")
+
+                if attach_paths:
+                    self._attach_files(win, before_snap, attach_paths, headed=use_headed)
+                    before_snap = self.take_snap(win.hwnd)
 
                 composer = self._find_composer(before_snap)
                 fallback_ratio = self.cfg.get("fallback_composer_ratio")
@@ -1099,6 +1149,7 @@ def run_endpoint_cli(driver_cls: type[EndpointDriver], argv: list[str] | None = 
     p_ask = sub.add_parser("ask", help="Send a prompt and print the full reply")
     p_ask.add_argument("prompt", nargs="?", default="", help="Prompt text")
     p_ask.add_argument("--file", "-f", dest="prompt_file", help="Read prompt from UTF-8 file")
+    p_ask.add_argument("--attach", "-a", action="append", default=None, help="Attach file path(s) before sending")
     p_ask.add_argument("--save", "-o", dest="save_path", help="Save full reply text to UTF-8 file")
     p_ask.add_argument("--new", action="store_true", help="Start a new chat before sending")
     p_ask.add_argument("--model", default=None, help="Switch to this model before sending")
@@ -1142,6 +1193,7 @@ def run_endpoint_cli(driver_cls: type[EndpointDriver], argv: list[str] | None = 
             free_only=args.free_only,
             confirm=args.confirm,
             force=args.force,
+            attach=args.attach,
         )
         if res.get("ok") and args.save_path:
             res["saved_to"] = save_reply_file(args.save_path, res["reply"])

@@ -56,6 +56,7 @@ def dispatch(action: str, endpoint: str, opts: dict[str, Any] | None = None, *, 
             free_only=bool(opts.get("free_only", False)),
             confirm=bool(opts.get("confirm", False)),
             force=bool(opts.get("force", False)),
+            attach=opts.get("attach"),
         )
     if action == "read":
         return driver.read()
@@ -83,6 +84,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_ask.add_argument("endpoint", help=f"Endpoint name or comma-separated list ({', '.join(ENDPOINT_NAMES)})")
     p_ask.add_argument("prompt", nargs="?", default="", help="Prompt text")
     p_ask.add_argument("--file", "-f", dest="prompt_file", help="Read prompt from UTF-8 file")
+    p_ask.add_argument("--attach", "-a", action="append", default=None, help="Attach file path(s) before sending")
     p_ask.add_argument("--save", "-o", dest="save_path", help="Save full reply text to UTF-8 file")
     p_ask.add_argument("--new", action="store_true", help="Start a new chat before sending")
     p_ask.add_argument("--model", default=None, help="Switch to this model before sending")
@@ -162,6 +164,7 @@ def main(argv: list[str] | None = None, *, driver_factory=get_driver) -> int:
             "free_only": args.free_only,
             "confirm": args.confirm,
             "force": args.force,
+            "attach": args.attach,
         }
         if len(targets) == 1:
             res = dispatch("ask", targets[0], opts, driver_factory=driver_factory)

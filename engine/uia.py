@@ -838,3 +838,33 @@ def click_ratio_and_paste(window_rect: tuple[int, int, int, int], ratio_xy: tupl
         send_hotkey("ctrl", "v")
         time.sleep(0.25)
     send_hotkey("enter")
+
+
+def upload_via_file_dialog(file_path: str, *, timeout: float = 8.0) -> str:
+    """Fill a native Windows Open/打开 file dialog with *file_path* and press Enter."""
+    if os.name != "nt":
+        raise UIAError("PLATFORM_UNSUPPORTED", "Native file dialog requires Windows")
+    import uiautomation as auto
+
+    abs_path = str(os.path.abspath(file_path))
+    deadline = time.monotonic() + float(timeout)
+    while time.monotonic() < deadline:
+        for title in ("打开", "Open", "选择文件", "Choose File"):
+            dlg = auto.WindowControl(searchDepth=2, Name=title)
+            if dlg.Exists(0.15, 0.05):
+                edit = dlg.EditControl(Name="文件名(N):")
+                if not edit.Exists(0.15, 0.05):
+                    edit = dlg.EditControl()
+                if edit.Exists(0.15, 0.05):
+                    edit.SetFocus()
+                    time.sleep(0.1)
+                    set_clipboard(abs_path)
+                    time.sleep(0.05)
+                    send_hotkey("ctrl", "a")
+                    time.sleep(0.05)
+                    send_hotkey("ctrl", "v")
+                    time.sleep(0.15)
+                    send_hotkey("enter")
+                    return "uia:file_dialog"
+        time.sleep(0.2)
+    raise UIAError("DIALOG_NOT_FOUND", f"File dialog did not appear within {timeout:.1f}s")

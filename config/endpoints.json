@@ -303,6 +303,27 @@
             "RadioButtonControl"
           ],
           "name_contains": []
+        },
+        "attach_button": {
+          "roles": [
+            "ButtonControl"
+          ],
+          "name_contains": [
+            "上传和工具",
+            "Upload",
+            "添加文件"
+          ]
+        },
+        "attach_menu_item": {
+          "roles": [
+            "MenuItemControl",
+            "ButtonControl",
+            "ListItemControl"
+          ],
+          "name_contains": [
+            "上传文件",
+            "Upload file"
+          ]
         }
       },
       "templates": {
@@ -601,6 +622,22 @@
             "RadioButtonControl"
           ],
           "name_contains": []
+        },
+        "attach_button": {
+          "roles": [
+            "ButtonControl"
+          ],
+          "name_contains": [
+            "上传",
+            "附件",
+            "Upload"
+          ],
+          "anchor_box_ratio": [
+            0.15,
+            0.72,
+            0.96,
+            0.99
+          ]
         }
       },
       "templates": {
@@ -1007,6 +1044,32 @@
             "ListItemControl"
           ],
           "name_contains": []
+        },
+        "attach_button": {
+          "roles": [
+            "GroupControl",
+            "ButtonControl"
+          ],
+          "name_contains": [
+            "添加",
+            "附件",
+            "Attach"
+          ],
+          "anchor_box_ratio": [
+            0.23,
+            0.72,
+            0.98,
+            0.99
+          ]
+        },
+        "attach_menu_item": {
+          "roles": [
+            "MenuItemControl"
+          ],
+          "name_contains": [
+            "添加文件",
+            "Add file"
+          ]
         }
       },
       "templates": {}
@@ -1241,7 +1304,26 @@
           ]
         },
         "model_selector": {},
-        "model_option": {}
+        "model_option": {},
+        "attach_button": {
+          "roles": [
+            "ButtonControl"
+          ],
+          "name_contains": [
+            "输入框操作",
+            "附件",
+            "Attach"
+          ]
+        },
+        "attach_menu_item": {
+          "roles": [
+            "MenuItemControl"
+          ],
+          "name_contains": [
+            "添加附件",
+            "Add attachment"
+          ]
+        }
       },
       "templates": {},
       "content_max_rel_x": 0.72

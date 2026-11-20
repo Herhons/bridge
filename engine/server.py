@@ -108,6 +108,7 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
                 "profile": body.get("profile"),
                 "free_only": bool(body.get("free_only", False)),
                 "force": bool(body.get("force", False)),
+                "attach": body.get("attach"),
                 "prompt": prompt,
             }
             if ep:
