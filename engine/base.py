@@ -1027,6 +1027,10 @@ class EndpointDriver:
         last_snap: Snapshot | None = before_snap
         receipt_seen = False
         before_copy_count = len(self._copy_buttons(before_snap)) if before_snap else 0
+        # The new-copy gate is only meaningful when this UI actually exposes a
+        # copy button. Fixtures and UI variants without one must not wait for a
+        # control that can never appear (otherwise every ask() ends in timeout).
+        copy_button_seen = before_copy_count > 0
         last_diag: dict[str, Any] = {}
         while time.monotonic() < deadline:
             fb = self.post_read_fallback(win, before_meta)
@@ -1050,17 +1054,22 @@ class EndpointDriver:
             delta = snapshot_delta(before_snap, cur_snap, min_rel_x=min_rel_x, max_rel_x=max_rel_x)
             filtered = self._extract_reply_lines(delta["added_lines"], prompt=clean_prompt)
             cur_text = "\n".join(filtered).strip()
+            copy_count = len(self._copy_buttons(cur_snap))
+            if copy_count:
+                copy_button_seen = True
+            new_copy_seen = copy_count > before_copy_count
+            copy_gate_active = require_new_copy and copy_button_seen
             last_diag = {
                 "receipt_seen": receipt_seen,
                 "generating": generating,
                 "delta_added_count": len(delta["added_lines"]),
                 "filtered_count": len(filtered),
-                "copy_button_count": len(self._copy_buttons(cur_snap)),
+                "copy_button_count": copy_count,
+                "copy_gate_active": copy_gate_active,
                 "last_text_preview": cur_text[:160],
             }
 
-            new_copy_seen = (len(self._copy_buttons(cur_snap)) > before_copy_count)
-            if generating or not cur_text or (require_receipt and not receipt_seen) or (require_new_copy and not new_copy_seen):
+            if generating or not cur_text or (require_receipt and not receipt_seen) or (copy_gate_active and not new_copy_seen):
                 last_text = cur_text if (not require_receipt or receipt_seen) else ""
                 stable_since = None
                 self._sleep(poll)
@@ -1094,7 +1103,10 @@ class EndpointDriver:
                 )
             self._sleep(poll)
 
-        if last_text and (not require_receipt or receipt_seen) and (not require_new_copy or (last_snap is not None and len(self._copy_buttons(last_snap)) > before_copy_count)):
+        deadline_copy_ok = not (require_new_copy and copy_button_seen) or (
+            last_snap is not None and len(self._copy_buttons(last_snap)) > before_copy_count
+        )
+        if last_text and (not require_receipt or receipt_seen) and deadline_copy_ok:
             warnings.append("returned_at_deadline")
             self.ledger.mark(clean_prompt, self.name, "accepted", note="returned_at_deadline")
             return self._ok_payload(

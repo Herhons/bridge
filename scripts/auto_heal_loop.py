@@ -1,0 +1,457 @@
+#!/usr/bin/env python3
+"""Unattended self-heal loop: Gemini -> WorkBuddy -> full unittest -> git gate.
+
+Standard library only. Every subprocess is non-interactive and UTF-8 decoded.
+Never imports or launches OpenCode. Runs are capped at --max-retries attempts;
+a red suite is never committed, and a fully failed run resets to BASE_COMMIT.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import subprocess
+import sys
+from datetime import datetime
+from pathlib import Path
+from typing import Any
+
+ROOT = Path(__file__).resolve().parents[1]
+BRIDGE = ROOT / "bridge.py"
+RUNS = ROOT / "runs"
+PYTHON = sys.executable
+
+TIMEOUT_RC = 124
+TASK_RE = re.compile(
+    r"<<<WORKBUDDY_TASK_START>>>(.*?)<<<WORKBUDDY_TASK_END>>>", re.S
+)
+FAIL_NAMED_RE = re.compile(
+    r"^(?:FAIL|ERROR):\s+(\S+)\s+\(([^)]+)\)", re.M
+)
+FAIL_INLINE_RE = re.compile(
+    r"^(\S+)\s+\(([^)]+)\)\s*\.\.\.\s*(?:FAIL|ERROR)\b", re.M
+)
+COMMIT_RE = re.compile(r"[0-9a-f]{7,40}\Z")
+
+
+# ---------------------------------------------------------------- logging
+def log(message: str, level: str = "INFO") -> None:
+    line = "[%s][%s] %s" % (
+        datetime.now().strftime("%Y-%m-%d %H:%M:%S"), level, message
+    )
+    print(line, flush=True)
+    try:
+        RUNS.mkdir(parents=True, exist_ok=True)
+        with (RUNS / "auto_heal_loop.log").open("a", encoding="utf-8") as handle:
+            handle.write(line + "\n")
+    except OSError:
+        pass
+
+
+# ---------------------------------------------------------------- subprocess
+def kill_process_tree(pid: int) -> int:
+    """Kill the whole Windows process tree; return taskkill's return code."""
+    try:
+        proc = subprocess.run(
+            ["taskkill", "/F", "/T", "/PID", str(pid)],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=30,
+        )
+        return int(proc.returncode)
+    except (OSError, subprocess.SubprocessError):
+        return -1
+
+
+def run_cmd(
+    cmd: list[str],
+    timeout: float = 300,
+    cwd: str | Path | None = None,
+) -> tuple[int, str]:
+    """Run a command without a console; kill the process tree on timeout.
+
+    Returns (returncode, captured_output). TIMEOUT_RC is returned for a
+    timeout together with every byte captured before the kill.
+    """
+    proc = subprocess.Popen(
+        list(cmd),
+        cwd=str(cwd or ROOT),
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    try:
+        output, _ = proc.communicate(timeout=timeout)
+        return int(proc.returncode), output or ""
+    except subprocess.TimeoutExpired as exc:
+        captured = exc.output or ""
+        if isinstance(captured, bytes):
+            captured = captured.decode("utf-8", errors="replace")
+        kill_rc = kill_process_tree(proc.pid)
+        try:
+            tail, _ = proc.communicate(timeout=15)
+        except (subprocess.TimeoutExpired, OSError):
+            tail = ""
+        if isinstance(tail, bytes):
+            tail = tail.decode("utf-8", errors="replace")
+        detail = (
+            "\n[auto_heal] TIMEOUT after %ss; taskkill rc=%s pid=%s\n"
+            % (timeout, kill_rc, proc.pid)
+        )
+        return TIMEOUT_RC, "%s%s%s" % (captured, tail or "", detail)
+
+
+def git(*args: str) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        ["git", *args],
+        cwd=str(ROOT),
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=60,
+    )
+
+
+def git_text(*args: str) -> str:
+    proc = git(*args)
+    text = proc.stdout or ""
+    if proc.returncode and proc.stderr:
+        text += "\n[git stderr]\n" + proc.stderr
+    return text
+
+
+def head_commit() -> str:
+    proc = git("rev-parse", "HEAD")
+    return proc.stdout.strip() if proc.returncode == 0 else ""
+
+
+def reset_hard(commit: str) -> bool:
+    if not COMMIT_RE.fullmatch(commit or ""):
+        log("reset refused: bad commit id %r" % commit, "ERROR")
+        return False
+    proc = git("reset", "--hard", commit)
+    ok = proc.returncode == 0
+    log("git reset --hard %s rc=%s" % (commit[:12], proc.returncode),
+        "INFO" if ok else "ERROR")
+    return ok
+
+
+# ---------------------------------------------------------------- crash report
+def extract_failed_tests(output: str) -> list[tuple[str, str]]:
+    found: list[tuple[str, str]] = []
+    for regex in (FAIL_NAMED_RE, FAIL_INLINE_RE):
+        for match in regex.finditer(output or ""):
+            item = (match.group(1), match.group(2))
+            if item not in found:
+                found.append(item)
+    return found
+
+
+def test_source_snippet(name: str, module: str) -> str:
+    """Locate `def <name>` from the failed test's module and show its source."""
+    rels: list[Path] = []
+    parts = [part for part in (module or "").split(".") if part]
+    for index in range(len(parts), 0, -1):
+        rels.append(Path(*parts[:index]).with_suffix(".py"))
+    bare = name.split(".")[-1]
+    rels.extend([Path("tests") / (bare + ".py"), Path(bare + ".py")])
+
+    source_path = None
+    for rel in rels:
+        candidate = ROOT / rel
+        if candidate.is_file():
+            source_path = candidate
+            break
+    if source_path is None:
+        return "# source file not found for %s (%s)" % (name, module)
+
+    text = source_path.read_text(encoding="utf-8", errors="replace")
+    lines = text.splitlines()
+    match = re.search(r"^(\s*)def\s+" + re.escape(bare) + r"\s*\(", text, re.M)
+    if match is None:
+        head = "\n".join(
+            "%4d: %s" % (i + 1, lines[i]) for i in range(min(60, len(lines)))
+        )
+        return (
+            "# no `def %s(` in %s; showing file head\n%s"
+            % (bare, rels[0], head)
+        )
+
+    indent = len(match.group(1))
+    start = text.count("\n", 0, match.start())
+    end = start + 1
+    while end < len(lines):
+        stripped = lines[end].strip()
+        if stripped:
+            current = len(lines[end]) - len(lines[end].lstrip())
+            if current <= indent and (
+                stripped.startswith("def ")
+                or stripped.startswith("class ")
+                or stripped.startswith("@")
+            ):
+                break
+        end += 1
+    body = "\n".join(
+        "%4d: %s" % (i + 1, lines[i]) for i in range(start, end)
+    )
+    return "# %s :: %s\n%s" % (source_path, bare, body)
+
+
+def build_crash_report(
+    test_output: str,
+    report_path: str | Path = "runs/crash_report.md",
+) -> Path:
+    """Write a complete, untruncated failure report and return its path."""
+    path = Path(report_path)
+    if not path.is_absolute():
+        path = ROOT / path
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    failed = extract_failed_tests(test_output)
+    snippets = []
+    for name, module in failed:
+        snippets.append(
+            "### %s (%s)\n```python\n%s\n```"
+            % (name, module, test_source_snippet(name, module))
+        )
+    if not snippets:
+        snippets.append("_No FAIL:/ERROR: test name was matched._")
+
+    content = (
+        "# Bridge auto-heal crash report\n\n"
+        "- generated: %s\n- base_commit: %s\n\n"
+        "## 1. Full unittest output (FAIL/ERROR and Traceback, untruncated)\n\n"
+        "```text\n%s\n```\n\n"
+        "## 2. Failed test source snippets\n\n%s\n\n"
+        "## 3. git status --short\n\n"
+        "```text\n%s\n```\n\n"
+        "## 4. git diff\n\n"
+        "```diff\n%s\n```\n"
+        % (
+            datetime.now().isoformat(timespec="seconds"),
+            head_commit(),
+            test_output or "",
+            "\n\n".join(snippets),
+            git_text("status", "--short"),
+            git_text("diff"),
+        )
+    )
+    path.write_text(content, encoding="utf-8")
+    log("crash report written: %s (%d failed test(s))" % (path, len(failed)))
+    return path
+
+
+# ---------------------------------------------------------------- bridge calls
+def extract_task_card(reply: str) -> str:
+    match = TASK_RE.search(reply or "")
+    return match.group(1).strip() if match else ""
+
+
+def build_gemini_prompt(attempt: int, report: Path) -> str:
+    return (
+        "【Bridge 无人值守自愈 round=%d】\n"
+        "附件是完整的 runs/crash_report.md，包含失败堆栈、git diff 与失败用例源码。\n"
+        "请分析根因，只输出一段可以直接交给 WorkBuddy 执行的修复任务卡：\n"
+        "- 不要输出解释、寒暄或 markdown 代码围栏外的任何文字；\n"
+        "- 任务卡必须写在下面两个标记之间，且只出现一次；\n"
+        "- 任务卡要写明改动文件、具体修复点、禁止删除或弱化既有断言、"
+        "以及最后必须运行全量单测。\n\n"
+        "<<<WORKBUDDY_TASK_START>>>\n"
+        "...任务卡内容...\n"
+        "<<<WORKBUDDY_TASK_END>>>\n\n"
+        "报告路径：%s\n" % (attempt, report)
+    )
+
+
+def parse_reply(rc: int, output: str, saved: Path) -> str:
+    text = output or ""
+    try:
+        start, end = text.find("{"), text.rfind("}")
+        if 0 <= start < end:
+            payload = json.loads(text[start:end + 1])
+            if isinstance(payload, dict) and payload.get("reply"):
+                return str(payload["reply"])
+    except (ValueError, TypeError):
+        pass
+    if saved.is_file():
+        return saved.read_text(encoding="utf-8", errors="replace").strip()
+    return text.strip()
+
+
+def read_reply(endpoint: str, saved: Path, timeout: float) -> str:
+    """bridge.py read <endpoint> --json --save <path> (documented read path)."""
+    cmd = [
+        PYTHON, str(BRIDGE), "read", endpoint,
+        "--json", "--save", str(saved),
+    ]
+    rc, output = run_cmd(cmd, timeout=timeout, cwd=ROOT)
+    return parse_reply(rc, output, saved)
+
+
+def call_gemini(report: Path, attempt: int, timeout: float) -> str:
+    prompt_file = RUNS / ("gemini_prompt_round%d.txt" % attempt)
+    saved = RUNS / ("gemini_reply_round%d.txt" % attempt)
+    prompt_file.parent.mkdir(parents=True, exist_ok=True)
+    prompt_file.write_text(build_gemini_prompt(attempt, report), encoding="utf-8")
+    bridge_timeout = max(30, int(timeout - 30))
+    cmd = [
+        PYTHON, str(BRIDGE), "ask", "gemini", "",
+        "--file", str(prompt_file),
+        "--attach", str(report),
+        "--profile", "test", "--headed",
+        "--timeout", str(bridge_timeout), "--json", "--save", str(saved),
+    ]
+    rc, output = run_cmd(cmd, timeout=timeout, cwd=ROOT)
+    reply = parse_reply(rc, output, saved)
+    if not reply:
+        reply = read_reply("gemini", saved, timeout=60)
+    log("gemini rc=%s reply_chars=%d" % (rc, len(reply)))
+    return reply
+
+
+def call_workbuddy(task_card: str, attempt: int, timeout: float) -> str:
+    task_file = RUNS / ("workbuddy_task_round%d.md" % attempt)
+    saved = RUNS / ("workbuddy_reply_round%d.txt" % attempt)
+    task_file.parent.mkdir(parents=True, exist_ok=True)
+    task_file.write_text(task_card, encoding="utf-8")
+    bridge_timeout = max(30, int(timeout - 30))
+    cmd = [
+        PYTHON, str(BRIDGE), "ask", "workbuddy", "",
+        "--file", str(task_file),
+        "--profile", "test", "--headed",
+        "--timeout", str(bridge_timeout), "--json", "--save", str(saved),
+    ]
+    rc, output = run_cmd(cmd, timeout=timeout, cwd=ROOT)
+    reply = parse_reply(rc, output, saved)
+    if not reply:
+        reply = read_reply("workbuddy", saved, timeout=60)
+    log("workbuddy rc=%s reply_chars=%d" % (rc, len(reply)))
+    return reply
+
+
+def run_tests(timeout: float) -> tuple[int, str]:
+    cmd = [PYTHON, "-m", "unittest", "discover", "-s", "tests", "-v"]
+    return run_cmd(cmd, timeout=timeout, cwd=ROOT)
+
+
+# ---------------------------------------------------------------- main loop
+def commit_and_push(message: str, no_push: bool) -> int:
+    status = git("status", "--porcelain").stdout.strip()
+    if not status:
+        log("git tree clean; nothing to commit")
+        return 0
+    added = git("add", "-A")
+    if added.returncode:
+        log("git add failed: %s" % added.stderr.strip()[-300:], "ERROR")
+        return 1
+    committed = git("commit", "-m", message)
+    if committed.returncode:
+        log("git commit failed: %s" % committed.stderr.strip()[-300:], "ERROR")
+        return 1
+    commit_lines = (committed.stdout or committed.stderr or "").strip().splitlines()
+    log("committed: %s" % (commit_lines[0] if commit_lines else "ok"))
+    if no_push:
+        log("--no-push set; push skipped")
+        return 0
+    pushed = git("push")
+    if pushed.returncode:
+        log("git push failed: %s" % pushed.stderr.strip()[-300:], "ERROR")
+        return 1
+    log("git push ok")
+    return 0
+
+
+def heal(
+    max_retries: int = 3,
+    *,
+    no_push: bool = False,
+    timeout: float = 300,
+    report_path: str | Path = "runs/crash_report.md",
+) -> int:
+    os.environ["PYTHONIOENCODING"] = "utf-8"
+    base_commit = head_commit()
+    if not COMMIT_RE.fullmatch(base_commit):
+        log("cannot resolve BASE_COMMIT: %r" % base_commit, "ERROR")
+        return 2
+    log("BASE_COMMIT=%s max_retries=%d no_push=%s"
+        % (base_commit, max_retries, no_push))
+
+    report = Path(report_path)
+    for attempt in range(1, max(1, max_retries) + 1):
+        round_base = head_commit()
+        if not COMMIT_RE.fullmatch(round_base):
+            log("round %d: cannot resolve round base commit" % attempt, "ERROR")
+            reset_hard(base_commit)
+            return 2
+        log("round %d/%d start base=%s" % (attempt, max_retries, round_base[:12]))
+
+        rc, output = run_tests(timeout)
+        if rc == 0:
+            log("round %d: full unittest green (rc=0)" % attempt)
+            return commit_and_push(
+                "fix(heal): self-healed unit tests via gemini/workbuddy",
+                no_push,
+            )
+
+        log("round %d: unittest red (rc=%s); building crash report" % (attempt, rc),
+            "ERROR")
+        report = build_crash_report(output, report)
+
+        reply = call_gemini(report, attempt, timeout)
+        card = extract_task_card(reply)
+        if not card:
+            log("round %d: task card markers missing; retry counted" % attempt,
+                "ERROR")
+        else:
+            (RUNS / ("extracted_task_round%d.md" % attempt)).write_text(
+                card, encoding="utf-8"
+            )
+            workbuddy_reply = call_workbuddy(card, attempt, timeout)
+            if not workbuddy_reply:
+                log("round %d: empty WorkBuddy reply" % attempt, "ERROR")
+
+        if attempt < max(1, max_retries):
+            reset_hard(round_base)
+
+    log("all %d heal attempts failed; rolling back to BASE_COMMIT %s"
+        % (max_retries, base_commit), "ERROR")
+    if not reset_hard(base_commit):
+        return 2
+    log("kept %s for post-mortem; exiting non-zero" % report, "ERROR")
+    return 1
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--max-retries", type=int, default=3)
+    parser.add_argument("--no-push", action="store_true",
+                        help="local test mode: never run git push")
+    parser.add_argument("--timeout", type=float, default=300,
+                        help="per-subprocess timeout in seconds")
+    parser.add_argument("--report", default="runs/crash_report.md")
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    return heal(
+        max_retries=args.max_retries,
+        no_push=args.no_push,
+        timeout=args.timeout,
+        report_path=args.report,
+    )
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
