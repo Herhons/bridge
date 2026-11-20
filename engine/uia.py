@@ -865,6 +865,22 @@ def upload_via_file_dialog(file_path: str, *, timeout: float = 8.0) -> str:
                     send_hotkey("ctrl", "v")
                     time.sleep(0.15)
                     send_hotkey("enter")
+                    time.sleep(0.4)
+                    if dlg.Exists(0.15, 0.05):
+                        for btn_name in ("打开(O)", "打开", "Open"):
+                            ob = dlg.ButtonControl(Name=btn_name)
+                            if ob.Exists(0.15, 0.05):
+                                ob.Click()
+                                break
                     return "uia:file_dialog"
         time.sleep(0.2)
     raise UIAError("DIALOG_NOT_FOUND", f"File dialog did not appear within {timeout:.1f}s")
+
+
+def click_ratio(window_rect: tuple[int, int, int, int], ratio_xy: tuple[float, float]) -> str:
+    """Physically click a relative [rx, ry] point inside *window_rect*."""
+    wx, wy, ww, wh = window_rect
+    cx = int(wx + ww * float(ratio_xy[0]))
+    cy = int(wy + wh * float(ratio_xy[1]))
+    _physical_click(cx, cy)
+    return f"ratio:click:{ratio_xy[0]:.3f},{ratio_xy[1]:.3f}"

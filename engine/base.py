@@ -42,6 +42,7 @@ from engine.uia import (
     Snapshot,
     UIAError,
     UINode,
+    click_ratio,
     click_ratio_and_paste,
     get_clipboard,
     get_clipboard_sequence,
@@ -535,11 +536,16 @@ class EndpointDriver:
     def _attach_files(self, win: WindowInfo, snap: Snapshot, paths: list[str], *, headed: bool) -> list[str]:
         methods: list[str] = []
         menu_cfg = self.cfg.get("selectors", {}).get("attach_menu_item") or {}
+        ratio_fallback = self.cfg.get("fallback_attach_ratio")
+        wait_after = float(self.cfg.get("attach_wait_seconds", 1.0))
         for fp in paths:
             btn = self._find_attach_control(snap, "attach_button")
-            if btn is None:
+            if btn is not None:
+                self._click_or_fallback(btn, win.hwnd, self.cfg.get("templates", {}).get("attach_button"), headed=headed)
+            elif ratio_fallback and headed and snap.window_rect is not None:
+                click_ratio(snap.window_rect, tuple(ratio_fallback))
+            else:
                 raise UIAError("TARGET_NOT_FOUND", f"No attach_button found for {self.name}")
-            self._click_or_fallback(btn, win.hwnd, self.cfg.get("templates", {}).get("attach_button"), headed=headed)
             self._sleep(0.35)
             if menu_cfg:
                 snap_m = self.take_snap(win.hwnd)
@@ -551,7 +557,7 @@ class EndpointDriver:
                 self._sleep(0.35)
             m = self._dialog_fn(fp) if self._dialog_fn is not None else upload_via_file_dialog(fp)
             methods.append(m)
-            self._sleep(0.5)
+            self._sleep(wait_after)
             snap = self.take_snap(win.hwnd)
         return methods
 
@@ -822,7 +828,12 @@ class EndpointDriver:
             if prof_free:
                 effective_free_only = True
 
-        attach_paths = [str(Path(p)) for p in (attach or []) if str(p).strip()]
+        raw_attach = [attach] if isinstance(attach, str) else list(attach or [])
+        attach_paths: list[str] = []
+        for entry in raw_attach:
+            for part in str(entry).split(","):
+                if part.strip():
+                    attach_paths.append(str(Path(part.strip())))
         for ap in attach_paths:
             if not Path(ap).is_file():
                 return {"ok": False, "endpoint": self.name, "error": "missing_resource", "message": f"Attachment not found: {ap}", "reply": ""}
@@ -845,6 +856,7 @@ class EndpointDriver:
                 }
 
         model_switch_info: dict[str, Any] | None = None
+        attach_methods: list[str] = []
         warnings: list[str] = []
         lock_timeout = float(self.bridge_cfg.get("lock_timeout", 120.0))
         with hold_ui_lock(f"ask:{self.name}", timeout=lock_timeout, lock_path=self._lock_path):
@@ -902,7 +914,7 @@ class EndpointDriver:
                         warnings.append(f"model_switch_failed:{model_switch_info.get('reason')}")
 
                 if attach_paths:
-                    self._attach_files(win, before_snap, attach_paths, headed=use_headed)
+                    attach_methods = self._attach_files(win, before_snap, attach_paths, headed=use_headed)
                     before_snap = self.take_snap(win.hwnd)
 
                 composer = self._find_composer(before_snap)
@@ -1074,6 +1086,8 @@ class EndpointDriver:
                     started,
                     warnings,
                     cur_snap,
+                    attached_files=attach_paths,
+                    attach_methods=attach_methods,
                 )
             self._sleep(poll)
 
@@ -1112,6 +1126,8 @@ class EndpointDriver:
         started: float,
         warnings: list[str],
         snap: Snapshot | None,
+        attached_files: list[str] | None = None,
+        attach_methods: list[str] | None = None,
     ) -> dict[str, Any]:
         out: dict[str, Any] = {
             "ok": True,
@@ -1126,6 +1142,9 @@ class EndpointDriver:
             "snapshot_degraded": bool(snap.degraded) if snap else False,
             "elapsed": round(time.monotonic() - started, 2),
         }
+        if attached_files:
+            out["attached_files"] = list(attached_files)
+            out["attach_methods"] = list(attach_methods or [])
         if warnings:
             out["warnings"] = warnings
         return out
