@@ -93,7 +93,9 @@ def load_state() -> dict:
                       "streak": 0, "stalled": False},
         "meta": {"date": datetime.now().strftime("%Y-%m-%d"),
                  "conversation_rounds": 0, "total_rounds": 0,
-                 "next_gemini_profile": "test", "force_council": False},
+                 "next_gemini_profile": "test", "force_council": False,
+                 "last_round": 0, "last_task_id": "", "last_decision": "",
+                 "last_executor": "", "last_rc": 0, "last_error_tail": ""},
     }
     if path.exists():
         try:
@@ -295,12 +297,15 @@ def apply_patch(payload: str, round_dir: Path) -> tuple[bool, str]:
     patch = extract_patch(payload)
     if not patch.strip():
         return False, "no diff --git block found"
+    # Gemini frequently emits CRLF inside fenced diffs; normalize to LF and
+    # tolerate trailing whitespace so context lines match the working tree.
+    patch = patch.replace("\r\n", "\n").replace("\r", "\n")
     path = round_dir / "gemini.patch"
     path.write_text(patch, encoding="utf-8")
-    check = git("apply", "--check", str(path))
+    check = git("apply", "--ignore-whitespace", "--check", str(path))
     if check.returncode:
         return False, "git apply --check failed: " + check.stderr.strip()[-500:]
-    applied = git("apply", str(path))
+    applied = git("apply", "--ignore-whitespace", str(path))
     if applied.returncode:
         return False, "git apply failed: " + applied.stderr.strip()[-500:]
     return True, "applied %d diff block(s)" % patch.count("diff --git ")
@@ -322,7 +327,7 @@ def diff_stat() -> str:
 # ---------------------------------------------------------------- failure path
 def record_failure(state: dict, endpoint: str, text: str) -> str:
     entry = state[endpoint]
-    fp = fingerprint(text)
+    fp = ("%s:empty_reply" % endpoint) if not (text or "").strip() else fingerprint(text)
     entry["streak"] = entry.get("streak", 0) + 1 if fp == entry.get("last_error_fp") else 1
     entry["last_error_fp"] = fp
     entry["failures_today"] = entry.get("failures_today", 0) + 1
@@ -340,10 +345,23 @@ def record_failure(state: dict, endpoint: str, text: str) -> str:
 def build_prompt(kickoff: str, state: dict, round_no: int, stats: str) -> str:
     head = head_commit()[:7]
     meta = state["meta"]
+    if round_no <= 1:
+        context = "启动里程碑：\n" + kickoff[:300]
+    else:
+        tail = "\n".join(str(meta.get("last_error_tail") or "").splitlines()[-15:])
+        context = (
+            "上一轮结果（不要再下发相同任务）：\n"
+            "last_round=%s last_task_id=%s last_decision=%s "
+            "last_executor=%s last_rc=%s\n"
+            "last_error_tail(<=15行)：\n%s"
+            % (meta.get("last_round", round_no - 1),
+               meta.get("last_task_id", ""), meta.get("last_decision", ""),
+               meta.get("last_executor", ""), meta.get("last_rc", 0), tail)
+        )
     return cap_text(
         "【过夜自迭代轮次 %d｜%s@%s】\n%s\n\n门禁与状态：\n%s\n"
         "请严格按 DECISION / GEMINI_PROFILE_NEXT / TASK_ID / PAYLOAD 四行块回复。"
-        % (round_no, BRANCH, head, kickoff[:340], stats[:100]), 600
+        % (round_no, BRANCH, head, context, stats[:100]), 600
     )
 
 
@@ -392,7 +410,13 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--max-rounds", type=int, default=20)
     parser.add_argument("--kickoff", default="runs/auto_logs/overnight_kickoff.txt")
+    parser.add_argument("--start-delay", type=float, default=0.0)
     args = parser.parse_args()
+    if args.start_delay > 0:
+        log_friction(
+            "detached start: sleep %.1fs before round 1" % args.start_delay
+        )
+        time.sleep(args.start_delay)
     assert_safe_branch()
     kickoff_path = ROOT / args.kickoff
     kickoff = kickoff_path.read_text(encoding="utf-8") if kickoff_path.exists() else ""
@@ -434,6 +458,8 @@ def main() -> int:
             state["meta"]["next_gemini_profile"] = instr["profile_next"]
             decision = instr["decision"]
             detail = ""
+            executor = ""
+            last_rc = 0
 
             if decision in ("DISPATCH_OPENCODE", "DISPATCH_WORKBUDDY"):
                 wanted = "opencode" if decision.endswith("OPENCODE") else "workbuddy"
@@ -442,6 +468,7 @@ def main() -> int:
                     reason = "BOTH_EXECUTORS_COOLED"
                     break
                 result = call_executor(executor, instr["payload"][:3000], rdir)
+                last_rc = int(result.get("exit_code") or 0)
                 state[executor]["calls_today"] += 1
                 text = str(result.get("reply") or result.get("raw") or "")
                 if not result.get("ok"):
@@ -449,6 +476,8 @@ def main() -> int:
                     other = "workbuddy" if executor == "opencode" else "opencode"
                     if not is_cooled(state[other]):
                         fallback = call_executor(other, instr["payload"][:3000], rdir)
+                        executor = other
+                        last_rc = int(fallback.get("exit_code") or 0)
                         state[other]["calls_today"] += 1
                         detail += " | fallback %s ok=%s" % (
                             other, bool(fallback.get("ok"))
@@ -458,6 +487,7 @@ def main() -> int:
 
             elif decision == "APPLY_PATCH":
                 ok, detail = apply_patch(instr["payload"], rdir)
+                last_rc = 0 if ok else 1
 
             elif decision == "CONSULT_COUNCIL":
                 advisor = COUNCIL[round_no % len(COUNCIL)]
@@ -465,6 +495,8 @@ def main() -> int:
                     advisor, instr["payload"][:3000] or kickoff[:500], rdir
                 )
                 second_text = str(second.get("reply") or second.get("raw") or "")[:1200]
+                executor = advisor
+                last_rc = int(second.get("exit_code") or 0)
                 state["meta"]["force_council"] = True
                 verdict = call_gemini(
                     "谋士 %s 第二意见：%s\n请给出最终 DECISION 块。" % (advisor, second_text),
@@ -479,6 +511,7 @@ def main() -> int:
                 )
                 if instr["decision"] == "APPLY_PATCH":
                     ok, detail = apply_patch(instr["payload"], rdir)
+                    last_rc = 0 if ok else 1
 
             elif decision in ("MERGE_READY", "STOP_FOR_USER", "PASS", "STOP"):
                 reason = decision
@@ -497,6 +530,15 @@ def main() -> int:
                 rb = rollback(start_commit)
                 log_friction("round %d gate FAIL; %s" % (round_no, rb), "ERROR")
                 state["meta"]["force_council"] = True
+            tail_lines = (detail + "\n" + gate_tail).strip().splitlines()[-15:]
+            state["meta"].update({
+                "last_round": round_no,
+                "last_task_id": instr["task_id"][:80],
+                "last_decision": decision,
+                "last_executor": executor,
+                "last_rc": last_rc,
+                "last_error_tail": "\n".join(tail_lines)[:600],
+            })
             log_friction(
                 "round %d %s %.1fs gate=%s diff=%s"
                 % (round_no, decision, time.time() - started, ok, diff_stat()[:120])

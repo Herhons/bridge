@@ -144,5 +144,32 @@ class TestRollbackAndSafety(unittest.TestCase):
         self.assertEqual(auto_loop.cap_text("short"), "short")
 
 
+class TestOvernightFixes(unittest.TestCase):
+    def test_empty_reply_uses_named_fingerprint(self):
+        state = {
+            "workbuddy": {"streak": 0, "last_error_fp": None,
+                          "failures_today": 0, "cooldown_until": None,
+                          "stalled": False},
+            "meta": {"force_council": False},
+        }
+        action = auto_loop.record_failure(state, "workbuddy", "")
+        self.assertIn("workbuddy:empty_reply", action)
+        self.assertEqual(state["workbuddy"]["last_error_fp"], "workbuddy:empty_reply")
+        self.assertNotEqual(auto_loop.fingerprint(""), "workbuddy:empty_reply")
+
+    def test_round_two_prompt_uses_last_round_state_not_kickoff(self):
+        state = {"meta": {
+            "last_round": 1, "last_task_id": "T2-ATTACH",
+            "last_decision": "DISPATCH_WORKBUDDY", "last_executor": "workbuddy",
+            "last_rc": 6, "last_error_tail": "error: quota 429\nexit=6",
+        }}
+        kickoff = "【过夜自迭代启动｜TASK=V025-OVERNIGHT-START】"
+        prompt = auto_loop.build_prompt(kickoff, state, 2, "clean")
+        self.assertNotIn("V025-OVERNIGHT-START", prompt)
+        for token in ("last_task_id=T2-ATTACH", "last_decision=DISPATCH_WORKBUDDY",
+                      "last_executor=workbuddy", "last_rc=6", "quota 429"):
+            self.assertIn(token, prompt)
+
+
 if __name__ == "__main__":
     unittest.main()
