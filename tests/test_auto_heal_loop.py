@@ -185,5 +185,146 @@ class TestGitGate(unittest.TestCase):
         self.assertFalse([item for item in calls if item[0] == "push"])
 
 
+class TestOvernightLoop(unittest.TestCase):
+    BASE = "abcdef0123456789"
+    CARD = (
+        "<<<WORKBUDDY_TASK_START>>>\n"
+        "small step: fix one function and run full unittest\n"
+        "<<<WORKBUDDY_TASK_END>>>"
+    )
+
+    def _fake_git(self, calls, *, dirty: bool = True):
+        def fake(*args):
+            calls.append(args)
+            if args[:2] == ("rev-parse", "HEAD"):
+                return SimpleNamespace(
+                    returncode=0, stdout=self.BASE + "\n", stderr=""
+                )
+            if args == ("status", "--porcelain"):
+                return SimpleNamespace(
+                    returncode=0,
+                    stdout=" M engine/base.py" if dirty else "",
+                    stderr="",
+                )
+            return SimpleNamespace(returncode=0, stdout="ok", stderr="")
+        return fake
+
+    def test_multiple_green_rounds_schedule_tasks_and_commit(self):
+        calls: list[tuple[str, ...]] = []
+        with tempfile.TemporaryDirectory() as tmp:
+            runs = Path(tmp)
+            with mock.patch.object(ahl, "ROOT", Path(tmp)), \
+                    mock.patch.object(ahl, "RUNS", runs), \
+                    mock.patch.object(ahl, "LOG_NAMES", ("auto_heal_loop.log",)), \
+                    mock.patch.object(ahl, "git", side_effect=self._fake_git(calls)), \
+                    mock.patch.object(ahl.time, "sleep") as sleeper, \
+                    mock.patch.object(ahl, "clear_pid"), \
+                    mock.patch.object(
+                        ahl, "run_tests",
+                        side_effect=[(0, "OK"), (0, "OK"), (0, "OK"), (0, "OK")]
+                    ) as tests, \
+                    mock.patch.object(
+                        ahl, "load_backlog", return_value=("todo item", "test-todo")
+                    ) as backlog, \
+                    mock.patch.object(
+                        ahl, "request_task_from_gemini",
+                        side_effect=[self.CARD, self.CARD]
+                    ) as ask, \
+                    mock.patch.object(ahl, "call_workbuddy", return_value="done") as wb, \
+                    mock.patch.object(ahl, "heal") as healer, \
+                    mock.patch.object(ahl, "commit_and_push", return_value=0) as gate:
+                rc = ahl.run_overnight(max_rounds=2, no_push=True, sleep=0)
+
+            self.assertEqual(rc, 0)
+            self.assertEqual(tests.call_count, 4)
+            self.assertEqual(backlog.call_count, 2)
+            self.assertEqual(ask.call_count, 2)
+            self.assertEqual(wb.call_count, 2)
+            self.assertEqual(gate.call_count, 2)
+            healer.assert_not_called()
+            self.assertEqual(sleeper.call_count, 1)
+            self.assertEqual(
+                (runs / ahl.PID_FILE).read_text(encoding="utf-8"),
+                str(os.getpid()),
+            )
+            overnight_log = (runs / ahl.OVERNIGHT_LOG).read_text(encoding="utf-8")
+            self.assertIn("overnight start", overnight_log)
+            self.assertIn("BASE_COMMIT=" + self.BASE[:12], overnight_log)
+            self.assertIn("gate green, committed", overnight_log)
+
+    def test_red_round_is_rolled_back_and_next_round_still_runs(self):
+        calls: list[tuple[str, ...]] = []
+        with tempfile.TemporaryDirectory() as tmp:
+            runs = Path(tmp)
+            with mock.patch.object(ahl, "ROOT", Path(tmp)), \
+                    mock.patch.object(ahl, "RUNS", runs), \
+                    mock.patch.object(ahl, "LOG_NAMES", ("auto_heal_loop.log",)), \
+                    mock.patch.object(
+                        ahl, "git",
+                        side_effect=self._fake_git(calls, dirty=False)
+                    ), \
+                    mock.patch.object(ahl.time, "sleep") as sleeper, \
+                    mock.patch.object(ahl, "clear_pid"), \
+                    mock.patch.object(
+                        ahl, "run_tests",
+                        side_effect=[
+                            (1, "FAIL: test_x (tests.test_demo.Demo)"),
+                            (1, "FAIL: test_x (tests.test_demo.Demo)"),
+                            (0, "OK"),
+                            (0, "OK"),
+                        ]
+                    ), \
+                    mock.patch.object(ahl, "heal", return_value=1) as healer, \
+                    mock.patch.object(ahl, "reset_hard") as rollback, \
+                    mock.patch.object(
+                        ahl, "load_backlog", return_value=("todo", "test-todo")
+                    ), \
+                    mock.patch.object(
+                        ahl, "request_task_from_gemini", return_value=self.CARD
+                    ) as ask, \
+                    mock.patch.object(ahl, "call_workbuddy", return_value="done"), \
+                    mock.patch.object(ahl, "commit_and_push") as gate:
+                rc = ahl.run_overnight(max_rounds=2, no_push=True, sleep=1)
+
+            self.assertEqual(rc, 0)
+            healer.assert_called_once()
+            rollback.assert_called_once_with(self.BASE)
+            ask.assert_called_once()
+            gate.assert_not_called()
+            sleeper.assert_called_once_with(1)
+            overnight_log = (runs / ahl.OVERNIGHT_LOG).read_text(encoding="utf-8")
+            self.assertIn("self-heal failed", overnight_log)
+            self.assertIn("no commit", overnight_log)
+
+    def test_three_idle_rounds_stop_safely(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            runs = Path(tmp)
+            with mock.patch.object(ahl, "ROOT", Path(tmp)), \
+                    mock.patch.object(ahl, "RUNS", runs), \
+                    mock.patch.object(ahl, "LOG_NAMES", ("auto_heal_loop.log",)), \
+                    mock.patch.object(
+                        ahl, "git", side_effect=self._fake_git([], dirty=False)
+                    ), \
+                    mock.patch.object(ahl.time, "sleep"), \
+                    mock.patch.object(ahl, "clear_pid"), \
+                    mock.patch.object(ahl, "run_tests", return_value=(0, "OK")), \
+                    mock.patch.object(
+                        ahl, "load_backlog", return_value=("todo", "test-todo")
+                    ), \
+                    mock.patch.object(
+                        ahl, "request_task_from_gemini", return_value="no markers"
+                    ) as ask, \
+                    mock.patch.object(ahl, "call_workbuddy") as wb, \
+                    mock.patch.object(ahl, "commit_and_push") as gate:
+                rc = ahl.run_overnight(max_rounds=20, no_push=True, sleep=0)
+
+            self.assertEqual(rc, 0)
+            self.assertEqual(ask.call_count, 3)
+            wb.assert_not_called()
+            gate.assert_not_called()
+            overnight_log = (runs / ahl.OVERNIGHT_LOG).read_text(encoding="utf-8")
+            self.assertIn("THREE_IDLE_ROUNDS", overnight_log)
+
+
 if __name__ == "__main__":
     unittest.main()

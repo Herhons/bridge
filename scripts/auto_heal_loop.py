@@ -13,6 +13,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -34,6 +35,16 @@ FAIL_INLINE_RE = re.compile(
 )
 COMMIT_RE = re.compile(r"[0-9a-f]{7,40}\Z")
 
+LOG_NAMES: tuple[str, ...] = ("auto_heal_loop.log",)
+OVERNIGHT_LOG = "overnight.log"
+PID_FILE = "overnight.pid"
+BACKLOG_CANDIDATES = (
+    "runs/overnight_todo.md",
+    "runs/todo.md",
+    "TODO.md",
+    "runs/auto_logs/overnight_kickoff.txt",
+)
+
 
 # ---------------------------------------------------------------- logging
 def log(message: str, level: str = "INFO") -> None:
@@ -43,8 +54,23 @@ def log(message: str, level: str = "INFO") -> None:
     print(line, flush=True)
     try:
         RUNS.mkdir(parents=True, exist_ok=True)
-        with (RUNS / "auto_heal_loop.log").open("a", encoding="utf-8") as handle:
-            handle.write(line + "\n")
+        for name in LOG_NAMES:
+            with (RUNS / name).open("a", encoding="utf-8") as handle:
+                handle.write(line + "\n")
+    except OSError:
+        pass
+
+
+def write_pid() -> int:
+    pid = os.getpid()
+    RUNS.mkdir(parents=True, exist_ok=True)
+    (RUNS / PID_FILE).write_text(str(pid), encoding="utf-8")
+    return pid
+
+
+def clear_pid() -> None:
+    try:
+        (RUNS / PID_FILE).unlink(missing_ok=True)
     except OSError:
         pass
 
@@ -274,6 +300,37 @@ def build_gemini_prompt(attempt: int, report: Path) -> str:
     )
 
 
+def load_backlog() -> tuple[str, str]:
+    """Reuse an existing todo/kickoff file, else derive work from git state."""
+    for rel in BACKLOG_CANDIDATES:
+        path = ROOT / rel
+        if path.is_file():
+            text = path.read_text(encoding="utf-8", errors="replace").strip()
+            if text:
+                return text, rel
+    derived = (
+        "git log -n 10 --oneline:\n%s\n\ngit status:\n%s"
+        % (git_text("log", "-n", "10", "--oneline"), git_text("status"))
+    )
+    return derived, "git-log+status"
+
+
+def build_task_prompt(round_no: int, backlog: str, base_commit: str) -> str:
+    return (
+        "【Bridge 过夜迭代 round=%d | BASE_COMMIT=%s】\n"
+        "现有自动循环/待办清单（若已完成请挑下一项未完成的小步）：\n"
+        "%s\n\n"
+        "请给出下一项小步、可独立测试、可由全量 unittest 验证的改进任务。\n"
+        "只输出任务卡，不要寒暄或解释；任务卡必须只出现一次且在标记之间。\n"
+        "任务卡要写明：改动文件、具体修复点、禁止删除或弱化既有断言、"
+        "以及最后必须运行全量单测。\n\n"
+        "<<<WORKBUDDY_TASK_START>>>\n"
+        "...任务卡内容...\n"
+        "<<<WORKBUDDY_TASK_END>>>\n"
+        % (round_no, base_commit, backlog[:6000])
+    )
+
+
 def parse_reply(rc: int, output: str, saved: Path) -> str:
     text = output or ""
     try:
@@ -317,6 +374,33 @@ def call_gemini(report: Path, attempt: int, timeout: float) -> str:
     if not reply:
         reply = read_reply("gemini", saved, timeout=60)
     log("gemini rc=%s reply_chars=%d" % (rc, len(reply)))
+    return reply
+
+
+def request_task_from_gemini(
+    backlog: str,
+    round_no: int,
+    base_commit: str,
+    timeout: float,
+) -> str:
+    prompt_file = RUNS / ("overnight_prompt_round%d.txt" % round_no)
+    saved = RUNS / ("overnight_task_round%d.txt" % round_no)
+    prompt_file.parent.mkdir(parents=True, exist_ok=True)
+    prompt_file.write_text(
+        build_task_prompt(round_no, backlog, base_commit), encoding="utf-8"
+    )
+    bridge_timeout = max(30, int(timeout - 30))
+    cmd = [
+        PYTHON, str(BRIDGE), "ask", "gemini", "",
+        "--file", str(prompt_file),
+        "--profile", "test", "--headed",
+        "--timeout", str(bridge_timeout), "--json", "--save", str(saved),
+    ]
+    rc, output = run_cmd(cmd, timeout=timeout, cwd=ROOT)
+    reply = parse_reply(rc, output, saved)
+    if not reply:
+        reply = read_reply("gemini", saved, timeout=60)
+    log("overnight task request rc=%s reply_chars=%d" % (rc, len(reply)))
     return reply
 
 
@@ -378,6 +462,7 @@ def heal(
     no_push: bool = False,
     timeout: float = 300,
     report_path: str | Path = "runs/crash_report.md",
+    commit_on_green: bool = True,
 ) -> int:
     os.environ["PYTHONIOENCODING"] = "utf-8"
     base_commit = head_commit()
@@ -399,10 +484,12 @@ def heal(
         rc, output = run_tests(timeout)
         if rc == 0:
             log("round %d: full unittest green (rc=0)" % attempt)
-            return commit_and_push(
-                "fix(heal): self-healed unit tests via gemini/workbuddy",
-                no_push,
-            )
+            if commit_on_green:
+                return commit_and_push(
+                    "fix(heal): self-healed unit tests via gemini/workbuddy",
+                    no_push,
+                )
+            return 0
 
         log("round %d: unittest red (rc=%s); building crash report" % (attempt, rc),
             "ERROR")
@@ -432,6 +519,162 @@ def heal(
     return 1
 
 
+def has_changes() -> bool:
+    return bool(git("status", "--porcelain").stdout.strip())
+
+
+def run_overnight(
+    max_rounds: int = 20,
+    *,
+    no_push: bool = False,
+    timeout: float = 300,
+    sleep: float = 60,
+    delay_start: float = 0,
+) -> int:
+    """Multi-round overnight loop: red -> self-heal, green -> next task."""
+    global LOG_NAMES
+    previous_logs = LOG_NAMES
+    LOG_NAMES = (OVERNIGHT_LOG,)
+    pid = write_pid()
+    idle_streak = 0
+    failure_streak = 0
+    reason = "MAX_ROUNDS"
+    exit_code = 0
+    try:
+        log("overnight start pid=%d max_rounds=%d sleep=%.1fs delay=%.1fs no_push=%s"
+            % (pid, max_rounds, sleep, delay_start, no_push))
+        if delay_start > 0:
+            log("delay-start: sleeping %.1fs" % delay_start)
+            time.sleep(delay_start)
+
+        for round_no in range(1, max(1, max_rounds) + 1):
+            base = head_commit()
+            if not COMMIT_RE.fullmatch(base):
+                log("round %d: cannot resolve BASE_COMMIT" % round_no, "ERROR")
+                failure_streak += 1
+                idle_streak += 1
+                if failure_streak >= 3:
+                    reason = "THREE_CONSECUTIVE_FAILURES"
+                    break
+                time.sleep(sleep)
+                continue
+
+            log("round %d/%d BASE_COMMIT=%s" % (round_no, max_rounds, base[:12]))
+            rc, _ = run_tests(timeout)
+
+            if rc != 0:
+                log("round %d: red suite; self-heal up to 3 attempts" % round_no,
+                    "ERROR")
+                heal_rc = heal(
+                    max_retries=3, no_push=no_push, timeout=timeout,
+                    commit_on_green=False,
+                )
+                final_rc, _ = run_tests(timeout)
+                if heal_rc == 0 and final_rc == 0:
+                    log("round %d: self-heal green" % round_no)
+                    failure_streak = 0
+                else:
+                    log("round %d: self-heal failed; rollback to %s"
+                        % (round_no, base[:12]), "ERROR")
+                    reset_hard(base)
+                    failure_streak += 1
+                    idle_streak += 1
+                    if failure_streak >= 3:
+                        reason = "THREE_CONSECUTIVE_FAILURES"
+                        break
+                    log("sleep %.1fs before next round" % sleep)
+                    time.sleep(sleep)
+                    continue
+            else:
+                failure_streak = 0
+                backlog, source = load_backlog()
+                log("round %d: next-task source=%s" % (round_no, source))
+                reply = request_task_from_gemini(backlog, round_no, base, timeout)
+                card = extract_task_card(reply)
+                if not card:
+                    log("round %d: no valid task card; skip round" % round_no,
+                        "ERROR")
+                    idle_streak += 1
+                    if idle_streak >= 3:
+                        reason = "THREE_IDLE_ROUNDS"
+                        break
+                    time.sleep(sleep)
+                    continue
+
+                (RUNS / ("overnight_accepted_task_round%d.md" % round_no)).write_text(
+                    card, encoding="utf-8"
+                )
+                wb_reply = call_workbuddy(card, round_no, timeout)
+                log("round %d: workbuddy reply_chars=%d" % (round_no, len(wb_reply)))
+                post_rc, _ = run_tests(timeout)
+                if post_rc != 0:
+                    log("round %d: new task made suite red; self-heal" % round_no,
+                        "ERROR")
+                    heal_rc = heal(
+                        max_retries=3, no_push=no_push, timeout=timeout,
+                        commit_on_green=False,
+                    )
+                    post_rc, _ = run_tests(timeout)
+                    if heal_rc != 0 or post_rc != 0:
+                        log("round %d: self-heal failed; rollback to %s"
+                            % (round_no, base[:12]), "ERROR")
+                        reset_hard(base)
+                        failure_streak += 1
+                        idle_streak += 1
+                        if failure_streak >= 3:
+                            reason = "THREE_CONSECUTIVE_FAILURES"
+                            break
+                        time.sleep(sleep)
+                        continue
+                    failure_streak = 0
+                rc = post_rc
+
+            if rc != 0:
+                reset_hard(base)
+                failure_streak += 1
+                idle_streak += 1
+                if failure_streak >= 3:
+                    reason = "THREE_CONSECUTIVE_FAILURES"
+                    break
+                time.sleep(sleep)
+                continue
+
+            if has_changes():
+                gate_rc = commit_and_push(
+                    "chore(overnight): round %d auto improvement" % round_no,
+                    no_push,
+                )
+                if gate_rc == 0:
+                    idle_streak = 0
+                    log("round %d: gate green, committed" % round_no)
+                else:
+                    log("round %d: commit/push gate failed" % round_no, "ERROR")
+                    idle_streak += 1
+                    failure_streak += 1
+                    if failure_streak >= 3:
+                        reason = "THREE_CONSECUTIVE_FAILURES"
+                        break
+            else:
+                log("round %d: green but no changes; no commit" % round_no)
+                idle_streak += 1
+
+            if idle_streak >= 3:
+                reason = "THREE_IDLE_ROUNDS"
+                break
+            if round_no < max(1, max_rounds):
+                log("sleep %.1fs before next round" % sleep)
+                time.sleep(sleep)
+    except Exception as exc:  # noqa: BLE001 - unattended runner must not hang
+        log("overnight exception: %s" % exc, "ERROR")
+        reason = "EXCEPTION"
+        exit_code = 1
+    finally:
+        log("overnight stop reason=%s pid=%d" % (reason, pid))
+        clear_pid()
+        LOG_NAMES = previous_logs
+    return exit_code
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--max-retries", type=int, default=3)
@@ -440,11 +683,26 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--timeout", type=float, default=300,
                         help="per-subprocess timeout in seconds")
     parser.add_argument("--report", default="runs/crash_report.md")
+    parser.add_argument("--overnight", action="store_true",
+                        help="run multi-round unattended overnight loop")
+    parser.add_argument("--max-rounds", type=int, default=20)
+    parser.add_argument("--sleep", type=float, default=60,
+                        help="seconds between overnight rounds")
+    parser.add_argument("--delay-start", type=float, default=0,
+                        help="seconds to wait before the first round")
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.overnight:
+        return run_overnight(
+            max_rounds=args.max_rounds,
+            no_push=args.no_push,
+            timeout=args.timeout,
+            sleep=args.sleep,
+            delay_start=args.delay_start,
+        )
     return heal(
         max_retries=args.max_retries,
         no_push=args.no_push,
