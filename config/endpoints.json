@@ -1078,7 +1078,18 @@
         }
       },
       "templates": {},
-      "content_max_rel_x": 0.62
+      "content_max_rel_x": 0.62,
+      "require_new_copy_button": true,
+      "stable_seconds": 6.0,
+      "busy_text_patterns": [
+        "?????",
+        "????",
+        "??????????",
+        "????????",
+        "????",
+        "?? ",
+        "????"
+      ]
     },
     "hermes": {
       "kind": "desktop",

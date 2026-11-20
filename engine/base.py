@@ -814,6 +814,7 @@ class EndpointDriver:
         max_rel_x = float(self.cfg.get("content_max_rel_x", 1.0))
         prefer_paste = bool(self.cfg.get("prefer_paste", False))
         require_receipt = bool(self.cfg.get("require_send_receipt", False))
+        require_new_copy = bool(self.cfg.get("require_new_copy_button", False))
 
         # Resolve --profile into effective model + free_only guard
         effective_model = model
@@ -1025,6 +1026,7 @@ class EndpointDriver:
         stable_since: float | None = None
         last_snap: Snapshot | None = before_snap
         receipt_seen = False
+        before_copy_count = len(self._copy_buttons(before_snap)) if before_snap else 0
         last_diag: dict[str, Any] = {}
         while time.monotonic() < deadline:
             fb = self.post_read_fallback(win, before_meta)
@@ -1057,7 +1059,8 @@ class EndpointDriver:
                 "last_text_preview": cur_text[:160],
             }
 
-            if generating or not cur_text or (require_receipt and not receipt_seen):
+            new_copy_seen = (len(self._copy_buttons(cur_snap)) > before_copy_count)
+            if generating or not cur_text or (require_receipt and not receipt_seen) or (require_new_copy and not new_copy_seen):
                 last_text = cur_text if (not require_receipt or receipt_seen) else ""
                 stable_since = None
                 self._sleep(poll)
@@ -1091,7 +1094,7 @@ class EndpointDriver:
                 )
             self._sleep(poll)
 
-        if last_text and (not require_receipt or receipt_seen):
+        if last_text and (not require_receipt or receipt_seen) and (not require_new_copy or (last_snap is not None and len(self._copy_buttons(last_snap)) > before_copy_count)):
             warnings.append("returned_at_deadline")
             self.ledger.mark(clean_prompt, self.name, "accepted", note="returned_at_deadline")
             return self._ok_payload(
