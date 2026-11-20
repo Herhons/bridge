@@ -1,0 +1,141 @@
+{
+  "version": "0.2.4",
+  "updated_at": "2026-11-20",
+  "profiles": {
+    "test": {
+      "free_only": true,
+      "description": "冒烟与回归测试：强制使用免费/0.00x档位，遇到收费档自动熔断（exit 5）"
+    },
+    "routine": {
+      "free_only": false,
+      "description": "日常协作与轻度整理：优先速度与低倍率模型"
+    },
+    "council": {
+      "free_only": false,
+      "description": "多AI会审、架构评审与疑难排障：优先高强度推理模型"
+    }
+  },
+  "cost_guard": {
+    "free_markers": [
+      "0.00x",
+      "限时免费",
+      "免费",
+      "free",
+      "4 hydrogen",
+      "日常帮助"
+    ],
+    "paid_multiplier_regex": "(?<!\\d)(?:[1-9]\\d*\\.\\d+|0\\.(?:0[1-9]|[1-9]\\d*))x"
+  },
+  "executor_fallback": {
+    "order": ["opencode", "workbuddy", "codex"],
+    "quota_error_patterns": [
+      "quota",
+      "rate limit",
+      "insufficient",
+      "limit exceeded",
+      "too many requests",
+      "429",
+      "额度",
+      "余额不足",
+      "超出限制"
+    ]
+  },
+  "endpoints": {
+    "gemini": {
+      "test": "hydrogen",
+      "routine": "neon",
+      "council": "carbon",
+      "verified_models": [
+        {"id": "hydrogen", "ui_label": "日常帮助 4 Hydrogen", "tier": "free"},
+        {"id": "neon", "ui_label": "Neon", "tier": "standard"},
+        {"id": "carbon", "ui_label": "Carbon", "tier": "strong"}
+      ]
+    },
+    "workbuddy": {
+      "test": "free",
+      "routine": "hy4",
+      "council": "ultimate",
+      "verified_models": [
+        {"id": "hy4_flash", "ui_label": "Hy4 flash 限时免费 0.00x", "tier": "free"},
+        {"id": "deepseek_flash", "ui_label": "DeepSeek-V4.1-Flash 0.11x", "tier": "paid"},
+        {"id": "hy4", "ui_label": "Hy4 0.29x", "tier": "paid"},
+        {"id": "balanced", "ui_label": "均衡 0.50x", "tier": "paid"},
+        {"id": "glm53", "ui_label": "GLM-5.3 0.69x", "tier": "paid"},
+        {"id": "ultimate", "ui_label": "极致 1.00x", "tier": "strong"}
+      ]
+    },
+    "deepseek": {
+      "test": "default",
+      "routine": "default",
+      "council": "think",
+      "verified_models": [
+        {"id": "default", "ui_label": "DeepSeek 默认", "tier": "free"},
+        {"id": "think", "ui_label": "深度思考 (R1)", "tier": "strong"}
+      ]
+    },
+    "grok": {
+      "test": "fast",
+      "routine": "auto",
+      "council": "expert",
+      "verified_models": [
+        {"id": "fast", "ui_label": "Fast", "tier": "free"},
+        {"id": "auto", "ui_label": "Auto", "tier": "standard"},
+        {"id": "expert", "ui_label": "Expert", "tier": "strong"}
+      ]
+    },
+    "grokbot": {
+      "test": "default",
+      "routine": "default",
+      "council": "default",
+      "verified_models": [
+        {"id": "default", "ui_label": "GrokBot 默认", "tier": "free"}
+      ]
+    },
+    "hermes": {
+      "test": "freellm",
+      "routine": "freellm",
+      "council": "freellm",
+      "verified_models": [
+        {"id": "freellm", "ui_label": "FreeLLMAPI", "tier": "free"}
+      ]
+    },
+    "chatgpt": {
+      "test": "gpt56",
+      "routine": "gpt6",
+      "council": "gpt61_sol",
+      "verified_models": [
+        {"id": "gpt56", "ui_label": "GPT-5.6", "tier": "standard"},
+        {"id": "gpt6", "ui_label": "GPT-6", "tier": "standard"},
+        {"id": "gpt61_sol", "ui_label": "GPT-6.1 Sol", "tier": "strong"}
+      ]
+    },
+    "codex": {
+      "test": "default",
+      "routine": "default",
+      "council": "gpt61_sol",
+      "verified_models": [
+        {"id": "default", "ui_label": "Codex 默认", "tier": "standard"},
+        {"id": "gpt61_sol", "ui_label": "GPT-6.1 Sol", "tier": "strong"}
+      ]
+    },
+    "dsh": {
+      "test": "deepseek",
+      "routine": "deepseek",
+      "council": "luna",
+      "verified_models": [
+        {"id": "deepseek", "ui_label": "DeepSeek", "tier": "free"},
+        {"id": "luna", "ui_label": "Luna", "tier": "strong"}
+      ]
+    },
+    "opencode": {
+      "test": "glm_free",
+      "routine": "deepseek_free",
+      "council": "claude_opus",
+      "verified_models": [
+        {"id": "glm_free", "ui_label": "GLM Free", "tier": "free"},
+        {"id": "deepseek_free", "ui_label": "DeepSeek Free", "tier": "free"},
+        {"id": "claude_opus", "ui_label": "Claude Opus", "tier": "strong"}
+      ]
+    }
+  }
+}

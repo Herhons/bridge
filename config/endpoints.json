@@ -1,0 +1,1250 @@
+{
+  "version": "0.2.4",
+  "endpoints": {
+    "chatgpt": {
+      "kind": "web",
+      "url": "https://chatgpt.com/",
+      "url_host": "chatgpt.com",
+      "process_names": [
+        "chrome.exe",
+        "msedge.exe"
+      ],
+      "title_contains": [
+        "ChatGPT"
+      ],
+      "prefer_paste": true,
+      "skip_default_model_switch": true,
+      "scroll_before_copy": true,
+      "placeholders": [
+        "询问 ChatGPT",
+        "Ask anything",
+        "Message ChatGPT"
+      ],
+      "noise_lines": [
+        "ChatGPT",
+        "你",
+        "You",
+        "复制",
+        "Copy",
+        "重新生成",
+        "回答已完成"
+      ],
+      "models": [
+        "gpt6",
+        "gpt61_sol",
+        "gpt61_terra",
+        "gpt6_astra",
+        "gpt56"
+      ],
+      "model_aliases": {
+        "gpt6": [
+          "GPT-6",
+          "gpt6"
+        ],
+        "gpt61_sol": [
+          "GPT-6.1 Sol",
+          "gpt61_sol"
+        ],
+        "gpt61_terra": [
+          "GPT-6.1 Terra",
+          "gpt61_terra"
+        ],
+        "gpt6_astra": [
+          "GPT-6 Astra",
+          "gpt6_astra"
+        ],
+        "gpt56": [
+          "GPT-5.6",
+          "gpt56"
+        ]
+      },
+      "selectors": {
+        "composer": {
+          "roles": [
+            "EditControl",
+            "DocumentControl",
+            "GroupControl"
+          ],
+          "name_contains": [
+            "ChatGPT",
+            "询问",
+            "Ask"
+          ],
+          "anchor_box_ratio": [
+            0.04,
+            0.72,
+            0.96,
+            0.98
+          ]
+        },
+        "send_button": {
+          "roles": [
+            "ButtonControl"
+          ],
+          "names": [
+            "发送",
+            "发送消息",
+            "发送提示",
+            "Send",
+            "Send prompt"
+          ]
+        },
+        "stop_button": {
+          "roles": [
+            "ButtonControl"
+          ],
+          "names": [
+            "停止",
+            "停止生成",
+            "Stop",
+            "Stop streaming"
+          ]
+        },
+        "copy_button": {
+          "roles": [
+            "ButtonControl"
+          ],
+          "names": [
+            "复制",
+            "Copy",
+            "复制回复",
+            "Copy response"
+          ]
+        },
+        "new_chat": {
+          "names": [
+            "新聊天",
+            "新对话",
+            "New chat"
+          ]
+        },
+        "model_selector": {
+          "roles": [
+            "ButtonControl",
+            "ComboBoxControl"
+          ],
+          "names": [
+            "选择 ChatGPT 模型"
+          ],
+          "name_contains": [
+            "ChatGPT 模型",
+            "Model",
+            "模型"
+          ]
+        },
+        "model_option": {
+          "roles": [
+            "RadioButtonControl",
+            "MenuItemControl",
+            "ListItemControl"
+          ],
+          "name_contains": []
+        }
+      },
+      "templates": {
+        "send_button": "gpt_send_on",
+        "new_chat": "gpt_newchat"
+      }
+    },
+    "gemini": {
+      "kind": "web",
+      "url": "https://gemini.google.com/app",
+      "url_host": "gemini.google.com",
+      "process_names": [
+        "chrome.exe",
+        "msedge.exe"
+      ],
+      "title_contains": [
+        "Gemini"
+      ],
+      "prefer_paste": true,
+      "scroll_before_copy": true,
+      "placeholders": [
+        "输入 Google 提示",
+        "问问 Gemini",
+        "Ask Gemini",
+        "Enter a prompt here"
+      ],
+      "noise_lines": [
+        "Gemini",
+        "你说",
+        "You said",
+        "复制",
+        "Copy",
+        "重新生成"
+      ],
+      "models": [
+        "hydrogen",
+        "neon",
+        "carbon",
+        "flash_lite",
+        "flash",
+        "pro",
+        "argon"
+      ],
+      "model_aliases": {
+        "free": [
+          "4 Hydrogen",
+          "Hydrogen",
+          "日常帮助"
+        ],
+        "hydrogen": [
+          "4 Hydrogen",
+          "Hydrogen",
+          "日常帮助",
+          "Flash Lite",
+          "Flash-Lite"
+        ],
+        "flash_lite": [
+          "4 Hydrogen",
+          "Hydrogen",
+          "日常帮助",
+          "Flash Lite",
+          "Flash-Lite",
+          "3.5 Flash-Lite"
+        ],
+        "neon": [
+          "Neon",
+          "3.5 Flash",
+          "Flash"
+        ],
+        "flash": [
+          "Neon",
+          "3.5 Flash",
+          "Flash",
+          "3.8 Flash"
+        ],
+        "carbon": [
+          "Carbon",
+          "Pro",
+          "3.1 Pro"
+        ],
+        "pro": [
+          "Carbon",
+          "Pro",
+          "3.1 Pro"
+        ],
+        "argon": [
+          "Argon",
+          "4 Argon",
+          "Flash 思考"
+        ]
+      },
+      "selectors": {
+        "composer": {
+          "roles": [
+            "EditControl",
+            "DocumentControl",
+            "GroupControl"
+          ],
+          "name_contains": [
+            "输入 Google 提示",
+            "Gemini",
+            "问问",
+            "prompt"
+          ]
+        },
+        "send_button": {
+          "roles": [
+            "ButtonControl"
+          ],
+          "names": [
+            "发送",
+            "提交",
+            "Send",
+            "Send message"
+          ]
+        },
+        "stop_button": {
+          "roles": [
+            "ButtonControl"
+          ],
+          "names": [
+            "停止",
+            "停止回答",
+            "Stop",
+            "Stop response"
+          ]
+        },
+        "copy_button": {
+          "roles": [
+            "ButtonControl"
+          ],
+          "names": [
+            "复制",
+            "Copy"
+          ]
+        },
+        "new_chat": {
+          "names": [
+            "发起新对话",
+            "新对话",
+            "New chat"
+          ]
+        },
+        "model_selector": {
+          "roles": [
+            "ButtonControl",
+            "ComboBoxControl"
+          ],
+          "names": [
+            "选择模型"
+          ],
+          "name_contains": [
+            "打开模式选择器",
+            "选择模型",
+            "模式选择器",
+            "当前模式为",
+            "Model"
+          ]
+        },
+        "model_option": {
+          "roles": [
+            "RadioButtonControl"
+          ],
+          "name_contains": []
+        }
+      },
+      "templates": {
+        "send_button": "gem_send_on",
+        "new_chat": "gem_newchat"
+      }
+    },
+    "grok": {
+      "kind": "web",
+      "url": "https://grok.com/",
+      "url_host": "grok.com",
+      "process_names": [
+        "chrome.exe",
+        "msedge.exe"
+      ],
+      "title_contains": [
+        "Grok"
+      ],
+      "prefer_paste": true,
+      "single_line_paste": true,
+      "require_send_receipt": true,
+      "scroll_before_copy": true,
+      "fallback_composer_ratio": [
+        0.5,
+        0.88
+      ],
+      "placeholders": [
+        "问 Grok 任何问题",
+        "提问、想象、构建任何事物",
+        "畅所欲问",
+        "Ask anything"
+      ],
+      "noise_lines": [
+        "Grok",
+        "助手",
+        "你",
+        "You",
+        "复制",
+        "复制响应",
+        "Copy",
+        "Copy response",
+        "Like",
+        "Dislike",
+        "重新生成"
+      ],
+      "models": [
+        "fast",
+        "auto",
+        "expert",
+        "build"
+      ],
+      "model_aliases": {
+        "free": [
+          "Fast",
+          "快速",
+          "fast"
+        ],
+        "fast": [
+          "Fast",
+          "Grok 3 Mini",
+          "快速",
+          "fast"
+        ],
+        "auto": [
+          "Auto",
+          "Grok 4.1",
+          "自动",
+          "auto"
+        ],
+        "expert": [
+          "Expert",
+          "Grok 4.5",
+          "Grok 4.3",
+          "专家",
+          "expert"
+        ],
+        "build": [
+          "Build",
+          "构建",
+          "build"
+        ]
+      },
+      "selectors": {
+        "composer": {
+          "roles": [
+            "EditControl",
+            "DocumentControl",
+            "GroupControl"
+          ],
+          "name_contains": [
+            "问 Grok 任何问题",
+            "提问、想象",
+            "畅所欲问",
+            "Ask",
+            "Grok"
+          ],
+          "anchor_box_ratio": [
+            0.04,
+            0.7,
+            0.96,
+            0.98
+          ]
+        },
+        "send_button": {
+          "roles": [
+            "ButtonControl"
+          ],
+          "names": [
+            "发送",
+            "提交",
+            "Submit",
+            "Send"
+          ]
+        },
+        "stop_button": {
+          "roles": [
+            "ButtonControl"
+          ],
+          "names": [
+            "Stop",
+            "停止"
+          ]
+        },
+        "copy_button": {
+          "roles": [
+            "ButtonControl"
+          ],
+          "names": [
+            "Copy",
+            "复制",
+            "复制响应",
+            "Copy response"
+          ]
+        },
+        "new_chat": {
+          "names": [
+            "聊天",
+            "新聊天",
+            "新对话",
+            "New chat"
+          ]
+        },
+        "model_selector": {
+          "roles": [
+            "ButtonControl",
+            "ComboBoxControl"
+          ],
+          "names": [
+            "选择 Grok 版本"
+          ],
+          "name_contains": [
+            "选择 Grok 版本",
+            "型号:",
+            "Fast",
+            "Expert",
+            "Auto",
+            "Model"
+          ]
+        },
+        "model_option": {
+          "roles": [
+            "RadioButtonControl",
+            "MenuItemControl",
+            "ListItemControl"
+          ],
+          "name_contains": []
+        }
+      },
+      "templates": {
+        "send_button": "grok_send_on",
+        "new_chat": "grok_newchat"
+      }
+    },
+    "deepseek": {
+      "kind": "web",
+      "url": "https://chat.deepseek.com/",
+      "url_host": "chat.deepseek.com",
+      "process_names": [
+        "chrome.exe",
+        "msedge.exe"
+      ],
+      "title_contains": [
+        "DeepSeek"
+      ],
+      "prefer_paste": true,
+      "skip_default_model_switch": true,
+      "scroll_before_copy": true,
+      "paste_chunk": 1500,
+      "placeholders": [
+        "输入你的问题",
+        "给 DeepSeek 发送消息",
+        "Message DeepSeek"
+      ],
+      "noise_lines": [
+        "DeepSeek",
+        "深度思考",
+        "智能搜索",
+        "联网搜索",
+        "复制",
+        "Copy",
+        "重新生成"
+      ],
+      "noise_contains": [
+        "内容由 AI 生成",
+        "创建拆分视图",
+        "chat.deepseek.com"
+      ],
+      "models": [
+        "default",
+        "think"
+      ],
+      "model_aliases": {
+        "free": [
+          "DeepSeek-V4-Pro",
+          "V3",
+          "default"
+        ],
+        "think": [
+          "R1",
+          "深度思考",
+          "DeepThink",
+          "think"
+        ],
+        "default": [
+          "DeepSeek-V4-Pro",
+          "V3",
+          "default"
+        ]
+      },
+      "selectors": {
+        "composer": {
+          "roles": [
+            "EditControl",
+            "DocumentControl",
+            "GroupControl"
+          ],
+          "name_contains": [
+            "输入你的问题",
+            "DeepSeek",
+            "发送消息"
+          ]
+        },
+        "send_button": {
+          "roles": [
+            "ButtonControl"
+          ],
+          "names": [
+            "发送",
+            "Send"
+          ]
+        },
+        "stop_button": {
+          "roles": [
+            "ButtonControl"
+          ],
+          "names": [
+            "停止",
+            "停止生成",
+            "Stop"
+          ]
+        },
+        "copy_button": {
+          "roles": [
+            "ButtonControl"
+          ],
+          "names": [
+            "Copy",
+            "复制",
+            "复制内容",
+            "复制回复"
+          ]
+        },
+        "new_chat": {
+          "names": [
+            "开启新对话",
+            "新建对话",
+            "New chat"
+          ]
+        },
+        "model_selector": {
+          "roles": [
+            "ButtonControl",
+            "ComboBoxControl"
+          ],
+          "name_contains": [
+            "DeepSeek-V4",
+            "深度思考",
+            "DeepThink",
+            "Model"
+          ]
+        },
+        "model_option": {
+          "roles": [
+            "ListItemControl",
+            "MenuItemControl",
+            "RadioButtonControl"
+          ],
+          "name_contains": []
+        }
+      },
+      "templates": {
+        "send_button": "ds_send_on",
+        "new_chat": "ds_newchat"
+      }
+    },
+    "codex": {
+      "kind": "desktop",
+      "launch_app_id": "OpenAI.Codex_2p2nqsd0c76g0!App",
+      "process_names": [
+        "ChatGPT.exe",
+        "Codex.exe"
+      ],
+      "exclude_processes": [
+        "chrome.exe",
+        "msedge.exe"
+      ],
+      "title_contains": [
+        "ChatGPT",
+        "Codex"
+      ],
+      "prefer_paste": true,
+      "skip_default_model_switch": true,
+      "scroll_before_copy": true,
+      "placeholders": [
+        "Ask anything",
+        "询问",
+        "Message"
+      ],
+      "noise_lines": [
+        "Codex",
+        "ChatGPT",
+        "复制",
+        "Copy"
+      ],
+      "models": [
+        "default",
+        "gpt61_sol",
+        "gpt6_astra",
+        "gpt61_terra",
+        "gpt6_sol",
+        "gpt6_luna"
+      ],
+      "selectors": {
+        "composer": {
+          "roles": [
+            "EditControl",
+            "DocumentControl",
+            "GroupControl"
+          ],
+          "anchor_box_ratio": [
+            0.04,
+            0.75,
+            0.96,
+            0.98
+          ]
+        },
+        "send_button": {
+          "roles": [
+            "ButtonControl"
+          ],
+          "names": [
+            "发送",
+            "Send",
+            "Submit"
+          ],
+          "anchor_box_ratio": [
+            0.7,
+            0.75,
+            0.99,
+            0.99
+          ]
+        },
+        "stop_button": {
+          "roles": [
+            "ButtonControl"
+          ],
+          "names": [
+            "停止",
+            "Stop"
+          ]
+        },
+        "copy_button": {
+          "roles": [
+            "ButtonControl"
+          ],
+          "names": [
+            "Copy",
+            "复制",
+            "复制回复"
+          ]
+        },
+        "new_chat": {
+          "names": [
+            "新对话",
+            "新聊天",
+            "New chat",
+            "New thread"
+          ]
+        },
+        "model_selector": {
+          "roles": [
+            "ComboBoxControl",
+            "ButtonControl"
+          ],
+          "name_contains": [
+            "模型",
+            "Model",
+            "GPT"
+          ]
+        },
+        "model_option": {
+          "roles": [
+            "ListItemControl",
+            "MenuItemControl",
+            "RadioButtonControl"
+          ],
+          "name_contains": []
+        }
+      },
+      "templates": {
+        "send_button": "cdx_send"
+      }
+    },
+    "dsh": {
+      "kind": "desktop",
+      "launch_app_id": "electron.app.DeepSeek Harness",
+      "process_names": [
+        "DeepSeek Harness.exe"
+      ],
+      "title_contains": [
+        "DeepSeek Harness",
+        "Harness"
+      ],
+      "prefer_paste": true,
+      "skip_default_model_switch": true,
+      "scroll_before_copy": true,
+      "placeholders": [
+        "输入消息",
+        "Ask",
+        "Message"
+      ],
+      "noise_lines": [
+        "DeepSeek Harness",
+        "复制",
+        "Copy"
+      ],
+      "models": [
+        "deepseek",
+        "luna"
+      ],
+      "selectors": {
+        "composer": {
+          "roles": [
+            "EditControl",
+            "DocumentControl",
+            "GroupControl"
+          ],
+          "anchor_box_ratio": [
+            0.04,
+            0.75,
+            0.96,
+            0.98
+          ]
+        },
+        "send_button": {
+          "roles": [
+            "ButtonControl"
+          ],
+          "names": [
+            "发送",
+            "Send",
+            "Submit"
+          ],
+          "anchor_box_ratio": [
+            0.7,
+            0.75,
+            0.99,
+            0.99
+          ]
+        },
+        "stop_button": {
+          "roles": [
+            "ButtonControl"
+          ],
+          "names": [
+            "停止",
+            "Stop"
+          ]
+        },
+        "copy_button": {
+          "roles": [
+            "ButtonControl"
+          ],
+          "names": [
+            "Copy",
+            "复制"
+          ]
+        },
+        "new_chat": {
+          "names": [
+            "新对话",
+            "New chat",
+            "New session"
+          ]
+        },
+        "model_selector": {
+          "roles": [
+            "ComboBoxControl",
+            "ButtonControl"
+          ],
+          "name_contains": [
+            "模型",
+            "Model",
+            "DeepSeek",
+            "Luna"
+          ]
+        },
+        "model_option": {
+          "roles": [
+            "ListItemControl",
+            "MenuItemControl"
+          ],
+          "name_contains": []
+        }
+      },
+      "templates": {
+        "send_button": "dsh_send"
+      }
+    },
+    "opencode": {
+      "kind": "cli",
+      "cli_command": "opencode",
+      "launch_app_id": "ai.opencode.desktop",
+      "process_names": [
+        "OpenCode.exe",
+        "opencode.exe"
+      ],
+      "title_contains": [
+        "OpenCode"
+      ],
+      "use_sqlite_fallback": true,
+      "models": [
+        "claude_opus",
+        "deepseek_free",
+        "glm_free"
+      ],
+      "models_note": "Runs via native non-interactive CLI ('opencode --prompt ... --auto') with read-only SQLite fallback for read().",
+      "selectors": {},
+      "templates": {
+        "send_button": "oc_send"
+      }
+    },
+    "workbuddy": {
+      "kind": "desktop",
+      "launch_app_id": "WorkBuddy.WorkBuddy",
+      "process_names": [
+        "WorkBuddy.exe"
+      ],
+      "title_contains": [
+        "WorkBuddy"
+      ],
+      "prefer_paste": true,
+      "skip_default_model_switch": true,
+      "enforce_free_switch": true,
+      "scroll_before_copy": true,
+      "content_min_rel_x": 0.23,
+      "placeholders": [
+        "输入指令",
+        "输入消息",
+        "Ask",
+        "Message"
+      ],
+      "noise_lines": [
+        "WorkBuddy",
+        "新建任务",
+        "收起侧边栏",
+        "复制",
+        "Copy"
+      ],
+      "models": [
+        "free",
+        "hy4_flash",
+        "deepseek_flash",
+        "hy4",
+        "balanced",
+        "glm53",
+        "ultimate",
+        "default"
+      ],
+      "model_aliases": {
+        "free": [
+          "0.00x",
+          "限时免费",
+          "Hy4 flash",
+          "免费"
+        ],
+        "hy4_flash": [
+          "Hy4 flash",
+          "限时免费",
+          "0.00x"
+        ],
+        "deepseek_flash": [
+          "DeepSeek-V4.1-Flash",
+          "0.11x"
+        ],
+        "hy4": [
+          "Hy4 0.29x",
+          "Hy4"
+        ],
+        "balanced": [
+          "均衡",
+          "0.50x"
+        ],
+        "glm53": [
+          "GLM-5.3",
+          "0.69x"
+        ],
+        "ultimate": [
+          "极致",
+          "1.00x"
+        ]
+      },
+      "selectors": {
+        "composer": {
+          "roles": [
+            "EditControl",
+            "DocumentControl",
+            "GroupControl"
+          ],
+          "anchor_box_ratio": [
+            0.23,
+            0.72,
+            0.98,
+            0.98
+          ]
+        },
+        "send_button": {
+          "roles": [
+            "ButtonControl"
+          ],
+          "names": [
+            "发送",
+            "Send",
+            "Submit"
+          ],
+          "name_contains": [
+            "发送"
+          ],
+          "anchor_box_ratio": [
+            0.7,
+            0.75,
+            0.99,
+            0.99
+          ]
+        },
+        "stop_button": {
+          "roles": [
+            "ButtonControl"
+          ],
+          "names": [
+            "停止",
+            "Stop",
+            "Cancel"
+          ]
+        },
+        "copy_button": {
+          "roles": [
+            "ButtonControl"
+          ],
+          "names": [
+            "复制",
+            "Copy",
+            "复制消息"
+          ]
+        },
+        "new_chat": {
+          "names": [
+            "新建任务",
+            "新对话",
+            "New task",
+            "New chat"
+          ]
+        },
+        "model_selector": {
+          "roles": [
+            "ButtonControl"
+          ],
+          "name_contains": [
+            "Select model",
+            "选择模型",
+            "0.00x",
+            "0.11x",
+            "0.29x",
+            "0.50x",
+            "0.69x",
+            "1.00x"
+          ]
+        },
+        "model_option": {
+          "roles": [
+            "MenuItemControl",
+            "ListItemControl"
+          ],
+          "name_contains": []
+        }
+      },
+      "templates": {}
+    },
+    "hermes": {
+      "kind": "desktop",
+      "launch_app_id": "com.nousresearch.hermes",
+      "process_names": [
+        "Hermes.exe"
+      ],
+      "title_contains": [
+        "Hermes"
+      ],
+      "prefer_paste": true,
+      "skip_default_model_switch": true,
+      "require_send_receipt": true,
+      "submit_focus_composer": true,
+      "scroll_before_copy": true,
+      "fallback_composer_ratio": [
+        0.446,
+        0.946
+      ],
+      "placeholders": [
+        "消息",
+        "我们要构建什么",
+        "输入你的问题",
+        "Message Hermes",
+        "Ask Hermes",
+        "输入消息"
+      ],
+      "noise_lines": [
+        "Hermes",
+        "新建会话标签",
+        "搜索会话",
+        "复制",
+        "Copy"
+      ],
+      "models": [
+        "freellm"
+      ],
+      "selectors": {
+        "composer": {
+          "roles": [
+            "EditControl",
+            "DocumentControl",
+            "GroupControl"
+          ],
+          "name_contains": [
+            "消息",
+            "我们要构建什么",
+            "输入你的问题",
+            "Message",
+            "Ask"
+          ],
+          "exclude_names": [
+            "搜索会话"
+          ],
+          "anchor_box_ratio": [
+            0.15,
+            0.78,
+            0.98,
+            0.99
+          ]
+        },
+        "send_button": {
+          "roles": [
+            "ButtonControl"
+          ],
+          "names": [
+            "发送",
+            "Send",
+            "Submit"
+          ]
+        },
+        "stop_button": {
+          "roles": [
+            "ButtonControl"
+          ],
+          "names": [
+            "停止",
+            "Stop"
+          ]
+        },
+        "copy_button": {
+          "roles": [
+            "ButtonControl"
+          ],
+          "names": [
+            "复制",
+            "Copy"
+          ]
+        },
+        "new_chat": {
+          "names": [
+            "新建会话标签",
+            "New chat",
+            "新对话",
+            "New session"
+          ]
+        },
+        "model_selector": {
+          "roles": [
+            "ButtonControl",
+            "ComboBoxControl"
+          ],
+          "names": [
+            "Model",
+            "智能"
+          ],
+          "name_contains": [
+            "Model",
+            "智能"
+          ]
+        },
+        "model_option": {
+          "roles": [
+            "ListItemControl",
+            "MenuItemControl",
+            "ButtonControl"
+          ],
+          "name_contains": []
+        }
+      },
+      "templates": {},
+      "timeout": 120
+    },
+    "grokbot": {
+      "kind": "desktop",
+      "launch_app_id": "electron.app.Grok Bot",
+      "process_names": [
+        "Grok Bot.exe",
+        "Grokbot.exe"
+      ],
+      "title_contains": [
+        "Grok Bot",
+        "Grokbot",
+        "GrokBot"
+      ],
+      "prefer_paste": true,
+      "skip_default_model_switch": true,
+      "require_send_receipt": true,
+      "scroll_before_copy": true,
+      "fallback_composer_ratio": [
+        0.5,
+        0.9
+      ],
+      "placeholders": [
+        "Message",
+        "输入消息",
+        "Ask"
+      ],
+      "noise_lines": [
+        "Grok Bot",
+        "Grokbot",
+        "GrokBot",
+        "助手",
+        "复制",
+        "Copy",
+        "电脑",
+        "Bot 的电脑",
+        "语音聊天",
+        "语言",
+        "即将进行",
+        "已暂停",
+        "休眠中",
+        "语音",
+        "Chinese (Simplified)",
+        "助手 已回复"
+      ],
+      "noise_contains": [
+        "即将进行",
+        "WorkBuddy每日领100积分",
+        "WorkBuddy",
+        "Bot 的电脑",
+        "语音聊天",
+        "已暂停",
+        "休眠中",
+        "语音",
+        "Chinese (Simplified)",
+        "助手 已回复"
+      ],
+      "models": [
+        "default"
+      ],
+      "models_note": "Requires send receipt (prompt echo or new copy button) before returning reply; filters timestamps and UI chrome.",
+      "selectors": {
+        "composer": {
+          "roles": [
+            "EditControl",
+            "DocumentControl",
+            "GroupControl"
+          ],
+          "anchor_box_ratio": [
+            0.05,
+            0.72,
+            0.98,
+            0.98
+          ]
+        },
+        "send_button": {
+          "roles": [
+            "ButtonControl"
+          ],
+          "names": [
+            "发送",
+            "Send",
+            "Submit"
+          ]
+        },
+        "stop_button": {
+          "roles": [
+            "ButtonControl"
+          ],
+          "names": [
+            "停止",
+            "Stop"
+          ]
+        },
+        "copy_button": {
+          "roles": [
+            "ButtonControl"
+          ],
+          "names": [
+            "复制",
+            "Copy"
+          ]
+        },
+        "new_chat": {
+          "names": [
+            "新对话",
+            "New chat"
+          ]
+        },
+        "model_selector": {},
+        "model_option": {}
+      },
+      "templates": {},
+      "content_max_rel_x": 0.72
+    }
+  }
+}

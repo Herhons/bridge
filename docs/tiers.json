@@ -1,0 +1,21 @@
+{
+  "version": "0.2.4",
+  "note": "Legacy summary mirror of config/model_policy.json. Use --profile test|routine|council for policy-driven model selection.",
+  "purposes": {
+    "test": "Free/0.00x tier for smoke & regression tests (Fail-Closed on paid multipliers)",
+    "routine": "Fast/low-cost tier for daily collaboration",
+    "council": "High-reasoning tier for multi-AI review and architecture decisions"
+  },
+  "endpoints": {
+    "chatgpt": {"test": "gpt56", "routine": "gpt6", "council": "gpt61_sol"},
+    "gemini": {"test": "hydrogen", "routine": "neon", "council": "carbon"},
+    "grok": {"test": "fast", "routine": "auto", "council": "expert"},
+    "deepseek": {"test": "default", "routine": "default", "council": "think"},
+    "codex": {"test": "default", "routine": "default", "council": "gpt61_sol"},
+    "dsh": {"test": "deepseek", "routine": "deepseek", "council": "luna"},
+    "opencode": {"test": "glm_free", "routine": "deepseek_free", "council": "claude_opus"},
+    "workbuddy": {"test": "free", "routine": "hy4", "council": "ultimate"},
+    "hermes": {"test": "freellm", "routine": "freellm", "council": "freellm"},
+    "grokbot": {"test": "default", "routine": "default", "council": "default"}
+  }
+}
