@@ -95,6 +95,7 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
                         "endpoints": targets,
                         "model": body.get("model"),
                         "profile": body.get("profile"),
+                        "attach": body.get("attach"),
                         "preview": preview,
                     },
                 )
