@@ -86,6 +86,14 @@ Bridge 是运行在 **Windows 副屏（x 轴 `-1440..0`，竖屏 1440×2560）**
   - 另发现（如实记录）：`--headed` 的 `focus_window` 把主屏前台（斗鱼客户端 529300）抢到
     副屏 Gemini(332038)；本轮已把该调用纳入 `FocusGuard`，但 `focus_guard_strict` 默认关闭，
     故本次仍实际抢了焦点
+- [x] **M4-GUI**：原生无黑框桌面控制台 bridge_gui.pyw（stdlib tkinter，副屏停靠、一键启停、主线进度、OpenCode 冷却与实时日志）
+  - 纯逻辑层（`parse_roadmap` / `read_log_tail` / `read_opencode_cooldown` /
+    `build_daemon_cmd` / `run_bridge_json` / `compute_secondary_geometry` / `status_badge`）
+    全部可离线单测；`tkinter` 惰性导入，导入模块不建窗口
+  - 子进程一律 `CREATE_NO_WINDOW`，守护进程 `CREATE_NO_WINDOW | DETACHED_PROCESS |
+    CREATE_NEW_PROCESS_GROUP` 分离启动；关闭控制台不会带走调度器
+  - 默认停在副屏左侧（`x < 0`，`480x700-500+40`），`SetWindowPos + SWP_NOACTIVATE`
+    落地，不抢主屏焦点、不碰系统剪贴板
 - [ ] **M4-4（P0）**：Gemini 附件真机闭环 + 焦点严格门禁默认化
   - composer 可见性前置检查（滚到底/等待输入区就绪）后再触发 `--attach`，把 `#32770`
     空框问题一次验穿，证据补进 `runs/m4_3_attach_verify.txt`
