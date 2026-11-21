@@ -207,11 +207,22 @@ Bridge 是运行在 **Windows 副屏（x 轴 `-1440..0`，竖屏 1440×2560）**
     改用 `TemporaryDirectory()` 隔离 `RUNS`（断言一字未改，实测不再向真实 `runs/` 写侧写文件）；
     全量 349 条 `rc=0`；`bridge.py doctor` `ok:true`（version 仍 0.2.5）
 
+- [ ] **M4-8（主脑签收闭环与守护体验修复）**：
+  - 取消本地单方面 `ALL_DONE` 静默退出：当 `docs/ROADMAP.md` 无剩余 `- [ ]` 时，守护进程自动汇总最近提交与全量单测结果向主脑发起收口验收汇报；仅当主脑回复明确包含 `<<<BRIDGE_ALL_DONE>>>` 时才记 `ALL_DONE` 优雅退出，否则继续执行主脑下发的下一项补丁/任务
+  - 将 `bridge_gui.pyw` 启动守护进程的默认 `--timeout` 从 `300` 调整为 `600`（避免 270s 半路抢提交）
+  - 修复 Windows 下 `git commit` 中文回显在日志里乱码成 `` 的问题（`git` 传 `-c i18n.logOutputEncoding=utf-8 -c core.quotepath=false`）
+  - 补齐对应离线单测
+- [ ] **M4-9（GUI 执行器选择与一键会审）**：
+  - `bridge_gui.pyw` 增加「执行器」下拉框（`workbuddy / auto / antigravity`，默认 `workbuddy`）并在顶部显示当前执行器
+  - 增加「一键三方会审」按钮（异步调用 `deepseek / grok / gemini` 并汇总落盘）与对应离线单测
+- [ ] **M4-10（`engine/base.py` 瘦身重构）**：
+  - 将 `EndpointDriver.ask()` 拆清为独立子阶段 helper（前置准备、写入提交、回复收敛与取回），保持全部既有单测零改动全绿
+- [ ] **M4-11（本地 HTTP 控制面收口）**：
+  - 为 `engine/server.py`（`127.0.0.1:18765`）新增 `/daemon/status` 与 `/daemon/stop` 接口及离线单测
+
 ## 5. 维护约定
 
 1. 只有**全量单测绿 + 已提交**的项才可以改成 `- [x]`；半成品一律保持 `- [ ]`。
 2. 新增工作项必须写进本文件再动手，禁止只写在 `runs/` 的临时 todo 里。
 3. 子说明用普通 `- ` 列表（**不要**写成 `- [ ]`），否则会被计为未完成主线项。
-4. 全部主项收口后，在本文件末尾另起一行写 `ALL_DONE`，调度器会立即优雅退出。
-
-ALL_DONE
+4. 本地执行器严禁擅自写 ALL_DONE；当本文件无剩余 - [ ] 时，守护进程必须自动向主脑汇报验收，仅当主脑明确下发 <<<BRIDGE_ALL_DONE>>> 签收标记后才允许正式记 ALL_DONE 并退出。
