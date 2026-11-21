@@ -1336,25 +1336,43 @@
         "model_option": {},
         "attach_button": {
           "roles": [
-            "ButtonControl"
+            "ButtonControl",
+            "GroupControl"
           ],
           "name_contains": [
             "输入框操作",
             "附件",
-            "Attach"
+            "Attach",
+            "上传",
+            "Upload"
+          ],
+          "anchor_box_ratio": [
+            0.06,
+            0.9,
+            0.22,
+            0.99
           ]
         },
         "attach_menu_item": {
           "roles": [
-            "MenuItemControl"
+            "MenuItemControl",
+            "ButtonControl",
+            "ListItemControl"
           ],
           "name_contains": [
             "添加附件",
-            "Add attachment"
+            "Add attachment",
+            "上传文件",
+            "Upload file"
           ]
         }
       },
       "templates": {},
+      "fallback_attach_ratio": [
+        0.128,
+        0.95
+      ],
+      "attach_wait_seconds": 1.0,
       "content_max_rel_x": 0.72
     }
   }
