@@ -19,10 +19,45 @@ from engine.config import load_bridge_config
 class BridgeHTTPServer(ThreadingHTTPServer):
     allow_reuse_address = True
 
-    def __init__(self, server_address, handler_cls, *, dispatcher: Callable[[str, str, dict[str, Any]], dict[str, Any]], endpoint_names: list[str]):
+    def __init__(
+        self,
+        server_address,
+        handler_cls,
+        *,
+        dispatcher: Callable[[str, str, dict[str, Any]], dict[str, Any]],
+        endpoint_names: list[str],
+        status_fn: Callable[[], dict[str, Any]] | None = None,
+        stop_fn: Callable[[float], dict[str, Any]] | None = None,
+    ):
         super().__init__(server_address, handler_cls)
         self.dispatcher = dispatcher
         self.endpoint_names = endpoint_names
+        # M4-11: the daemon control plane. Both default to ``bridge.py``'s own
+        # implementation (late import, see ``_default_status_fn``); injecting
+        # them is how the offline suite exercises the routes without ever
+        # touching a real PID or ``runs/STOP``.
+        self.status_fn = status_fn or _default_status_fn
+        self.stop_fn = stop_fn or _default_stop_fn
+
+
+def _default_status_fn() -> dict[str, Any]:
+    """``bridge.py daemon-status`` snapshot, imported lazily on purpose.
+
+    ``bridge.py`` imports this module to build the server, so importing it at
+    module load would be a cycle. At call time the module is already in
+    ``sys.modules`` (the CLI is what started the server), so this is just a
+    dict lookup.
+    """
+    import bridge
+
+    return bridge.daemon_status()
+
+
+def _default_stop_fn(force_wait: float = 5.0) -> dict[str, Any]:
+    """``bridge.py stop`` semantics: write ``runs/STOP`` → wait → taskkill."""
+    import bridge
+
+    return bridge.stop_scheduler(force_wait)
 
 
 def normalize_request_attach(value: Any) -> list[str]:
@@ -78,6 +113,18 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
         if self.path == "/health":
             self._send_json(200, {"ok": True, "version": __version__})
             return
+        if self.path == "/daemon/status":
+            # Read-only, exactly what ``bridge.py daemon-status`` prints.
+            try:
+                payload = self.server.status_fn()
+            except Exception as exc:  # noqa: BLE001 - never kill the server
+                self._send_json(
+                    500,
+                    {"ok": False, "error": "status_failed", "message": str(exc)},
+                )
+                return
+            self._send_json(200, payload if isinstance(payload, dict) else {"ok": False, "error": "bad_status_payload"})
+            return
         if self.path == "/endpoints":
             self._send_json(200, {"ok": True, "version": __version__, "endpoints": self.server.endpoint_names})
             return
@@ -93,6 +140,50 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
             body = self._read_json()
         except Exception as exc:
             self._send_json(400, {"ok": False, "error": "invalid_json", "message": str(exc)})
+            return
+        if not isinstance(body, dict):
+            # A JSON array/string is syntactically valid but not a request body.
+            self._send_json(
+                400,
+                {"ok": False, "error": "invalid_json", "message": "body must be a JSON object"},
+            )
+            return
+
+        if self.path == "/daemon/stop":
+            # Safe stop: ``runs/STOP`` → poll → ``taskkill /F /T``, i.e. the same
+            # path as ``bridge.py stop``. ``force_wait`` is optional (default 5s).
+            raw_wait = body.get("force_wait", 5)
+            try:
+                force_wait = float(raw_wait)
+            except (TypeError, ValueError):
+                self._send_json(
+                    400,
+                    {
+                        "ok": False,
+                        "error": "invalid_force_wait",
+                        "message": "force_wait must be a number of seconds",
+                    },
+                )
+                return
+            if force_wait < 0:
+                self._send_json(
+                    400,
+                    {
+                        "ok": False,
+                        "error": "invalid_force_wait",
+                        "message": "force_wait must not be negative",
+                    },
+                )
+                return
+            try:
+                payload = self.server.stop_fn(force_wait)
+            except Exception as exc:  # noqa: BLE001 - report, never 500-crash
+                self._send_json(
+                    500,
+                    {"ok": False, "error": "stop_failed", "message": str(exc)},
+                )
+                return
+            self._send_json(200, payload if isinstance(payload, dict) else {"ok": False, "error": "bad_stop_payload"})
             return
 
         if self.path == "/ask":
@@ -185,6 +276,8 @@ def create_server(
     endpoint_names: list[str],
     host: str | None = None,
     port: int | None = None,
+    status_fn: Callable[[], dict[str, Any]] | None = None,
+    stop_fn: Callable[[float], dict[str, Any]] | None = None,
 ) -> BridgeHTTPServer:
     cfg = load_bridge_config()
     bind_host = host or str(cfg.get("host", "127.0.0.1"))
@@ -194,4 +287,6 @@ def create_server(
         BridgeRequestHandler,
         dispatcher=dispatcher,
         endpoint_names=endpoint_names,
+        status_fn=status_fn,
+        stop_fn=stop_fn,
     )

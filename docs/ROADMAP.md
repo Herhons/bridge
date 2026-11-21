@@ -252,10 +252,42 @@ Bridge 是运行在 **Windows 副屏（x 轴 `-1440..0`，竖屏 1440×2560）**
     结果经动作提示栏回显成功/失败明细；`tkinter` 仍严格惰性导入，模块导入时 `gui.tk is None`
   - 单测：新增 `tests/test_m4_9_gui_executor_and_council.py`（9 条，零 Tk、runner 注入）；
     全量 366 条 `rc=0`；`bridge.py doctor` `ok:true`（version 仍 0.2.5）
-- [ ] **M4-10（`engine/base.py` 瘦身重构）**：
+- [x] **M4-10（`engine/base.py` 瘦身重构）**：
   - 将 `EndpointDriver.ask()` 拆清为独立子阶段 helper（前置准备、写入提交、回复收敛与取回），保持全部既有单测零改动全绿
-- [ ] **M4-11（本地 HTTP 控制面收口）**：
+  - 落地（已验）：`ask()` 由 440 行精简到 **115 行**（`inspect.getsourcelines` 实测），只保留
+    时间/预算/poll 取值、锁、可见性前置检查与三阶段调度；拆出
+    `_prepare_ask_inputs()`（profile 解析 → attach 归一化与存在性校验 → `prepare_prompt` →
+    空 prompt 与 `ledger.check()` 去重）、`_submit_prompt_to_window()`（composer/ratio 兜底、
+    焦点方案 A 下写入与提交、阻断弹窗、记账 `submitting`）、`_await_reply_convergence()`
+    （轮询收敛、`copy_button` 剪贴板保护取回、`returned_at_deadline`、超时/回执诊断落盘与终态记账）
+  - 落地（已验）：返回值与错误分支逐字等价 —— 用脚本把被搬移的两段原文 dump 到 `runs/` 后
+    与 helper 体做去空白/去注释的 `difflib` 对比，除新增签名、docstring、参数透传与末尾
+    `return None, {...}` 外**零差异**；两个 helper 返回 `(error_payload, state)`，
+    错误分支仍原样返回给调用方（`state` 为空即调用方直接 return）
+  - 落地（已验）：`ask()` 未声明的入参按需补进 helper 关键字（`profile`/`started` 供错误载荷、
+    `effective_free_only`/`attach_paths`/`attach_methods`/`model_switch_info` 供附件与切档），
+    四个 gate 配置项（`content_min_rel_x`/`content_max_rel_x`/`require_send_receipt`/
+    `require_new_copy_button`）改为在收敛阶段按同一表达式重读，值恒等
+  - 单测：新增 `tests/test_m4_10_base_refactor.py`（12 条：结构/三阶段独立/四条历史回归路径），
+    全量 378 条 `rc=0`（**既有 366 条一条未改**）；`bridge.py doctor` `ok:true`（version 仍 0.2.5）
+- [x] **M4-11（本地 HTTP 控制面收口）**：
   - 为 `engine/server.py`（`127.0.0.1:18765`）新增 `/daemon/status` 与 `/daemon/stop` 接口及离线单测
+  - 落地（已验）：`BridgeHTTPServer` / `create_server()` 新增可注入的 `status_fn` / `stop_fn`，
+    默认值为 `_default_status_fn` / `_default_stop_fn`（**函数内延迟 `import bridge`**，因为
+    `bridge.py` 反过来要 import 本模块建服务器，模块级导入会成环）；两者分别只调用
+    `bridge.daemon_status()` 与 `bridge.stop_scheduler(force_wait)`，**未复制任何控制逻辑**
+  - 落地（已验）：`GET /daemon/status` 恒 200 返回 `bridge.py daemon-status` 原始快照
+    （`running`/`pid`/`state`/`roadmap_pending`/`roadmap_total`/`dispatch_unfinished`/
+    `dispatch_needs_review` 等），handler 抛错则 500 `status_failed`
+  - 落地（已验）：`POST /daemon/stop` 读可选 `{"force_wait": 5}`（缺省 5s，非数字/负数 400
+    `invalid_force_wait` 且**不进入急停路径**），成功 200 透传急停结果，handler 抛错 500 `stop_failed`
+  - 落地（已验）：顺带修 `do_POST` 的健壮性 —— 合法 JSON 但不是对象（数组/字符串）原先会在
+    `body.get` 处 500，现统一 400 `invalid_json`（对所有 POST 路由生效，含 `/ask` `/read`）
+  - 真机只读冒烟（仅 GET，未触碰 `/daemon/stop`）：默认 handler 返回 HTTP 200，
+    `pid=31508 running=true state=BRAIN_PLAN round=4 roadmap_pending=1 roadmap_total=16`
+  - 单测：新增 `tests/test_m4_11_server_daemon_api.py`（11 条，回环随机端口 + 注入
+    `status_fn`/`stop_fn`，**全程不写 `runs/STOP`、不探测/杀真实 PID**）；
+    全量 389 条 `rc=0`（既有 378 条一条未改）；`bridge.py doctor` `ok:true`（version 仍 0.2.5）
 
 ## 5. 维护约定
 
