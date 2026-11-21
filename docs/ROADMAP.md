@@ -234,9 +234,24 @@ Bridge 是运行在 **Windows 副屏（x 轴 `-1440..0`，竖屏 1440×2560）**
   - 单测：新增 `tests/test_m4_8_signoff_and_timeout.py`（8 条）；`test_roadmap_without_pending_items_exits_all_done_at_once`
     只补了签收函数的 stub（原有断言一字未改，另加 `signoff.assert_called_once()`）；
     全量 357 条 `rc=0`；`bridge.py doctor` `ok:true`（version 仍 0.2.5）
-- [ ] **M4-9（GUI 执行器选择与一键会审）**：
+- [x] **M4-9（GUI 执行器选择与一键会审）**：
   - `bridge_gui.pyw` 增加「执行器」下拉框（`workbuddy / auto / antigravity`，默认 `workbuddy`）并在顶部显示当前执行器
   - 增加「一键三方会审」按钮（异步调用 `deepseek / grok / gemini` 并汇总落盘）与对应离线单测
+  - 落地（已验）：新增 `EXECUTOR_CHOICES` / `EXECUTOR_DEFAULT = "workbuddy"`，控制区「执行器」
+    下拉框复用 `COMBOBOX_STYLE_CONFIG` 高对比深色样式；`build_daemon_cmd()` 的 `executor`
+    默认值同步改为 `EXECUTOR_DEFAULT`（避免 UI 显示 workbuddy、命令却回落 `auto`）；
+    `launch_daemon_detached(..., executor=)` 新增可选覆盖（`_with_executor()` 只复制重写 argv，
+    不改调用方列表）；顶部元信息行新增 `执行器 <当前值>`
+  - 落地（已验）：新增纯逻辑 `build_council_brief()`（分支 + HEAD + 未勾选主线项 →
+    `runs/council_brief_auto.md`，同时充当 `--file` 提示词；`_git_text()` 与调度器同样带
+    `i18n.logOutputEncoding=utf-8` + `core.quotepath=false`）与 `run_three_way_council()`
+    （逐端 `ask <ep> --file <brief> --profile council --headed --json --save ...`，
+    `runner` 可注入；单端非零/空回复/异常只记 `failed`，其余端照跑，汇总落
+    `runs/council_bundle_auto.md`，返回 `{ok, succeeded, failed, bundle_path, results}`）
+  - 落地（已验）：「⚖ 三方会审」按钮走既有 `_spawn()` 后台线程（`_do_council()`），
+    结果经动作提示栏回显成功/失败明细；`tkinter` 仍严格惰性导入，模块导入时 `gui.tk is None`
+  - 单测：新增 `tests/test_m4_9_gui_executor_and_council.py`（9 条，零 Tk、runner 注入）；
+    全量 366 条 `rc=0`；`bridge.py doctor` `ok:true`（version 仍 0.2.5）
 - [ ] **M4-10（`engine/base.py` 瘦身重构）**：
   - 将 `EndpointDriver.ask()` 拆清为独立子阶段 helper（前置准备、写入提交、回复收敛与取回），保持全部既有单测零改动全绿
 - [ ] **M4-11（本地 HTTP 控制面收口）**：

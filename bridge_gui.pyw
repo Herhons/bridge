@@ -48,6 +48,14 @@ BRIDGE_SCRIPT = "bridge.py"
 #: 与 ``scripts/auto_heal_loop.py`` 的 ``PROFILE_CHOICES`` 保持一致。
 PROFILE_CHOICES: tuple[str, ...] = ("none", "test", "routine", "council")
 PROFILE_DEFAULT = "none"
+#: M4-9：本地执行器（调度器自己的 ``--executor`` 取值域）。默认 ``workbuddy``，
+#: 与控制台「一键会审」并列，都是把活派给本地 agent 而不是远端 CLI。
+EXECUTOR_CHOICES: tuple[str, ...] = ("workbuddy", "auto", "antigravity")
+EXECUTOR_DEFAULT = "workbuddy"
+#: 三方会审：依次串行调用，单端失败不影响其余端。
+COUNCIL_ENDPOINTS: tuple[str, ...] = ("deepseek", "grok", "gemini")
+COUNCIL_BRIEF_NAME = "council_brief_auto.md"
+COUNCIL_BUNDLE_NAME = "council_bundle_auto.md"
 REFRESH_MS = 2500
 #: 启动守护进程时的默认 ``--timeout``（秒）。M4-8：300s 会在执行器跑到 270s 附近
 #: 被调度器当成超时、半路抢走提交；600s 给足一个完整回合。
@@ -220,6 +228,227 @@ def read_opencode_cooldown(
     return doc
 
 
+def _git_text(base: Path, *args: str) -> str:
+    """``git <args>`` in *base*; "" on any failure (the console must not crash).
+
+    Same UTF-8 log/quotepath flags as ``scripts/auto_heal_loop.py`` so a Chinese
+    commit subject does not arrive as mojibake in the brief.
+    """
+    try:
+        proc = subprocess.run(
+            [
+                "git",
+                "-c", "i18n.logOutputEncoding=utf-8",
+                "-c", "core.quotepath=false",
+                *args,
+            ],
+            cwd=str(base),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=15,
+            creationflags=_no_window_flag(),
+            check=False,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    if proc.returncode != 0:
+        return ""
+    return (proc.stdout or "").strip()
+
+
+def build_council_brief(
+    root: str | os.PathLike | None = None,
+    *,
+    roadmap_path: str | os.PathLike | None = None,
+    output_path: str | os.PathLike | None = None,
+) -> Path:
+    """Write ``runs/council_brief_auto.md``: branch/HEAD + unfinished items.
+
+    The file doubles as the prompt handed to each council endpoint (``--file``),
+    so it carries both the material and the question. Pure logic: no Tk, no
+    worker thread — the button just wraps it.
+    """
+    base = Path(root) if root is not None else ROOT
+    roadmap = (
+        Path(roadmap_path) if roadmap_path is not None else base / ROADMAP_PATH
+    )
+    target = (
+        Path(output_path)
+        if output_path is not None
+        else base / "runs" / COUNCIL_BRIEF_NAME
+    )
+    doc = parse_roadmap(roadmap)
+    pending = [item for item in doc["items"] if not item["done"]]
+    branch = _git_text(base, "rev-parse", "--abbrev-ref", "HEAD") or "(unknown)"
+    head = _git_text(base, "log", "-1", "--format=%h %s") or "(no commits)"
+    lines = [
+        "# 三方会审材料（自动生成）",
+        "",
+        "- 仓库：%s" % base,
+        "- 分支：%s" % branch,
+        "- HEAD：%s" % head,
+        "- 生成时间：%s" % datetime.now().isoformat(timespec="seconds"),
+        "- 路线图：%s（未勾选 %d 项 / 共 %d 项）"
+        % (roadmap, len(pending), doc["total"]),
+        "",
+        "## 未完成主线项",
+        "",
+    ]
+    if pending:
+        lines.extend("- %s" % item["text"] for item in pending)
+    else:
+        lines.append("- （无剩余未勾选主项；请直接验收当前收口状态）")
+    lines.extend(
+        [
+            "",
+            "## 会审要求",
+            "",
+            "请以资深评审视角，只输出三段：① 当前改动的主要风险；"
+            "② 阻塞性问题（没有就写「无」）；③ 建议的下一步最小改动。",
+            "不要改写代码，不要寒暄，不要输出补丁。",
+            "",
+        ]
+    )
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("\n".join(lines), encoding="utf-8")
+    return target
+
+
+def _default_council_runner(
+    cmd: list[str], timeout: float, *, cwd: str | os.PathLike
+) -> tuple[int, str]:
+    """Run one endpoint call without a console window; ``(rc, stdout)``."""
+    proc = subprocess.run(
+        list(cmd),
+        cwd=str(cwd),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        timeout=timeout,
+        creationflags=_no_window_flag(),
+        check=False,
+    )
+    return int(proc.returncode), _decode(proc.stdout)
+
+
+def run_three_way_council(
+    root: str | os.PathLike | None = None,
+    *,
+    brief_path: str | os.PathLike | None = None,
+    bundle_path: str | os.PathLike | None = None,
+    runner=None,
+    endpoints: tuple[str, ...] = COUNCIL_ENDPOINTS,
+    timeout: float = 300,
+) -> dict:
+    """Ask each council endpoint in turn and bundle the raw answers.
+
+    One endpoint failing (non-zero rc, empty reply, timeout, exception) never
+    stops the others — the bundle records every outcome so a partial review is
+    still usable. ``runner(cmd, timeout) -> (rc, stdout)`` is injectable, which
+    is how the offline suite avoids touching a real browser.
+
+    Returns ``{ok, succeeded, failed, bundle_path, results}`` where ``ok`` means
+    *every* endpoint answered.
+    """
+    base = Path(root) if root is not None else ROOT
+    brief = (
+        Path(brief_path)
+        if brief_path is not None
+        else build_council_brief(base)
+    )
+    bundle = (
+        Path(bundle_path)
+        if bundle_path is not None
+        else base / "runs" / COUNCIL_BUNDLE_NAME
+    )
+    run_dir = base / "runs"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    if runner is None:
+        def _run_here(cmd, seconds):
+            return _default_council_runner(cmd, seconds, cwd=base)
+
+        runner = _run_here
+
+    exe = sys.executable
+    bridge = str(base / BRIDGE_SCRIPT)
+    succeeded: list[str] = []
+    failed: list[str] = []
+    results: dict[str, dict] = {}
+    sections: list[str] = []
+
+    for endpoint in endpoints:
+        reply_path = run_dir / ("council_reply_%s_auto.md" % endpoint)
+        cmd = [
+            exe, bridge, "ask", endpoint,
+            "--file", str(brief),
+            "--profile", "council",
+            "--headed",
+            "--json",
+            "--save", str(reply_path),
+            "--timeout", _num(timeout),
+        ]
+        entry: dict = {"ok": False, "rc": None, "chars": 0, "error": "", "reply": ""}
+        try:
+            rc, output = runner(cmd, float(timeout))
+            entry["rc"] = int(rc)
+            payload = _extract_json(output or "")
+            reply = ""
+            if isinstance(payload, dict):
+                reply = str(payload.get("reply") or "")
+            if not reply and reply_path.is_file():
+                reply = reply_path.read_text(encoding="utf-8", errors="replace")
+            if not reply:
+                entry["error"] = "empty_reply" if rc == 0 else "rc_%s" % rc
+            elif rc != 0:
+                entry["error"] = "rc_%s" % rc
+            else:
+                entry.update(ok=True)
+            entry["reply"] = reply
+            entry["chars"] = len(reply)
+        except Exception as exc:  # noqa: BLE001 - one endpoint must not sink the rest
+            entry["error"] = "runner_error: %r" % exc
+
+        results[endpoint] = entry
+        (succeeded if entry["ok"] else failed).append(endpoint)
+        status = "OK" if entry["ok"] else "FAILED"
+        header = "## %s — %s（rc=%s，%d 字）" % (
+            endpoint, status, entry["rc"], entry["chars"]
+        )
+        body = entry["reply"] or ("（未取得回复：%s）" % (entry["error"] or "unknown"))
+        sections.append("%s\n\n%s\n" % (header, body))
+
+    bundle.write_text(
+        "\n".join(
+            [
+                "# 三方会审汇总（自动生成）",
+                "",
+                "- 仓库：%s" % base,
+                "- 材料：%s" % brief,
+                "- 生成时间：%s" % datetime.now().isoformat(timespec="seconds"),
+                "- 结果：成功 %d / 共 %d（%s）"
+                % (
+                    len(succeeded),
+                    len(endpoints),
+                    "全部成功" if not failed else "失败：" + "、".join(failed),
+                ),
+                "",
+                "\n".join(sections),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    return {
+        "ok": not failed,
+        "succeeded": succeeded,
+        "failed": failed,
+        "bundle_path": str(bundle),
+        "results": results,
+    }
+
+
 def _num(value) -> str:
     """Render 300 / 300.0 as ``"300"`` so the command line stays readable."""
     try:
@@ -234,7 +463,7 @@ def build_daemon_cmd(
     *,
     python_exe: str | None = None,
     brain: str = "auto",
-    executor: str = "auto",
+    executor: str = EXECUTOR_DEFAULT,
     executor_profile: str = PROFILE_DEFAULT,
     stop_on_bug: bool = True,
     timeout=DEFAULT_DAEMON_TIMEOUT,
@@ -364,23 +593,51 @@ def run_bridge_json(
     return parsed
 
 
+def _with_executor(cmd: list[str], executor: str | None) -> list[str]:
+    """Return *cmd* with its ``--executor`` value replaced (never mutates input).
+
+    Used by :func:`launch_daemon_detached` so the console can hand over the
+    dropdown selection without rebuilding an argv it already built.
+    """
+    argv = [str(part) for part in cmd]
+    if not executor:
+        return argv
+    value = str(executor)
+    if "--executor" in argv:
+        at = argv.index("--executor")
+        if at + 1 < len(argv):
+            argv[at + 1] = value
+        else:
+            argv.append(value)
+    else:
+        argv.extend(["--executor", value])
+    return argv
+
+
 def launch_daemon_detached(
     cmd: list[str],
     *,
     root: str | os.PathLike | None = None,
     log_path: str | os.PathLike | None = None,
+    executor: str | None = None,
 ) -> dict:
-    """Spawn the daemon detached, appending its output to ``runs/overnight.log``."""
+    """Spawn the daemon detached, appending its output to ``runs/overnight.log``.
+
+    ``executor`` is optional sugar for the console: when given it overrides the
+    ``--executor`` value already in *cmd* (see :func:`_with_executor`), so the
+    selected dropdown value always wins without duplicating argv building.
+    """
     base = Path(root) if root is not None else ROOT
     log = Path(log_path) if log_path is not None else base / LOG_PATH
+    argv = _with_executor(cmd, executor)
     try:
         log.parent.mkdir(parents=True, exist_ok=True)
         handle = log.open("a", encoding="utf-8", errors="replace")
     except OSError as exc:
-        return {"ok": False, "error": "log_open: %s" % exc, "command": list(cmd)}
+        return {"ok": False, "error": "log_open: %s" % exc, "command": argv}
     try:
         proc = subprocess.Popen(
-            list(cmd),
+            argv,
             cwd=str(base),
             stdin=subprocess.DEVNULL,
             stdout=handle,
@@ -389,10 +646,10 @@ def launch_daemon_detached(
             close_fds=True,
         )
     except OSError as exc:
-        return {"ok": False, "error": "spawn: %s" % exc, "command": list(cmd)}
+        return {"ok": False, "error": "spawn: %s" % exc, "command": argv}
     finally:
         handle.close()
-    return {"ok": True, "pid": proc.pid, "command": list(cmd), "log": str(log)}
+    return {"ok": True, "pid": proc.pid, "command": argv, "log": str(log)}
 
 
 def compute_secondary_geometry(
@@ -633,7 +890,7 @@ class BridgeConsole:
 
         self.meta_label = tk.Label(
             root,
-            text="Round - | 主线 -/- | 待复核 - | OpenCode 可用",
+            text="Round - | 主线 -/- | 待复核 - | 执行器 workbuddy | OpenCode 可用",
             bg=BG,
             fg=FG_DIM,
             font=("Microsoft YaHei UI", 8),
@@ -666,6 +923,20 @@ class BridgeConsole:
         )
         self.profile_box.pack(side="left", padx=(6, 10))
 
+        # M4-9：执行器选择（与 Profile 并列）。调度器的 --executor 决定由谁干活。
+        tk.Label(row, text="执行器", bg=PANEL, fg=FG_DIM,
+                 font=("Microsoft YaHei UI", 8)).pack(side="left")
+        self.executor_var = tk.StringVar(value=EXECUTOR_DEFAULT)
+        self.executor_box = ttk.Combobox(
+            row,
+            textvariable=self.executor_var,
+            values=list(EXECUTOR_CHOICES),
+            state="readonly",
+            width=12,
+            style="Bridge.TCombobox",
+        )
+        self.executor_box.pack(side="left", padx=(6, 10))
+
         self.bug_var = tk.BooleanVar(value=True)
         self.bug_check = tk.Checkbutton(
             row,
@@ -689,7 +960,8 @@ class BridgeConsole:
         )
         self.stop_btn = self._button(buttons, "■ 一键急停", self._on_stop, bg=RED)
         self.doctor_btn = self._button(buttons, "↻ Doctor 自检", self._on_doctor)
-        for btn in (self.start_btn, self.stop_btn, self.doctor_btn):
+        self.council_btn = self._button(buttons, "⚖ 三方会审", self._on_council)
+        for btn in (self.start_btn, self.stop_btn, self.doctor_btn, self.council_btn):
             btn.pack(side="left", expand=True, fill="x", padx=2)
 
         self.roadmap_text = self._readonly_text(
@@ -832,13 +1104,16 @@ class BridgeConsole:
         total = roadmap.get("total")
         done = roadmap.get("done")
         review = status.get("dispatch_needs_review")
+        executor_var = getattr(self, "executor_var", None)
+        executor = (executor_var.get() if executor_var is not None else "") or EXECUTOR_DEFAULT
         self.meta_label.configure(
-            text="Round %s | 主线 %s/%s | 待复核 %s | OpenCode %s"
+            text="Round %s | 主线 %s/%s | 待复核 %s | 执行器 %s | OpenCode %s"
             % (
                 "-" if round_no is None else round_no,
                 "-" if done is None else done,
                 "-" if total is None else total,
                 "-" if review is None else review,
+                executor,
                 cooldown.get("label") or OPENCODE_READY_LABEL,
             )
         )
@@ -905,33 +1180,37 @@ class BridgeConsole:
     # -- actions --------------------------------------------------------
     def _on_start(self) -> None:
         profile = self.profile_var.get() or PROFILE_DEFAULT
+        executor = self.executor_var.get() or EXECUTOR_DEFAULT
         stop_on_bug = bool(self.bug_var.get())
         self._append_log(
-            "启动自迭代：profile=%s stop_on_bug=%s" % (profile, stop_on_bug), tag="note"
+            "启动自迭代：profile=%s executor=%s stop_on_bug=%s"
+            % (profile, executor, stop_on_bug), tag="note"
         )
-        self._spawn(lambda: self._do_start(profile, stop_on_bug))
+        self._spawn(lambda: self._do_start(profile, stop_on_bug, executor))
 
-    def _do_start(self, profile: str, stop_on_bug: bool):
+    def _do_start(self, profile: str, stop_on_bug: bool, executor: str = EXECUTOR_DEFAULT):
         status = run_bridge_json("daemon-status", root=self.repo_root)
         if status.get("ok") is False:
             return ("note", "启动中止：daemon-status %s" % (status.get("error") or "失败"))
         if status.get("running"):
             return ("note", "已在运行（pid=%s），未重复启动" % status.get("pid"))
 
+        executor = executor or EXECUTOR_DEFAULT
         cmd = build_daemon_cmd(
             self.repo_root,
             python_exe=sys.executable,
             brain="auto",
-            executor="auto",
+            executor=executor,
             executor_profile=profile,
             stop_on_bug=stop_on_bug,
             timeout=DEFAULT_DAEMON_TIMEOUT,
             sleep=60,
         )
-        result = launch_daemon_detached(cmd, root=self.repo_root)
+        result = launch_daemon_detached(cmd, root=self.repo_root, executor=executor)
         if not result.get("ok"):
             return ("note", "启动失败：%s" % result.get("error"))
-        return ("note", "已分离启动调度器 pid=%s（日志 %s）" % (result.get("pid"), result.get("log")))
+        return ("note", "已分离启动调度器 pid=%s（执行器 %s，日志 %s）"
+                % (result.get("pid"), executor, result.get("log")))
 
     def _on_stop(self) -> None:
         self._append_log("一键急停：写入 runs/STOP 并等待退出…", tag="warn")
@@ -956,6 +1235,31 @@ class BridgeConsole:
             return ("note", "Doctor ok=%s endpoints=%s issues=0"
                     % (result.get("ok"), result.get("endpoint_count")))
         return ("note", "Doctor 发现 %d 个问题：%s" % (len(issues), "; ".join(map(str, issues))[:400]))
+
+    def _on_council(self) -> None:
+        self._append_log("三方会审启动：deepseek / grok / gemini（后台线程）…", tag="note")
+        self._spawn(self._do_council)
+
+    def _do_council(self):
+        """后台线程里跑三方会审；绝不阻塞 UI 主线程（单端 300s 上限）。"""
+        result = run_three_way_council(self.repo_root)
+        total = len(result.get("succeeded") or []) + len(result.get("failed") or [])
+        if result.get("ok"):
+            return (
+                "note",
+                "三方会审完成：%d/%d 成功，汇总 %s"
+                % (len(result.get("succeeded") or []), total, result.get("bundle_path")),
+            )
+        failed = result.get("failed") or []
+        detail = ""
+        for endpoint in failed:
+            info = (result.get("results") or {}).get(endpoint) or {}
+            detail += "%s(%s) " % (endpoint, info.get("error") or "unknown")
+        return (
+            "warn",
+            "三方会审部分失败：成功 %d/%d；失败 %s；汇总 %s"
+            % (len(result.get("succeeded") or []), total, detail.strip(), result.get("bundle_path")),
+        )
 
 
 def launch_gui(*, repo_root: Path | None = None) -> int:
