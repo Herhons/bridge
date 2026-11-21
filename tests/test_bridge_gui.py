@@ -317,9 +317,10 @@ class BridgeJsonTests(unittest.TestCase):
 class GeometryAndBadgeTests(unittest.TestCase):
     def test_default_geometry_docks_off_the_main_screen(self):
         spec = gui.compute_secondary_geometry()
-        self.assertEqual(spec, "480x700-500+40")
+        # M4-5: 480 -> 560 wide (and x -500 -> -580) so x + width stays <= 0.
+        self.assertEqual(spec, "560x700-580+40")
         width, height, x, y = gui.parse_geometry(spec)
-        self.assertEqual((width, height), (480, 700))
+        self.assertEqual((width, height), (560, 700))
         self.assertLess(x, 0, "panel must start left of the main screen")
         self.assertLessEqual(x + width, 0, "panel must not reach x >= 0 (main screen)")
         self.assertEqual(y, 40)
@@ -362,6 +363,89 @@ class GeometryAndBadgeTests(unittest.TestCase):
         self.assertEqual(gui.status_badge("STOPPED_ON_BUG")["key"], "bug")
         self.assertEqual(gui.status_badge("ALL_DONE")["key"], "all_done")
         self.assertEqual(gui.status_badge(None)["key"], "stopped")
+
+
+class ComboboxContrastTests(unittest.TestCase):
+    """M4-5: ``clam`` 的 readonly ``TCombobox`` 必须是深底浅字（实机白底浅灰字）。
+
+    No widget is created: the style maps are plain data and
+    :func:`configure_dark_combobox_style` takes an injectable ``Style`` double.
+    """
+
+    def test_readonly_state_maps_high_contrast_dark_colors(self):
+        config = gui.COMBOBOX_STYLE_CONFIG
+        readonly = config["readonly"]
+        self.assertEqual(readonly["fieldbackground"], [("readonly", "#1e293b")])
+        self.assertEqual(readonly["background"], [("readonly", "#334155")])
+        self.assertEqual(readonly["foreground"], [("readonly", "#f8fafc")])
+        self.assertEqual(readonly["selectbackground"], [("readonly", "#334155")])
+        self.assertEqual(readonly["selectforeground"], [("readonly", "#f8fafc")])
+        self.assertEqual(readonly["arrowcolor"], [("readonly", "#e2e8f0")])
+        # 未展开时也必须是深色，否则会闪一下白底。
+        self.assertEqual(config["base"]["fieldbackground"], "#1e293b")
+        self.assertEqual(config["base"]["foreground"], "#f8fafc")
+        # ``none`` 选项同样吃这层配色：值取自 PROFILE_DEFAULT。
+        self.assertIn(gui.PROFILE_DEFAULT, gui.PROFILE_CHOICES)
+
+    def test_popdown_listbox_is_styled_through_the_option_db(self):
+        popdown = gui.COMBOBOX_STYLE_CONFIG["popdown"]
+        self.assertEqual(popdown["*TCombobox*Listbox*Background"], "#1e293b")
+        self.assertEqual(popdown["*TCombobox*Listbox*Foreground"], "#f8fafc")
+        self.assertEqual(popdown["*TCombobox*Listbox*selectForeground"], "#f8fafc")
+
+    def test_configure_dark_combobox_style_drives_style_and_option_db(self):
+        calls: list[tuple] = []
+
+        class _Style:
+            def configure(self, name, **options):
+                calls.append(("configure", name, options))
+
+            def map(self, name, **options):
+                calls.append(("map", name, options))
+
+        options: list[tuple[str, str]] = []
+        applied = gui.configure_dark_combobox_style(
+            _Style(), option_add=lambda opt, value: options.append((opt, value))
+        )
+
+        self.assertEqual(applied["style"], gui.COMBOBOX_STYLE_NAME)
+        self.assertEqual([c[0] for c in calls], ["configure", "map"])
+        self.assertEqual(calls[0][1], "Bridge.TCombobox")
+        self.assertEqual(calls[0][2]["fieldbackground"], "#1e293b")
+        self.assertEqual(calls[1][2]["foreground"], [("readonly", "#f8fafc")])
+        self.assertEqual(len(options), 4)
+        self.assertIn(("*TCombobox*Listbox*Background", "#1e293b"), options)
+
+    def test_configure_returns_resolved_maps_without_tk(self):
+        applied = gui.configure_dark_combobox_style()
+        self.assertEqual(applied["readonly"]["fieldbackground"], [("readonly", "#1e293b")])
+        self.assertEqual(applied["popdown"]["*TCombobox*Listbox*Foreground"], "#f8fafc")
+        # 返回的是拷贝：调用方改动不会污染模块级配置。
+        self.assertIsNot(applied["readonly"], gui.COMBOBOX_STYLE_CONFIG["readonly"])
+        self.assertIsNot(applied["base"], gui.COMBOBOX_STYLE_CONFIG["base"])
+
+
+class LogPaneTests(unittest.TestCase):
+    """M4-5: 长行按字符折行 + 仅在底部时自动滚底。"""
+
+    def test_log_text_wraps_by_character(self):
+        self.assertEqual(gui.LOG_WRAP, "char")
+        kwargs = gui.log_text_kwargs()
+        self.assertEqual(kwargs["wrap"], "char", "wrap=none 会把长 URL 右侧截断")
+        self.assertEqual(kwargs["height"], gui.LOG_HEIGHT)
+
+    def test_autoscroll_only_when_already_at_the_bottom(self):
+        self.assertTrue(gui.should_autoscroll((0.0, 1.0)))
+        self.assertTrue(gui.should_autoscroll((0.9, 1.0)))
+        self.assertFalse(gui.should_autoscroll((0.2, 0.6)), "用户上翻时不许拽回末尾")
+        self.assertTrue(gui.should_autoscroll(None))
+
+    def test_wider_default_still_docks_off_the_main_screen(self):
+        width, height, x, y = gui.parse_geometry(gui.compute_secondary_geometry())
+        self.assertGreaterEqual(width, 560, "长日志行需要更宽的面板")
+        self.assertLess(x, 0)
+        self.assertLessEqual(x + width, 0)
+        self.assertGreaterEqual(x, -1440, "不能越出副屏左边界")
 
 
 if __name__ == "__main__":

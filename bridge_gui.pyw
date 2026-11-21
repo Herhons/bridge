@@ -54,9 +54,11 @@ ALL_DONE_MARKER = "ALL_DONE"
 ITEM_RE = re.compile(r"^[ \t]*-[ \t]+\[([ xX])\][ \t]*(.*)$")
 
 #: 默认面板尺寸与副屏停靠点（x < 0 即不碰主屏 ``0..2560``）。
-PANEL_W = 480
+#: M4-5：宽度 480 → 560，长日志行（无空格 URL / JSON / 英文路径）不再右侧截断；
+#: x 同步左移到 -580，保证 ``x + width = -20 <= 0``，右边缘仍不进主屏。
+PANEL_W = 560
 PANEL_H = 700
-SECONDARY_X = -500
+SECONDARY_X = -580
 SECONDARY_Y = 40
 
 BADGE_COLORS = {
@@ -462,6 +464,88 @@ RED = "#b62324"
 MONO = ("Consolas", 9)
 MONO_SMALL = ("Consolas", 8)
 
+# ---------------------------------------------------------------- M4-5 样式
+#: 实时日志的换行模式：``char`` 让没有空格的长 URL / JSON / 路径也能按字符折行，
+#: 而不是在右侧被硬截断（``none``/``word`` 都会留下看不见的尾巴）。
+LOG_WRAP = "char"
+#: 日志面板可见行数（高度固定，宽度交给窗口）。
+LOG_HEIGHT = 12
+
+#: ``clam`` 主题下 TCombobox 的高对比深色配色。
+#: ``clam`` 的 readonly 状态会忽略 ``background``，只认显式的 state map，
+#: 所以只 configure 不 map 时下拉框会渲染成「白底 + 浅灰字」（实机观感问题）。
+COMBOBOX_STYLE_NAME = "Bridge.TCombobox"
+COMBOBOX_FIELD_BG = "#1e293b"
+COMBOBOX_ROW_BG = "#334155"
+COMBOBOX_FG = "#f8fafc"
+COMBOBOX_ARROW = "#e2e8f0"
+
+COMBOBOX_STYLE_CONFIG: dict[str, dict] = {
+    # 未展开时的底色/文字/箭头。
+    "base": {
+        "fieldbackground": COMBOBOX_FIELD_BG,
+        "background": COMBOBOX_ROW_BG,
+        "foreground": COMBOBOX_FG,
+        "arrowcolor": COMBOBOX_ARROW,
+        "bordercolor": BORDER,
+        "lightcolor": BORDER,
+        "darkcolor": BORDER,
+    },
+    # readonly 状态映射（ttk 的 map 语法：option -> [(state, value)]）。
+    "readonly": {
+        "fieldbackground": [("readonly", COMBOBOX_FIELD_BG)],
+        "background": [("readonly", COMBOBOX_ROW_BG)],
+        "foreground": [("readonly", COMBOBOX_FG)],
+        "selectbackground": [("readonly", COMBOBOX_ROW_BG)],
+        "selectforeground": [("readonly", COMBOBOX_FG)],
+        "arrowcolor": [("readonly", COMBOBOX_ARROW)],
+    },
+    # 展开后的下拉列表（PopupListbox 走经典 option 数据库，不受 ttk 样式影响）。
+    "popdown": {
+        "*TCombobox*Listbox*Background": COMBOBOX_FIELD_BG,
+        "*TCombobox*Listbox*Foreground": COMBOBOX_FG,
+        "*TCombobox*Listbox*selectBackground": COMBOBOX_ROW_BG,
+        "*TCombobox*Listbox*selectForeground": COMBOBOX_FG,
+    },
+}
+
+
+def configure_dark_combobox_style(
+    style=None,
+    *,
+    option_add=None,
+    style_name: str = COMBOBOX_STYLE_NAME,
+) -> dict:
+    """把高对比深色配色装到 ttk.Style 与 option 数据库上。
+
+    ``style`` / ``option_add`` 都是可选协作者，返回值是真正生效的原始映射，
+    因此可以在不创建任何 Tk 窗口的前提下离线断言「readonly 是否高对比」。
+    """
+    base = dict(COMBOBOX_STYLE_CONFIG["base"])
+    readonly = {key: list(pairs) for key, pairs in COMBOBOX_STYLE_CONFIG["readonly"].items()}
+    popdown = dict(COMBOBOX_STYLE_CONFIG["popdown"])
+    if style is not None:
+        style.configure(style_name, **base)
+        style.map(style_name, **readonly)
+    if option_add is not None:
+        for option, value in popdown.items():
+            option_add(option, value)
+    return {"style": style_name, "base": base, "readonly": readonly, "popdown": popdown}
+
+
+def log_text_kwargs() -> dict:
+    """实时日志 ``Text`` 的构造参数（``wrap="char"`` + 固定行高）。"""
+    return {"height": LOG_HEIGHT, "font": MONO, "wrap": LOG_WRAP}
+
+
+def should_autoscroll(yview) -> bool:
+    """视图已经在底部时才自动滚到底，避免把正在上翻的用户拽回末尾。"""
+    try:
+        _first, last = yview
+        return float(last) >= 0.999
+    except (TypeError, ValueError):
+        return True
+
 
 def place_window_on_secondary(root, spec: str) -> None:
     """Pin a Toplevel to the secondary screen without activating it.
@@ -559,14 +643,8 @@ class BridgeConsole:
             style.theme_use("clam")
         except Exception:  # noqa: BLE001 - theme is cosmetic
             pass
-        style.configure(
-            "Bridge.TCombobox",
-            fieldbackground=PANEL_ALT,
-            background=PANEL_ALT,
-            foreground=FG,
-            arrowcolor=FG,
-            bordercolor=BORDER,
-        )
+        # 高对比深色：clam 的 readonly 必须显式 map，否则白底浅灰字看不清。
+        configure_dark_combobox_style(style, option_add=root.option_add)
         self.profile_var = tk.StringVar(value=PROFILE_DEFAULT)
         self.profile_box = ttk.Combobox(
             row,
@@ -611,7 +689,8 @@ class BridgeConsole:
 
         log_frame = tk.Frame(root, bg=BG)
         log_frame.pack(fill="both", expand=True, padx=10, pady=(0, 10))
-        self.log_text = self._readonly_text(log_frame, height=12, font=MONO)
+        # wrap="char"：长 URL / JSON / 路径也能按字符折行，右侧不再截断。
+        self.log_text = self._readonly_text(log_frame, **log_text_kwargs())
         scroll = tk.Scrollbar(log_frame, command=self.log_text.yview)
         self.log_text.configure(yscrollcommand=scroll.set)
         scroll.pack(side="right", fill="y")
@@ -781,6 +860,8 @@ class BridgeConsole:
         if getattr(self, "_log_snapshot", None) == lines:
             return
         self._log_snapshot = list(lines)
+        # 只有原本就贴在底部才自动滚底：用户上翻看历史时不要被拽回末尾。
+        stick_to_bottom = should_autoscroll(widget.yview())
         widget.configure(state="normal")
         widget.delete("1.0", "end")
         for line in lines:
@@ -790,14 +871,17 @@ class BridgeConsole:
             elif "[WARN]" in line:
                 tag = ("warn",)
             widget.insert("end", line + "\n", tag)
-        widget.see("end")
+        if stick_to_bottom:
+            widget.see("end")
         widget.configure(state="disabled")
 
     def _append_log(self, text: str, *, tag: str | None = None) -> None:
         widget = self.log_text
+        stick_to_bottom = should_autoscroll(widget.yview())
         widget.configure(state="normal")
         widget.insert("end", text + "\n", (tag,) if tag else ())
-        widget.see("end")
+        if stick_to_bottom:
+            widget.see("end")
         widget.configure(state="disabled")
         self._note_until = time.monotonic() + NOTE_HOLD_S
 

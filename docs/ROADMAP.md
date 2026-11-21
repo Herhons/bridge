@@ -154,10 +154,24 @@ Bridge 是运行在 **Windows 副屏（x 轴 `-1440..0`，竖屏 1440×2560）**
   - 单测：新增 `tests/test_m4_4_focus_option_a.py`（24 条），全量 319 条 `rc=0`
   - 副发现（未修，下轮）：DeepSeek 开启深度思考时推理正文会混进 `uia_delta` 结果
     （「已思考（用时 N 秒）」头先被 base 噪声正则删掉，`strip_thinking_sections` 失去边界）
-- [ ] **M4-5（GUI 体验修复）**：修复 `bridge_gui.pyw` 两处实机观感问题
+- [x] **M4-5（GUI 体验修复）**：修复 `bridge_gui.pyw` 两处实机观感问题
   - 修复「执行器 Profile」下拉框白底浅灰字对比度过低问题（改为深色高对比样式，readonly 状态下清晰可读）
   - 修复底部实时日志区长行右侧截断问题（合理换行/水平滚动并保证最新行自动滚底）
   - 补齐对应离线单测
+  - 落地（已验）：新增纯逻辑配色 `COMBOBOX_STYLE_CONFIG` 与 `configure_dark_combobox_style()`；
+    `clam` 主题只 configure 不 map 时 readonly 会渲染成白底浅灰字，故显式映射
+    `fieldbackground=#1e293b`、`background=#334155`、`foreground=#f8fafc`、
+    `selectbackground=#334155`、`selectforeground=#f8fafc`、`arrowcolor=#e2e8f0`，
+    并用 option 数据库给弹出列表上色（`*TCombobox*Listbox*Background/Foreground`），
+    `none` 等选项在未选中/已选中两种状态下都可读
+  - 落地（已验）：日志 `Text` 由 `wrap="none"` 改为 `wrap="char"`（无空格长 URL / JSON /
+    英文路径按字符折行，不再右侧截断）并保留垂直 `Scrollbar`；新增 `should_autoscroll()`
+    让 `see("end")` 只在视图已贴底时触发，用户上翻看历史不会被拽回末尾
+  - 落地（已验）：面板 `480x700-500+40` → `560x700-580+40`（宽 560，`x + width = -20 <= 0`，
+    仍全在副屏 `-1440..0` 内）
+  - 单测：`tests/test_bridge_gui.py` 新增 7 条（readonly 高对比映射、弹出列表配色、
+    注入伪 `Style` 的调用顺序、无 Tk 的纯逻辑返回值、`wrap=char`、仅在底部自动滚底、
+    加宽后仍在副屏），全量 326 条 `rc=0`；`bridge.py doctor` `ok:true`（未实例化任何真实 Tk 窗口）
 - [ ] **M4-6（DeepSeek CoT 正文净化）**：修复 DeepSeek 开启深度思考时推理正文混入 `uia_delta`
   - 在 `DEFAULT_NOISE_REGEXES` 删除「已思考（用时 N 秒）」之前保留边界并精准剥离思考段落，只返回最终回答正文
   - 补充包含真实思考头与多段推理正文的离线回归单测
