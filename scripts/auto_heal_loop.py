@@ -1082,7 +1082,7 @@ def _ask_brain_endpoint(
     if use_attach:
         cmd += ["--attach", str(_absolute(attach))]
     cmd += [
-        "--profile", "test", "--headed",
+        "--profile", "test", "--headed", "--force",
         "--timeout", str(bridge_timeout), "--json", "--save", str(saved),
     ]
     rc, output = run_cmd(cmd, timeout=timeout, cwd=ROOT)
@@ -2039,6 +2039,33 @@ def run_overnight(
             if idle_streak >= 3:
                 reason = "THREE_IDLE_ROUNDS"
                 break
+            if idle_streak == 0 and round_no < max(1, max_rounds):
+                new_head = head_commit()
+                matched_self = detect_self_modified_files(base, new_head)
+                if matched_self:
+                    remaining_rounds = max(1, max_rounds) - round_no
+                    machine.set(
+                        "SELF_RESTART",
+                        reason="self-modified: %s" % ",".join(matched_self),
+                        round_no=round_no,
+                    )
+                    log("round %d: self-modified (%s); restarting via os.execv "
+                        "(remaining_rounds=%d)"
+                        % (round_no, ", ".join(matched_self), remaining_rounds))
+                    clear_pid()
+                    argv = build_self_restart_argv(
+                        remaining_rounds=remaining_rounds,
+                        no_push=no_push,
+                        timeout=timeout,
+                        sleep=sleep,
+                        executor=executor,
+                        brain=brain,
+                        executor_profile=executor_profile,
+                        stop_on_bug=stop_on_bug,
+                    )
+                    reason = "SELF_RESTART"
+                    os.execv(argv[0], argv)
+                    return 0
             if round_no < max(1, max_rounds):
                 log("sleep %.1fs before next round" % sleep)
                 if sleep_with_stop_watch(sleep):
@@ -2051,10 +2078,11 @@ def run_overnight(
         reason = "EXCEPTION"
         exit_code = 1
     finally:
-        log("overnight stop reason=%s pid=%d" % (reason, pid))
-        if machine.state not in TERMINAL_STATES:
-            machine.set("STOPPED", reason=reason)
-        clear_pid()
+        if reason != "SELF_RESTART":
+            log("overnight stop reason=%s pid=%d" % (reason, pid))
+            if machine.state not in TERMINAL_STATES:
+                machine.set("STOPPED", reason=reason)
+            clear_pid()
         LOG_NAMES = previous_logs
     return exit_code
 
@@ -2126,6 +2154,58 @@ def main(argv: list[str] | None = None) -> int:
             pass
         print(detail, file=sys.stderr, flush=True)
         return 1
+
+
+SELF_RESTART_WATCH_PATHS = (
+    "scripts/auto_heal_loop.py",
+    "engine/daemon_state.py",
+)
+
+
+def detect_self_modified_files(base_commit: str, new_commit: str) -> list[str]:
+    """Return watched daemon files modified between base_commit and new_commit."""
+    if not base_commit or not new_commit or base_commit == new_commit:
+        return []
+    res = git("diff", "--name-only", "%s..%s" % (base_commit, new_commit))
+    if res.returncode != 0:
+        return []
+    changed = {
+        line.strip().replace("\\", "/")
+        for line in (res.stdout or "").splitlines()
+        if line.strip()
+    }
+    return [path for path in SELF_RESTART_WATCH_PATHS if path in changed]
+
+
+def build_self_restart_argv(
+    *,
+    remaining_rounds: int,
+    no_push: bool,
+    timeout: float,
+    sleep: float,
+    executor: str,
+    brain: str,
+    executor_profile: str,
+    stop_on_bug: bool,
+) -> list[str]:
+    """Build argv for os.execv hot-restart after self-modification."""
+    argv = [
+        sys.executable,
+        str(Path(__file__).resolve()),
+        "--overnight",
+        "--max-rounds", str(max(1, int(remaining_rounds))),
+        "--timeout", str(timeout),
+        "--sleep", str(sleep),
+        "--delay-start", "0",
+        "--executor", executor,
+        "--brain", brain,
+        "--executor-profile", executor_profile,
+    ]
+    if no_push:
+        argv.append("--no-push")
+    if stop_on_bug:
+        argv.append("--stop-on-bug")
+    return argv
 
 
 if __name__ == "__main__":

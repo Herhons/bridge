@@ -288,9 +288,9 @@ Bridge 是运行在 **Windows 副屏（x 轴 `-1440..0`，竖屏 1440×2560）**
   - 单测：新增 `tests/test_m4_11_server_daemon_api.py`（11 条，回环随机端口 + 注入
     `status_fn`/`stop_fn`，**全程不写 `runs/STOP`、不探测/杀真实 PID**）；
     全量 389 条 `rc=0`（既有 378 条一条未改）；`bridge.py doctor` `ok:true`（version 仍 0.2.5）
-- [ ] **M4-12（守护进程自改热重启）**：`scripts/auto_heal_loop.py` 提交后检测自身或 `engine/daemon_state.py` 被修改时自动 `os.execv` 原地重启加载新代码
+- [x] **M4-12（守护进程自改热重启）**：`scripts/auto_heal_loop.py` 提交后检测自身或 `engine/daemon_state.py` 被修改时自动 `os.execv` 原地重启加载新代码
   - 仅由云端主脑输出补丁，本地负责 `git apply` 与全量单测验证
-- [ ] **M4-13（本地 HTTP 补齐启动接口）**：`engine/server.py` 新增 `POST /daemon/start`，对齐 `/daemon/status` 与 `/daemon/stop`，支持幂等防重与脱离执行器沙箱分离启动守护进程
+- [x] **M4-13（本地 HTTP 补齐启动接口）**：`engine/server.py` 新增 `POST /daemon/start`，对齐 `/daemon/status` 与 `/daemon/stop`，支持幂等防重与脱离执行器沙箱分离启动守护进程
   - 仅由云端主脑输出补丁，本地负责 `git apply` 与全量单测验证
 - [ ] **M4-14（模型与 UI 漂移自检测及诊断上报自愈）**：新增 `engine/drift.py` 并在 `engine/base.py` 与 `scripts/auto_heal_loop.py` 接入漂移检测
   - 发现新模型（如 Gemini 出现新档位）、旧选项消失或选择器失效时立即速败，带具体原因与 UIA/模型选项快照落盘 `runs/drift/latest.json`

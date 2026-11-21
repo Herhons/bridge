@@ -68,6 +68,7 @@ STATE_NAMES: tuple[str, ...] = (
     "COMMIT_AND_PUSH",
     "BLOCKED",
     "AWAITING_BRAIN_SIGNOFF",
+    "SELF_RESTART",
     "STOPPED",
     "STOPPED_BY_USER",
     "ALL_DONE",
