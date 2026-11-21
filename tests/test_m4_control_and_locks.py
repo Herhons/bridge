@@ -106,6 +106,9 @@ class AllDoneExitTests(unittest.TestCase):
             (root / "docs" / "ROADMAP.md").write_text(
                 "# roadmap\n- [x] M1\n- [x] M4-1\n", encoding="utf-8"
             )
+            # M4-8: an empty roadmap no longer exits locally — the loop must get
+            # the brain's sign-off marker first. Nothing about the assertions
+            # below changes; only the brain is stubbed.
             with mock.patch.object(ahl, "ROOT", root), \
                     mock.patch.object(ahl, "RUNS", runs), \
                     mock.patch.object(ahl, "LOG_NAMES", ("auto_heal_loop.log",)), \
@@ -113,7 +116,13 @@ class AllDoneExitTests(unittest.TestCase):
                     mock.patch.object(
                         ahl, "run_tests", return_value=(0, "OK")
                     ) as tests, \
-                    mock.patch.object(ahl, "request_task_from_gemini") as ask, \
+                    mock.patch.object(
+                        ahl, "request_task_from_gemini"
+                    ) as ask, \
+                    mock.patch.object(
+                        ahl, "request_signoff_from_brain",
+                        return_value=ahl.ALL_DONE_SIGN_OFF_MARKER,
+                    ) as signoff, \
                     mock.patch.object(ahl, "execute_brain_reply") as dispatch, \
                     mock.patch.object(ahl.time, "sleep"):
                 rc = ahl.run_overnight(max_rounds=20, no_push=True, sleep=0)
@@ -122,6 +131,7 @@ class AllDoneExitTests(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertEqual(tests.call_count, 1)
         ask.assert_not_called()
+        signoff.assert_called_once()
         dispatch.assert_not_called()
         self.assertEqual(state["state"], "ALL_DONE")
         history = [item["state"] for item in state["history"]]

@@ -49,6 +49,9 @@ BRIDGE_SCRIPT = "bridge.py"
 PROFILE_CHOICES: tuple[str, ...] = ("none", "test", "routine", "council")
 PROFILE_DEFAULT = "none"
 REFRESH_MS = 2500
+#: 启动守护进程时的默认 ``--timeout``（秒）。M4-8：300s 会在执行器跑到 270s 附近
+#: 被调度器当成超时、半路抢走提交；600s 给足一个完整回合。
+DEFAULT_DAEMON_TIMEOUT = 600
 #: 动作回执在日志面板里保留的秒数（之后恢复为日志尾随）。
 NOTE_HOLD_S = 8.0
 LOG_TAIL_LINES = 40
@@ -234,7 +237,7 @@ def build_daemon_cmd(
     executor: str = "auto",
     executor_profile: str = PROFILE_DEFAULT,
     stop_on_bug: bool = True,
-    timeout=300,
+    timeout=DEFAULT_DAEMON_TIMEOUT,
     sleep=60,
 ) -> list[str]:
     """Build the detached daemon argv for ``scripts/auto_heal_loop.py --daemon``.
@@ -922,7 +925,7 @@ class BridgeConsole:
             executor="auto",
             executor_profile=profile,
             stop_on_bug=stop_on_bug,
-            timeout=300,
+            timeout=DEFAULT_DAEMON_TIMEOUT,
             sleep=60,
         )
         result = launch_daemon_detached(cmd, root=self.repo_root)

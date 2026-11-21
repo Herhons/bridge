@@ -123,6 +123,9 @@ DISPATCH_DIR = "dispatched"
 COOLDOWN_FILE = daemon_state.COOLDOWN_FILE
 ROADMAP_PATH = daemon_state.ROADMAP_PATH
 ALL_DONE_MARKER = daemon_state.ALL_DONE_MARKER
+#: Literal token the *brain* must send back before a local ALL_DONE is allowed
+#: (M4-8). The scheduler never writes this into a prompt as a literal.
+ALL_DONE_SIGN_OFF_MARKER = daemon_state.ALL_DONE_SIGN_OFF_MARKER
 #: Owned by ``engine.daemon_state`` so the CLI, the GUI and this scheduler
 #: validate transitions against one list.
 STATE_NAMES: tuple[str, ...] = daemon_state.STATE_NAMES
@@ -515,8 +518,23 @@ def run_cmd(
 
 
 def git(*args: str) -> subprocess.CompletedProcess:
+    """Run ``git`` with UTF-8 log output and unquoted paths on every call.
+
+    M4-8: a Windows console codepage (936/GBK) turns a Chinese commit subject
+    into mojibake in the scheduler's own log even though the commit itself is
+    fine, because ``git log`` re-encodes it for the console. Pinning
+    ``i18n.logOutputEncoding=utf-8`` makes git emit UTF-8, which is what
+    ``encoding="utf-8"`` below expects; ``core.quotepath=false`` keeps CJK paths
+    readable instead of ``\\346\\226\\207...`` escapes. Both are per-invocation
+    ``-c`` flags so no global git config is touched.
+    """
     return subprocess.run(
-        ["git", *args],
+        [
+            "git",
+            "-c", "i18n.logOutputEncoding=utf-8",
+            "-c", "core.quotepath=false",
+            *args,
+        ],
         cwd=str(ROOT),
         stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,
@@ -850,6 +868,132 @@ def build_task_prompt(round_no: int, backlog: str, base_commit: str) -> str:
             MARKER_SYNTAX_HINT,
         )
     )
+
+
+# ------------------------------------------------------- ALL_DONE brain sign-off
+def brain_signed_off_all_done(reply: str) -> bool:
+    """True only when the brain's reply literally carries the sign-off marker.
+
+    A plain substring test on the exact token is enough *because*
+    ``build_signoff_prompt`` never embeds it — the prompt spells the token out
+    in words, so a brain that merely echoes the prompt cannot sign itself off.
+    """
+    return ALL_DONE_SIGN_OFF_MARKER in (reply or "")
+
+
+def read_roadmap_text() -> str:
+    """Current ``docs/ROADMAP.md`` body ("" when missing or unreadable)."""
+    try:
+        return roadmap_path().read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+
+
+def _test_summary(rc: int, output: str) -> str:
+    """Compact test evidence for the sign-off report (tail, not the whole log)."""
+    tail = (output or "").strip()
+    if len(tail) > 1200:
+        tail = "…" + tail[-1200:]
+    return "rc=%d\n%s" % (rc, tail or "(no output)")
+
+
+def _redact_signoff_marker(text: str) -> str:
+    """Remove the literal sign-off token from anything that enters a prompt.
+
+    ``docs/ROADMAP.md`` documents the token itself, and the sign-off prompt
+    quotes the roadmap — without this, a brain that echoes the prompt would
+    "sign off" by accident.
+    """
+    return (text or "").replace(
+        ALL_DONE_SIGN_OFF_MARKER, "BRIDGE_ALL_DONE（三个小于号 + 该词 + 三个大于号）"
+    )
+
+
+def build_signoff_prompt(
+    round_no: int,
+    base_commit: str,
+    test_summary: str,
+    roadmap_text: str,
+) -> str:
+    """Ask the brain to sign the run off, or to hand out the next step.
+
+    The marker is described in words on purpose: embedding the literal token
+    would let a brain that echoes the prompt trigger ``ALL_DONE`` by accident.
+    """
+    pending, total = roadmap_counts(roadmap_text)
+    recent = git_text("log", "-n", "5", "--oneline").strip() or "(no commits)"
+    return (
+        "【Bridge 收口验收 round=%d | BASE_COMMIT=%s】\n"
+        "主线来源：docs/ROADMAP.md 是唯一权威主线。\n"
+        "当前进度：未勾选 %d 项 / 共 %d 项；已无剩余未勾选主项，进入收口验收。\n\n"
+        "最近 5 条 commit：\n%s\n\n"
+        "全量单测结果：\n%s\n\n"
+        "路线图原文（节选）：\n%s\n\n"
+        "请二选一，只输出其中一样：\n"
+        "1) 若确认可以收口：只回复签收标记 —— 三个小于号 + BRIDGE_ALL_DONE "
+        "+ 三个大于号，不要附加任何解释；\n"
+        "2) 若仍需继续推进：按既有格式输出一个补丁块或任务卡块。\n"
+        "本地执行器不会自行写 ALL_DONE，必须等你的签收标记。\n"
+        % (
+            round_no,
+            base_commit,
+            pending,
+            total,
+            recent,
+            test_summary,
+            _redact_signoff_marker((roadmap_text or "")[:4000]),
+        )
+    )
+
+
+def request_signoff_from_brain(
+    round_no: int,
+    base_commit: str,
+    test_summary: str,
+    roadmap_text: str,
+    *,
+    brain: str = "auto",
+    timeout: float = 300.0,
+) -> str:
+    """Ask the brain to sign off; return its raw reply ("" when nobody answered).
+
+    Unlike ``call_brain`` this accepts a *sign-off only* reply, which carries no
+    patch/task marker and would otherwise be discarded as "no contract".
+    """
+    mode = (brain or "auto").strip().lower()
+    if mode not in BRAIN_CHOICES:
+        raise ValueError(
+            "unknown brain %r (choose from %s)"
+            % (brain, ", ".join(BRAIN_CHOICES))
+        )
+    prompt = build_signoff_prompt(round_no, base_commit, test_summary, roadmap_text)
+    order = list(BRAIN_CHAIN) if mode == "auto" else [mode]
+    for endpoint in order:
+        try:
+            rc, reply = _ask_brain_endpoint(
+                endpoint, prompt, round_no, timeout, tag="signoff_"
+            )
+        except Exception as exc:  # noqa: BLE001 - fall through to the next brain
+            log("signoff_miss=%s round=%d reason=%r" % (endpoint, round_no, exc),
+                "ERROR")
+            continue
+        if rc != 0:
+            log("signoff_miss=%s round=%d reason=rc_%s" % (endpoint, round_no, rc),
+                "ERROR")
+            continue
+        if not reply:
+            log("signoff_miss=%s round=%d reason=empty_reply"
+                % (endpoint, round_no), "ERROR")
+            continue
+        if brain_signed_off_all_done(reply):
+            log("signoff_reply=%s round=%d key=all_done" % (endpoint, round_no))
+            return reply
+        if reply_has_contract(reply):
+            log("signoff_reply=%s round=%d key=task" % (endpoint, round_no))
+            return reply
+        log("signoff_miss=%s round=%d reason=no_signoff_and_no_patch_or_task_marker"
+            % (endpoint, round_no), "ERROR")
+    return ""
 
 
 def parse_reply(rc: int, output: str, saved: Path) -> str:
@@ -1561,8 +1705,17 @@ def run_overnight(
     brain: str = "auto",
     executor_profile: str = "test",
     stop_on_bug: bool = False,
+    require_brain_signoff: bool = True,
 ) -> int:
-    """Multi-round overnight loop: red -> self-heal, green -> next task."""
+    """Multi-round overnight loop: red -> self-heal, green -> next task.
+
+    ``require_brain_signoff`` (default on, per the roadmap's maintenance rule)
+    forbids a local unilateral ``ALL_DONE``: when the roadmap owes nothing the
+    loop reports the last commits + test result to the brain and only records
+    ``ALL_DONE`` on the ``<<<BRIDGE_ALL_DONE>>>`` reply. Only an explicit
+    ``require_brain_signoff=False`` restores the M4-1 behaviour of trusting a
+    standalone ``ALL_DONE`` line in the roadmap itself.
+    """
     global LOG_NAMES
     previous_logs = LOG_NAMES
     LOG_NAMES = (OVERNIGHT_LOG,)
@@ -1615,22 +1768,76 @@ def run_overnight(
             log("round %d/%d BASE_COMMIT=%s" % (round_no, max_rounds, base[:12]))
             machine.set("VERIFY_TESTS", reason="round pre-check",
                         round_no=round_no)
-            rc, _ = run_tests(timeout)
+            rc, test_output = run_tests(timeout)
+            signoff_reply = ""
 
             if rc == 0:
                 done, why = roadmap_all_done()
                 if done:
+                    roadmap_text = read_roadmap_text()
+                    if has_all_done_marker(roadmap_text) and not require_brain_signoff:
+                        # Legacy path: an operator left an explicit ALL_DONE line
+                        # in the roadmap *and* turned sign-off off.
+                        machine.set(
+                            "ALL_DONE",
+                            reason="roadmap owes nothing (%s)" % why,
+                            round_no=round_no,
+                        )
+                        log("round %d: suite green and roadmap carries an "
+                            "explicit ALL_DONE line (%s); recording ALL_DONE"
+                            % (round_no, why))
+                        reason = "ALL_DONE"
+                        exit_code = 0
+                        break
                     machine.set(
-                        "ALL_DONE",
-                        reason="roadmap owes nothing (%s)" % why,
+                        "BRAIN_PLAN",
+                        reason="request ALL_DONE sign-off (%s)" % why,
                         round_no=round_no,
                     )
-                    log("round %d: suite green and roadmap has no pending item "
-                        "(%s); recording ALL_DONE and exiting"
+                    log("round %d: suite green and roadmap owes nothing (%s); "
+                        "asking the brain to sign the run off before ALL_DONE"
                         % (round_no, why))
-                    reason = "ALL_DONE"
-                    exit_code = 0
-                    break
+                    signoff_reply = request_signoff_from_brain(
+                        round_no,
+                        base,
+                        _test_summary(rc, test_output),
+                        roadmap_text,
+                        brain=brain,
+                        timeout=timeout,
+                    )
+                    if brain_signed_off_all_done(signoff_reply):
+                        machine.set(
+                            "ALL_DONE",
+                            reason="brain signed off (%s)" % why,
+                            round_no=round_no,
+                        )
+                        log("round %d: brain returned the sign-off marker; "
+                            "recording ALL_DONE and exiting" % round_no)
+                        reason = "ALL_DONE"
+                        exit_code = 0
+                        break
+                    if not signoff_reply:
+                        idle_streak += 1
+                        machine.set(
+                            "AWAITING_BRAIN_SIGNOFF",
+                            reason="no sign-off marker and no task card "
+                                   "(idle_streak=%d)" % idle_streak,
+                            round_no=round_no,
+                        )
+                        log("round %d: no sign-off marker and no task card; "
+                            "awaiting the brain (idle_streak=%d)"
+                            % (round_no, idle_streak), "WARN")
+                        if idle_streak >= 3:
+                            reason = "THREE_IDLE_ROUNDS"
+                            break
+                        if sleep_with_stop_watch(sleep):
+                            halt_for_stop(machine, round_no, "during sleep")
+                            reason = "STOPPED_BY_USER"
+                            exit_code = 0
+                            break
+                        continue
+                    log("round %d: sign-off reply carried a task instead of the "
+                        "marker; executing it" % round_no)
 
             if rc != 0:
                 log("round %d: red suite; self-heal up to 3 attempts" % round_no,
@@ -1673,9 +1880,16 @@ def run_overnight(
                     continue
             else:
                 failure_streak = 0
-                backlog, source = load_backlog()
-                round_backlog = backlog
-                log("round %d: next-task source=%s" % (round_no, source))
+                if signoff_reply:
+                    # The sign-off round already carries the next step; asking
+                    # again would burn a second brain call for nothing.
+                    backlog, source = round_backlog, "brain_signoff"
+                    log("round %d: next-task source=%s (sign-off reply)"
+                        % (round_no, source))
+                else:
+                    backlog, source = load_backlog()
+                    round_backlog = backlog
+                    log("round %d: next-task source=%s" % (round_no, source))
                 machine.set("PICK_TASK", reason="source=%s" % source,
                             round_no=round_no)
                 if stop_requested():
@@ -1683,11 +1897,17 @@ def run_overnight(
                     reason = "STOPPED_BY_USER"
                     exit_code = 0
                     break
-                machine.set("BRAIN_PLAN", reason="request next task",
-                            round_no=round_no)
-                reply = request_task_from_gemini(
-                    backlog, round_no, base, timeout, brain=brain
+                machine.set(
+                    "BRAIN_PLAN",
+                    reason="brain_signoff" if signoff_reply else "request next task",
+                    round_no=round_no,
                 )
+                if signoff_reply:
+                    reply = signoff_reply
+                else:
+                    reply = request_task_from_gemini(
+                        backlog, round_no, base, timeout, brain=brain
+                    )
                 result = execute_brain_reply(
                     reply, round_no, timeout,
                     executor=executor, executor_profile=executor_profile,

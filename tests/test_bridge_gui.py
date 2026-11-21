@@ -183,7 +183,9 @@ class DaemonCommandTests(unittest.TestCase):
             executor="auto",
             executor_profile="none",
             stop_on_bug=True,
-            timeout=300,
+            # M4-8 raised the default 300 -> 600; the assertion tracks the exact
+            # literal that is passed so a silent drift still fails here.
+            timeout=gui.DEFAULT_DAEMON_TIMEOUT,
             sleep=60,
         )
         self.assertEqual(cmd[0], "py.exe")
@@ -194,7 +196,7 @@ class DaemonCommandTests(unittest.TestCase):
         self.assertEqual(cmd[profile_at + 1], "none")
         self.assertEqual(cmd[cmd.index("--brain") + 1], "auto")
         self.assertEqual(cmd[cmd.index("--executor") + 1], "auto")
-        self.assertEqual(cmd[cmd.index("--timeout") + 1], "300")
+        self.assertEqual(cmd[cmd.index("--timeout") + 1], "600")
         self.assertEqual(cmd[cmd.index("--sleep") + 1], "60")
         self.assertIn("--stop-on-bug", cmd)
 

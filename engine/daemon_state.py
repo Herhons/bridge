@@ -39,6 +39,9 @@ PID_FILE = "overnight.pid"
 STATE_FILE = "state_machine.json"
 ROADMAP_PATH = "docs/ROADMAP.md"
 ALL_DONE_MARKER = "ALL_DONE"
+#: Sign-off token the *brain* must send back before a local ``ALL_DONE`` is
+#: legitimate (M4-8). Scheduled code never embeds this literal in a prompt.
+ALL_DONE_SIGN_OFF_MARKER = "<<<BRIDGE_ALL_DONE>>>"
 COOLDOWN_FILE = "opencode_cooldown.json"
 
 #: Deadline keys an opencode marker may use. ``endpoints/opencode.py`` writes
@@ -64,6 +67,7 @@ STATE_NAMES: tuple[str, ...] = (
     "STUCK_TRIAGE",
     "COMMIT_AND_PUSH",
     "BLOCKED",
+    "AWAITING_BRAIN_SIGNOFF",
     "STOPPED",
     "STOPPED_BY_USER",
     "ALL_DONE",

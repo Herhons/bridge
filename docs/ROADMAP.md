@@ -207,11 +207,33 @@ Bridge 是运行在 **Windows 副屏（x 轴 `-1440..0`，竖屏 1440×2560）**
     改用 `TemporaryDirectory()` 隔离 `RUNS`（断言一字未改，实测不再向真实 `runs/` 写侧写文件）；
     全量 349 条 `rc=0`；`bridge.py doctor` `ok:true`（version 仍 0.2.5）
 
-- [ ] **M4-8（主脑签收闭环与守护体验修复）**：
+- [x] **M4-8（主脑签收闭环与守护体验修复）**：
   - 取消本地单方面 `ALL_DONE` 静默退出：当 `docs/ROADMAP.md` 无剩余 `- [ ]` 时，守护进程自动汇总最近提交与全量单测结果向主脑发起收口验收汇报；仅当主脑回复明确包含 `<<<BRIDGE_ALL_DONE>>>` 时才记 `ALL_DONE` 优雅退出，否则继续执行主脑下发的下一项补丁/任务
   - 将 `bridge_gui.pyw` 启动守护进程的默认 `--timeout` 从 `300` 调整为 `600`（避免 270s 半路抢提交）
   - 修复 Windows 下 `git commit` 中文回显在日志里乱码成 `` 的问题（`git` 传 `-c i18n.logOutputEncoding=utf-8 -c core.quotepath=false`）
   - 补齐对应离线单测
+  - 落地（已验）：`scripts/auto_heal_loop.py` 新增 `ALL_DONE_SIGN_OFF_MARKER` /
+    `brain_signed_off_all_done()` / `build_signoff_prompt()` / `request_signoff_from_brain()`
+    （后者不复用 `call_brain`：纯签收回复没有补丁/任务卡标记，会被 `call_brain` 的
+    `reply_has_contract` 过滤掉）；`run_overnight(require_brain_signoff=True)` 默认启用签收制，
+    三种返回已分别落盘验证：签收标记 → `ALL_DONE` 退出、带回任务卡 → 直接进入执行链
+    （不再重复向主脑要任务）、两者皆无 → 记 `AWAITING_BRAIN_SIGNOFF` 并按 `idle_streak` 计次；
+    仅 `require_brain_signoff=False` 且路线图自带独立 `ALL_DONE` 行时才走旧路径
+  - 落地（已验）：`engine/daemon_state.py` 的 `STATE_NAMES` 新增 `AWAITING_BRAIN_SIGNOFF`
+    （状态机仍集中校验，`bridge.py`/`bridge_gui.pyw` 同步可见）
+  - 落地（已验）：`bridge_gui.pyw` 新增 `DEFAULT_DAEMON_TIMEOUT = 600`，`build_daemon_cmd()`
+    与 `_do_start()` 统一引用（`launch_daemon_detached()` 本就不收 timeout 参数，无需改）；
+    `tests/test_bridge_gui.py` 仅把写死的 `300` 同步为 `DEFAULT_DAEMON_TIMEOUT`，断言未削弱
+  - 落地（已验）：`git()` 每次调用固定带 `-c i18n.logOutputEncoding=utf-8 -c core.quotepath=false`。
+    真机抽查 `git log -1 --format=%s c6f032a`：带 flag 为
+    `chore(auto): round 1 M4-7（架构瘦身与单测卫生）`，强制 `i18n.logOutputEncoding=gbk`
+    时复现乱码 `chore(auto): round 1 M4-7���ܹ������뵥��������`，确认就是该配置项
+  - 落地（已验）：签收提示词内嵌路线图节选，而本文件正文就写着签收标记字面量 →
+    新增 `_redact_signoff_marker()` 在入提示词前把该字面量替换成文字说明，
+    并加断言 `build_signoff_prompt()` 含标记字面量的路线图也不会泄漏（否则主脑照抄提示词即「自签收」）
+  - 单测：新增 `tests/test_m4_8_signoff_and_timeout.py`（8 条）；`test_roadmap_without_pending_items_exits_all_done_at_once`
+    只补了签收函数的 stub（原有断言一字未改，另加 `signoff.assert_called_once()`）；
+    全量 357 条 `rc=0`；`bridge.py doctor` `ok:true`（version 仍 0.2.5）
 - [ ] **M4-9（GUI 执行器选择与一键会审）**：
   - `bridge_gui.pyw` 增加「执行器」下拉框（`workbuddy / auto / antigravity`，默认 `workbuddy`）并在顶部显示当前执行器
   - 增加「一键三方会审」按钮（异步调用 `deepseek / grok / gemini` 并汇总落盘）与对应离线单测
