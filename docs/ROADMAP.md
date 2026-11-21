@@ -51,12 +51,10 @@ Bridge 是运行在 **Windows 副屏（x 轴 `-1440..0`，竖屏 1440×2560）**
   - `StateMachine` 原子落盘（`.tmp` + `os.replace`）与 PID 隔离（活着的调度器历史不被覆盖）
   - 任务卡幂等防双发（`runs/dispatched/<card_id>.json` 记录 `dispatched / completed / timed_out`）
 - [ ] **M4-2（P0.5）**：模型与驱动层速败
+  - 已完成第 1 批（ledger 超时解锁 / models --json / opencode CREATE_NO_WINDOW + 额度速败标记）
   - 校准 `deepseek / grok / gemini` 的 `--profile council` 真实可用最高模型
     （修复 Gemini `carbon` 撞 US$99.99 付费墙、DeepSeek/Grok `available_options=[]`）
   - 驱动层加阻断弹窗（付费墙 / 升级 / 权限确认）速败与短时无回执 fail-fast（不再死等 300s）
-  - 修复 `ledger.json` 超时 `unknown` 误锁重试（`duplicate rc=6`）
-  - 统一 `bridge.py models --json` 参数
-  - `opencode.EXE` 加 `CREATE_NO_WINDOW` 与额度冷却跳过
   - Antigravity `Request Review` 弹窗检测速败
 - [ ] **M4-3（P1）**：剪贴板与窗口层收编
   - 剪贴板「方案 A」：粘贴前备份、粘贴后无损还原，破冰键入后再粘贴（防输入框未激活 bug）

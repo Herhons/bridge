@@ -418,6 +418,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_models = sub.add_parser("models", help="List configured (or --live probed) models & policy tiers for an endpoint")
     p_models.add_argument("endpoint", choices=ENDPOINT_NAMES)
     p_models.add_argument("--live", action="store_true", help="Open UIA model dropdown on Windows to probe live options & pricing")
+    p_models.add_argument(
+        "--json",
+        action="store_true",
+        dest="as_json",
+        help="Accepted for parity with the single-endpoint scripts "
+             "(models output is always JSON)",
+    )
 
     p_status = sub.add_parser("status", help="Show window & readiness status (one or all endpoints)")
     p_status.add_argument("endpoint", nargs="?", choices=ENDPOINT_NAMES, default=None)
@@ -557,6 +564,9 @@ def main(argv: list[str] | None = None, *, driver_factory=get_driver) -> int:
         return exit_code_for(res)
 
     if args.command == "models":
+        # ``--json`` is accepted for CLI parity with the single-endpoint scripts
+        # (``models`` there also defaults to JSON); the payload shape is
+        # identical either way so no flagless caller changes behaviour.
         res = dispatch("models", args.endpoint, {"live": args.live, "headed": True}, driver_factory=driver_factory)
         safe_print_json(res)
         return exit_code_for(res)
