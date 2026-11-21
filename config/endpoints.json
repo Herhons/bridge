@@ -1057,8 +1057,9 @@
           ],
           "name_contains": [
             "添加",
-            "附件",
-            "Attach"
+            "Attach",
+            "上传",
+            "Upload"
           ],
           "anchor_box_ratio": [
             0.23,
@@ -1073,11 +1074,22 @@
           ],
           "name_contains": [
             "添加文件",
-            "Add file"
+            "Add file",
+            "上传文件",
+            "Upload file",
+            "本地文件",
+            "Local file"
           ]
         }
       },
       "templates": {},
+      "attach_ready_patterns": [
+        "附件",
+        "已添加",
+        "Attachment",
+        "Uploaded"
+      ],
+      "attach_ready_timeout": 8.0,
       "content_max_rel_x": 0.62,
       "require_new_copy_button": true,
       "stable_seconds": 6.0,

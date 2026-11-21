@@ -105,6 +105,18 @@ def _window_pid(user32, hwnd: int) -> int:
     return int(pid.value)
 
 
+def find_existing_file_dialog(owner_pid: int, *, user32=None) -> int:
+    """Single read-only pass for an already-open #32770 owned by *owner_pid*."""
+    u32 = user32 or _win32_user32()
+    hwnd = 0
+    while True:
+        hwnd = u32.FindWindowExW(None, hwnd, FILE_DIALOG_CLASS, None)
+        if not hwnd:
+            return 0
+        if int(owner_pid) <= 0 or _window_pid(u32, hwnd) == int(owner_pid):
+            return int(hwnd)
+
+
 def find_file_dialog_window(
     owner_pid: int,
     *,
@@ -116,13 +128,9 @@ def find_file_dialog_window(
     u32 = user32 or _win32_user32()
     deadline = time.monotonic() + float(timeout)
     while time.monotonic() < deadline:
-        hwnd = 0
-        while True:
-            hwnd = u32.FindWindowExW(None, hwnd, FILE_DIALOG_CLASS, None)
-            if not hwnd:
-                break
-            if int(owner_pid) <= 0 or _window_pid(u32, hwnd) == int(owner_pid):
-                return int(hwnd)
+        hwnd = find_existing_file_dialog(owner_pid, user32=u32)
+        if hwnd:
+            return hwnd
         time.sleep(poll)
     raise UIAError(
         "DIALOG_NOT_FOUND",
@@ -706,7 +714,15 @@ class EndpointDriver:
         self._sleep(0.35)
 
         menu_cfg = selectors.get("attach_menu_item") or {}
+        dialog_already_open = False
         if menu_cfg:
+            try:
+                dialog_already_open = bool(
+                    find_existing_file_dialog(int(getattr(win, "pid", 0) or 0))
+                )
+            except UIAError:
+                dialog_already_open = False
+        if menu_cfg and not dialog_already_open:
             snap_m = self.take_snap(win.hwnd)
             item = self._find_attach_control(snap_m, "attach_menu_item")
             if item is None:
@@ -721,6 +737,20 @@ class EndpointDriver:
             timeout=float(self.cfg.get("attach_dialog_timeout", 10.0)),
         )
         self._sleep(float(self.cfg.get("attach_wait_seconds", 1.0)))
+
+        ready_patterns = self.cfg.get("attach_ready_patterns") or []
+        if ready_patterns:
+            deadline = time.monotonic() + float(self.cfg.get("attach_ready_timeout", 10.0))
+            poll = float(self.bridge_cfg.get("poll_interval", 0.25))
+            while time.monotonic() < deadline:
+                if self.take_snap(win.hwnd).find(name_contains=ready_patterns):
+                    break
+                self._sleep(poll)
+            else:
+                raise UIAError(
+                    "ATTACH_NOT_READY",
+                    "Attachment chip did not appear on %s after upload" % self.name,
+                )
         return [method]
 
     def _find_new_chat_button(self, snap: Snapshot) -> UINode | None:
