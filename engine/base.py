@@ -81,6 +81,41 @@ EXIT_CODES = {
     "duplicate": 6,
 }
 
+#: UI text that means "this window will never answer without a human". Matched
+#: case-insensitively against every visible node of a snapshot, and only while
+#: waiting for a reply, so an ordinary answer that happens to quote these words
+#: is still accepted. Endpoints may extend the list with their own
+#: ``blocking_popup_patterns`` entries in ``config/endpoints.json``.
+#:
+#: ``Allow`` on its own is intentionally *not* a pattern: Antigravity's
+#: permission dialog always carries ``Waiting for user input`` or
+#: ``Yes, allow this time``, while "Allow me to explain" is a normal sentence.
+DEFAULT_BLOCKING_POPUP_PATTERNS: tuple[str, ...] = (
+    # Gemini paywall / upgrade promotion.
+    "解锁 4 carbon",
+    "unlock 4 carbon",
+    "us$99.99",
+    "升级到",
+    # Antigravity / web permission confirmation.
+    "waiting for user input",
+    "yes, allow this time",
+    "request review",
+    # Generic paid-wall wording.
+    "upgrade to continue",
+    "升级以继续",
+)
+
+
+def snapshot_text(snap: "Snapshot | None") -> str:
+    """All visible node labels of a snapshot, newline-joined and lowercased."""
+    if snap is None:
+        return ""
+    nodes = getattr(snap, "nodes", None) or ()
+    return "\n".join(
+        str(getattr(node, "name", "") or "") for node in nodes
+    ).lower()
+
+
 def fill_windows_file_dialog(
     paths: list[str],
     *,
@@ -477,6 +512,66 @@ class EndpointDriver:
                     return opt
 
         return None
+
+    def blocking_popup_patterns(self) -> tuple[str, ...]:
+        """Default paywall/permission wording plus this endpoint's own entries.
+
+        ``config/endpoints.json`` may add ``blocking_popup_patterns`` per
+        endpoint; entries are appended (never replace the defaults) so an
+        endpoint can only make the detector stricter.
+        """
+        merged: list[str] = list(DEFAULT_BLOCKING_POPUP_PATTERNS)
+        for extra in self.cfg.get("blocking_popup_patterns") or ():
+            text = str(extra).strip().lower()
+            if text and text not in merged:
+                merged.append(text)
+        return tuple(merged)
+
+    def detect_blocking_popup(self, snap: "Snapshot | None") -> str:
+        """Return the matched blocking pattern, or ``""`` when the UI looks sane."""
+        blob = snapshot_text(snap)
+        if not blob:
+            return ""
+        for pattern in self.blocking_popup_patterns():
+            if pattern in blob:
+                return pattern
+        return ""
+
+    def _blocking_popup_payload(
+        self,
+        matched: str,
+        snap: "Snapshot | None",
+        clean_prompt: str,
+        started: float,
+        warnings: list[str],
+    ) -> dict[str, Any]:
+        """Structured fail-fast result for a popup no automation can dismiss.
+
+        The ledger goes ``failed_retryable`` on purpose: nothing was submitted,
+        so once a human clears the dialog the same prompt must be sendable again
+        without ``--force`` or a ledger wipe.
+        """
+        self.ledger.mark(
+            clean_prompt, self.name, "failed_retryable", note="blocking_popup"
+        )
+        ev = self._record_failure_evidence(
+            "blocking_popup", snap, {"matched": matched}
+        )
+        return {
+            "ok": False,
+            "endpoint": self.name,
+            "error": "blocking_popup",
+            "matched": matched,
+            "message": (
+                "Blocking popup detected on %s (matched=%r); a human has to clear "
+                "it, so the wait was aborted instead of burning the timeout"
+                % (self.name, matched)
+            ),
+            "evidence": ev,
+            "warnings": list(warnings or []),
+            "reply": "",
+            "elapsed": round(time.monotonic() - started, 2),
+        }
 
     def switch_model(
         self,
@@ -1058,6 +1153,15 @@ class EndpointDriver:
                     elif model_switch_info.get("attempted"):
                         warnings.append(f"model_switch_failed:{model_switch_info.get('reason')}")
 
+                # A paywall or permission dialog can appear right after a model
+                # switch; abort before writing anything rather than paste into a
+                # window that will never answer.
+                blocking = self.detect_blocking_popup(before_snap)
+                if blocking:
+                    return self._blocking_popup_payload(
+                        blocking, before_snap, clean_prompt, started, warnings
+                    )
+
                 if attach_paths:
                     attach_methods = self.attach_files(win, before_snap, attach_paths, headed=use_headed)
                     before_snap = self.take_snap(win.hwnd)
@@ -1190,6 +1294,12 @@ class EndpointDriver:
             except UIAError:
                 self._sleep(poll)
                 continue
+
+            blocking = self.detect_blocking_popup(cur_snap)
+            if blocking:
+                return self._blocking_popup_payload(
+                    blocking, cur_snap, clean_prompt, started, warnings
+                )
 
             if not receipt_seen and self._has_send_receipt(before_snap, cur_snap, clean_prompt, min_rel_x=min_rel_x, max_rel_x=max_rel_x):
                 receipt_seen = True

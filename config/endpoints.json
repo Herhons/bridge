@@ -182,6 +182,11 @@
         "pro",
         "argon"
       ],
+      "blocking_popup_patterns": [
+        "获取更多用量",
+        "开始免费试用",
+        "解锁 4 Carbon"
+      ],
       "model_aliases": {
         "free": [
           "4 Hydrogen",
@@ -1418,6 +1423,11 @@
       "placeholders": [
         "Ask anything, @ to mention, / for actions",
         "Message input"
+      ],
+      "blocking_popup_patterns": [
+        "Request Review",
+        "Waiting for user input",
+        "Yes, allow this time"
       ],
       "noise_lines": [
         "Antigravity",

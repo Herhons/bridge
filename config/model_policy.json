@@ -42,9 +42,10 @@
   },
   "endpoints": {
     "gemini": {
+      "_note": "council 曾指向 carbon，但当前账号选 carbon 会命中 US$99.99 付费墙（快照出现『解锁 4 Carbon』弹窗），因此改为真实可用的 flash；carbon 仍在 models/verified_models 中保留，等账号有额度再切回。",
       "test": "hydrogen",
       "routine": "neon",
-      "council": "carbon",
+      "council": "flash",
       "verified_models": [
         {"id": "hydrogen", "ui_label": "日常帮助 4 Hydrogen", "tier": "free"},
         {"id": "neon", "ui_label": "Neon", "tier": "standard"},

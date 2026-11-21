@@ -52,6 +52,13 @@ EXECUTOR_CHAIN: tuple[str, ...] = (
     "workbuddy", "opencode", "antigravity",
 )
 EXECUTOR_CHOICES: tuple[str, ...] = ("auto",) + EXECUTOR_CHAIN
+#: Returned instead of a reply when a level wrote files but never answered; it
+#: is non-empty on purpose so the caller keeps the round and lets the test gate
+#: decide, while ``executor_dirty=`` in the log says why no fallback happened.
+EXECUTOR_DIRTY_MARKER = (
+    "[auto_heal] worktree changed by executor %s without a reply; "
+    "fallback suppressed, verifying via tests"
+)
 BRAIN_CHAIN: tuple[str, ...] = ("gemini", "deepseek", "grok")
 BRAIN_CHOICES: tuple[str, ...] = ("auto",) + BRAIN_CHAIN
 BRAIN_FALLBACK: dict[str, str] = {
@@ -72,6 +79,7 @@ PATCH_FILE = "brain_patch.diff"
 ATTACH_INLINE_LIMIT = 20000
 STOP_FILE = "STOP"
 DISPATCH_DIR = "dispatched"
+COOLDOWN_FILE = "opencode_cooldown.json"
 ROADMAP_PATH = "docs/ROADMAP.md"
 ALL_DONE_MARKER = "ALL_DONE"
 STATE_NAMES: tuple[str, ...] = (
@@ -430,6 +438,19 @@ def finish_dispatch(
 
 
 # ---------------------------------------------------------------- subprocess
+def _no_window_flags() -> int:
+    """``CREATE_NO_WINDOW`` on Windows so no console flashes in the tray.
+
+    Every subprocess this loop starts (bridge.py, opencode, git, taskkill) is
+    captured through pipes, so the console window has nothing to show and only
+    steals attention from whatever the operator is doing on the primary screen.
+    Off Windows the flag does not exist and 0 is the neutral value.
+    """
+    if os.name != "nt":
+        return 0
+    return getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+
+
 def kill_process_tree(pid: int) -> int:
     """Kill the whole Windows process tree; return taskkill's return code."""
     try:
@@ -442,6 +463,7 @@ def kill_process_tree(pid: int) -> int:
             encoding="utf-8",
             errors="replace",
             timeout=30,
+            creationflags=_no_window_flags(),
         )
         return int(proc.returncode)
     except (OSError, subprocess.SubprocessError):
@@ -467,6 +489,7 @@ def run_cmd(
         text=True,
         encoding="utf-8",
         errors="replace",
+        creationflags=_no_window_flags(),
     )
     try:
         output, _ = proc.communicate(timeout=timeout)
@@ -500,6 +523,7 @@ def git(*args: str) -> subprocess.CompletedProcess:
         encoding="utf-8",
         errors="replace",
         timeout=60,
+        creationflags=_no_window_flags(),
     )
 
 
@@ -1213,6 +1237,16 @@ def call_executor(
     send anything and flags the record ``needs_review`` instead — handing a
     possibly in-flight task to the *next* executor is exactly the concurrent
     double-dispatch this guard exists to stop.
+
+    Two further brakes apply before a fallback is allowed:
+
+    * the worktree fingerprint is compared before/after each level — if the
+      level wrote files but returned no reply (bridge timeout while the code was
+      already saved), the chain stops and returns ``EXECUTOR_DIRTY_MARKER`` so
+      the outer test gate judges the work instead of a second executor redoing
+      it on top;
+    * a cooling opencode lane is skipped outright (``executor_skip=opencode
+      reason=cooldown_active``) rather than waiting out a certain failure.
     """
     mode = (executor or "auto").strip().lower()
     if mode not in EXECUTOR_CHOICES:
@@ -1237,6 +1271,16 @@ def call_executor(
         "antigravity": call_antigravity,
     }
     for index, endpoint in enumerate(order):
+        if mode == "auto" and endpoint == "opencode":
+            cooling_until = opencode_cooldown_until()
+            if cooling_until:
+                log(
+                    "executor_skip=opencode reason=cooldown_active until=%s "
+                    "round=%d" % (cooling_until, attempt),
+                    "WARN",
+                )
+                continue
+        before = worktree_fingerprint()
         try:
             reply = callers[endpoint](
                 task_card, attempt, timeout, executor=mode,
@@ -1261,6 +1305,20 @@ def call_executor(
             % (endpoint, attempt),
             "ERROR",
         )
+        after = worktree_fingerprint()
+        if after and after != before:
+            log(
+                "executor_dirty=%s round=%d: the worktree changed during this "
+                "level but no reply came back; suppressing fallback so the test "
+                "gate judges the work instead of a second executor redoing it"
+                % (endpoint, attempt),
+                "ERROR",
+            )
+            finish_dispatch(
+                card_id, completed=False, endpoint=endpoint,
+                detail="worktree changed without reply; fallback suppressed",
+            )
+            return EXECUTOR_DIRTY_MARKER % endpoint
         if index + 1 < len(order):
             log(
                 "executor_fallback -> %s round=%d"
@@ -1516,6 +1574,42 @@ def heal(
 
 def has_changes() -> bool:
     return bool(git("status", "--porcelain").stdout.strip())
+
+
+def worktree_fingerprint() -> str:
+    """``git status --porcelain`` as a comparable string ("" when clean).
+
+    ``call_executor`` compares this before and after a level instead of testing
+    absolute dirtiness: the loop frequently starts on a worktree that already
+    carries unrelated edits, and only a *delta* proves that the executor itself
+    wrote code before dying.
+    """
+    proc = git("status", "--porcelain")
+    return (proc.stdout or "").strip()
+
+
+def opencode_cooldown_until(now: datetime | None = None) -> str:
+    """ISO stamp of an active opencode cooldown, or "" when the lane is clear.
+
+    ``endpoints/opencode.py`` drops ``runs/opencode_cooldown.json`` when the CLI
+    reports a quota / rate-limit hit. Handing the next card to a cooling lane
+    means burning a full budget on a certain failure, so the auto chain skips it.
+    Read-only: an unparsable or expired marker simply reads as "clear".
+    """
+    try:
+        data = json.loads((RUNS / COOLDOWN_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return ""
+    until_raw = str((data or {}).get("until") or "") if isinstance(data, dict) else ""
+    if not until_raw:
+        return ""
+    try:
+        until = datetime.fromisoformat(until_raw)
+    except ValueError:
+        return ""
+    if until > (now or datetime.now()):
+        return until_raw
+    return ""
 
 
 def run_overnight(

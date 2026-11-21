@@ -50,13 +50,22 @@ Bridge 是运行在 **Windows 副屏（x 轴 `-1440..0`，竖屏 1440×2560）**
   - `--daemon` 正式命名（与 `--overnight` 等价，保留兼容）
   - `StateMachine` 原子落盘（`.tmp` + `os.replace`）与 PID 隔离（活着的调度器历史不被覆盖）
   - 任务卡幂等防双发（`runs/dispatched/<card_id>.json` 记录 `dispatched / completed / timed_out`）
-- [ ] **M4-2（P0.5）**：模型与驱动层速败
-  - 已完成第 1 批（ledger 超时解锁 / models --json / opencode CREATE_NO_WINDOW + 额度速败标记）
-  - 校准 `deepseek / grok / gemini` 的 `--profile council` 真实可用最高模型
-    （修复 Gemini `carbon` 撞 US$99.99 付费墙、DeepSeek/Grok `available_options=[]`）
-  - 驱动层加阻断弹窗（付费墙 / 升级 / 权限确认）速败与短时无回执 fail-fast（不再死等 300s）
-  - Antigravity `Request Review` 弹窗检测速败
+- [x] **M4-2（P0.5）**：模型与驱动层速败
+  - 第 1 批：`ledger` 超时解锁（`unknown` + `timeout`/`submit_not_verified` 可重试，不再 `duplicate rc=6`）、
+    `bridge.py models --json` 统一、`opencode.EXE` 加 `CREATE_NO_WINDOW` 与额度速败标记 +
+    `runs/opencode_cooldown.json`
+  - 第 2 批：`run_cmd` / `git` / `kill_process_tree` 全部 `CREATE_NO_WINDOW`（彻底消掉 python.exe 黑框）；
+    回落前先比对工作区指纹，上一级已写完代码但没回执时**停止回落**交单测门禁，杜绝双发；
+    `auto` 链遇到冷却中的 opencode 记 `executor_skip=opencode reason=cooldown_active` 直接跳过
+  - 阻断弹窗速败：`engine/base.py` 新增 `blocking_popup_patterns`（默认覆盖 `解锁 4 Carbon` /
+    `US$99.99` / `升级到` / `Waiting for user input` / `Yes, allow this time` / `Request Review`，
+    可按端点在 `config/endpoints.json` 扩展），`ask()` 在发写前与等待循环内命中即返回
+    `error="blocking_popup"`，账本记 `failed_retryable` 不锁死
+  - Gemini `council` 从付费墙档位 `carbon` 改为 `flash`（`carbon` 仍保留在 `models` 中供 `--model` 手动使用）
+  - 遗留：`deepseek / grok` 网页版 `--profile council` 下拉最高可用模型的**真机**校准仍需真实窗口，
+    并入 M4-3 一并收口
 - [ ] **M4-3（P1）**：剪贴板与窗口层收编
+  - 真机校准 `deepseek / grok` 的 `--profile council` 最高可用模型（`available_options=[]` 待修）
   - 剪贴板「方案 A」：粘贴前备份、粘贴后无损还原，破冰键入后再粘贴（防输入框未激活 bug）
   - 主屏 `GetForegroundWindow()` 防抢焦点运行时门禁
   - 真机验证 `#32770` 修复后的 Gemini `--attach` 闭环
