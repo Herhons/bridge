@@ -186,9 +186,26 @@ Bridge 是运行在 **Windows 副屏（x 轴 `-1440..0`，竖屏 1440×2560）**
     已前进时归零 `idle_streak`
   - 单测：新增 `tests/test_m4_6_cot_and_scheduler_fixes.py`（7 条），全量 333 条 `rc=0`；
     `bridge.py doctor` `ok:true`（version 仍 0.2.5）
-- [ ] **M4-7（架构瘦身与单测卫生）**：消除 `scripts/auto_heal_loop.py` 与 `bridge.py` 重复控制逻辑
+- [x] **M4-7（架构瘦身与单测卫生）**：消除 `scripts/auto_heal_loop.py` 与 `bridge.py` 重复控制逻辑
   - 将两处重复的 PID 存活探测、`StateMachine` 原子落盘、`docs/ROADMAP.md` 解析与 `runs/STOP` 控制抽离到独立模块 `engine/daemon_state.py`，两端统一导入（100% 保持既有函数名与 CLI 行为兼容）
   - 隔离既有旧单测 `test_green_suite_commits_and_respects_no_push` 的 `RUNS` 路径（不改任何断言，只避免写脏真实 `runs/state_machine.json`）
+  - 落地（已验）：新增 `engine/daemon_state.py`（纯标准库）：`pid_alive`（nt 走
+    `OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION)` + `GetExitCodeProcess`，绝不 signal）、
+    `scheduler_pid`/`read_pid_file`、`stop_path`/`stop_requested`/`clear_stop_files`、
+    `roadmap_counts(path)`/`count_roadmap_items(text)`/`roadmap_all_done(path)`、
+    `_atomic_write_text`、`StateMachine`（`.tmp` + `os.replace`，异 PID 活体分写
+    `state_machine.<pid>.json`）、`read_opencode_cooldown_until(path, now=)`
+  - 落地（已验）：`scripts/auto_heal_loop.py` 全部改为注入式薄封装（`runs_dir=lambda: RUNS`、
+    `pid_alive_fn`/`log_fn` 运行期解析），既有 `ahl.RUNS` / `ahl.pid_alive` / `ahl.log`
+    monkeypatch 点全部继续生效；`bridge.py` 的 `scheduler_pid`/`pid_alive`/roadmap 计数/STOP
+    判定同一份实现；`bridge_gui.pyw` 的 roadmap `all_done` 与冷却标记改走同一份解析。
+    顺带删掉抽离后不再使用的 `ctypes`/`re` 导入
+  - 落地（已验）：冷却键名兼容 —— `read_opencode_cooldown_until()` 同时认 `until` 与
+    `cooldown_until`（`COOLDOWN_UNTIL_KEYS`），此前写 `cooldown_until` 的标记对
+    `auto_heal_loop` 与 GUI 均不生效（M4-6 轮已上报，本轮修复）
+  - 单测：新增 `tests/test_m4_7_daemon_state.py`（16 条）；`test_green_suite_commits_and_respects_no_push`
+    改用 `TemporaryDirectory()` 隔离 `RUNS`（断言一字未改，实测不再向真实 `runs/` 写侧写文件）；
+    全量 349 条 `rc=0`；`bridge.py doctor` `ok:true`（version 仍 0.2.5）
 
 ## 5. 维护约定
 
@@ -196,3 +213,5 @@ Bridge 是运行在 **Windows 副屏（x 轴 `-1440..0`，竖屏 1440×2560）**
 2. 新增工作项必须写进本文件再动手，禁止只写在 `runs/` 的临时 todo 里。
 3. 子说明用普通 `- ` 列表（**不要**写成 `- [ ]`），否则会被计为未完成主线项。
 4. 全部主项收口后，在本文件末尾另起一行写 `ALL_DONE`，调度器会立即优雅退出。
+
+ALL_DONE
