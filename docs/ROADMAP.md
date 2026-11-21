@@ -101,7 +101,7 @@ Bridge 是运行在 **Windows 副屏（x 轴 `-1440..0`，竖屏 1440×2560）**
   - `build_task_prompt` / `build_gemini_prompt` 不再内嵌任何可被 `TASK_RE` / `PATCH_RE` 命中的
     示例块（标记名改写成文字说明），提示词自身永远不会被抽取
   - `reply_has_contract` 同步收紧：纯回声不再算合法回执，脑链继续回落到下一个端点
-- [ ] **M4-4（P0）**：Gemini 附件真机闭环 + 焦点严格门禁默认化
+- [x] **M4-4（P0）**：Gemini 附件真机闭环 + 焦点严格门禁默认化
   - composer 可见性前置检查（滚到底/等待输入区就绪）后再触发 `--attach`，把 `#32770`
     空框问题一次验穿，证据补进 `runs/m4_3_attach_verify.txt`
   - 真机回归统一开启 `focus_guard_strict: true`，让抢主屏焦点直接失败而非静默发生
@@ -120,8 +120,40 @@ Bridge 是运行在 **Windows 副屏（x 轴 `-1440..0`，竖屏 1440×2560）**
     无 `model_selector` 节点，展开下拉必须激活窗口，故 council 校准未做、配置未改（不编造）
   - 本轮事故（如实记录）：13:44 只读探针用 `uia:invoke` 让 DeepSeek 窗口成为前台
     （前台 529300→2362972），0.4s 内已还原为 529300；此后改为一律只读快照
-  - 副发现（未修）：`bridge.py status` 对 `deepseek / grok` 报 `ready=true`，实际是整页
-    `DocumentControl` 被 `_find_composer` 当成 composer 的假阳性，建议下一轮收窄角色/名字
+  - 副发现（本轮已修）：`bridge.py status` 曾对 `deepseek / grok` 报 `ready=true`，实为整页
+    `DocumentControl` 被 `_find_composer` 当成 composer 的假阳性；新增
+    `is_fullpage_document_node()`（宽 >=85% 且高 >=70%）在 `_find_composer()` 中剔除该容器
+  - 焦点方案 A（本轮落盘，已验）：`engine/window.py` 新增 `restore_focus()` /
+    `preserved_focus()`，`FocusGuard` 支持 `restore_on_exit=True` —— 离开上下文时**先还原**
+    主屏原前台，成功记 `focus_guard:restored:0x..` 且不抛错，只有还原不回去才 `taken=True`
+    并按严格门禁抛 `focus_taken`；`engine/base.py` 新增 `focus_borrow_restore()`（默认 `True`）
+    与 `_borrowed_focus()`，`ask()` 输入/提交、`switch_model()`、`attach_files()`、
+    `models(live=True)`、回复复制点击全部走「瞬时借焦 → 动作 → `finally` 还原」
+  - 真机暴露并修掉的 4 个缺陷（全部实测有据）：① `SetForegroundWindow` 异步生效，立即复验
+    会假阴性（14:31 一次还原其实成功却被判 `focus_taken`）→ 改为轮询复验 + `AttachThreadInput`
+    兜底；② 前台锁可能直接拒绝转交 → 失败时 `raise_window()`（`SetWindowPos +
+    SWP_NOACTIVATE`）抬 Z 序并记 `focus_guard:borrow_unconfirmed:0x..`；③ 附件菜单固定
+    `sleep(0.35)` 太短（实测 0.44s 才进 AX 树）→ `_wait_attach_menu()` 轮询至 3s；④ Gemini 的
+    `#32770` 由**另一个 chrome.exe 进程**拥有（实测 pid 39744 / 23536，窗口 pid 30812）→
+    `list_file_dialogs()` + `fill_file_dialog()` 按「本次新出现 + 同镜像名」定位，只认可见
+    `#32770`（本机有 6 个隐藏的网银 USBKey 对话框，不会被冒充）
+  - 剪贴板漏洞（本轮已验）：读回复的 `copy_button` 点击会把回复写进剪贴板（实测把用户 3840
+    字符换成 2 字符「OK」）→ 该点击 + 读取整体包进 `preserved_clipboard()`，并纳入借焦还原
+  - 真机结果（2026-11-21 14:2x~14:5x，主屏前台全程为斗鱼客户端 `0x81394` 的最严苛条件）：
+    Grok `--profile council` → `model_switch.switched=true`、`target="Expert"`（`models --live`
+    实测下拉为 `CheckBoxControl`：Auto/Fast/Expert/Build/Heavy，已据此校准 `model_option`）；
+    Gemini `--attach` → `attach_methods=["#32770:file_dialog"]`、回复 `BRIDGE_ATTACH_OK_M43`、
+    `rc=0`；三次运行 warnings 均为 `focus_guard:restored:0x81394`，收尾
+    `foreground_hwnd=529300`（斗鱼，主屏 `[0,0,2560,1440]`）与运行前一致，剪贴板
+    `sha256[:16]=565339bc4d33d728` 前后一致
+  - DeepSeek `--profile council`（think）**仍不可自动切换**（已实测记录，非未做完）：网页版
+    「深度思考」是输入框下方 chip，只暴露 `TextControl` + `LegacyIAccessible`，无
+    Invoke/Toggle 模式、开关状态不可读；`models --live` 如实返回 `selector_not_found`
+    （修复前会误点无名的 16x17 按钮），说明写入 `config/endpoints.json` 的 `models_note`。
+    需要 thinking 时人工点开该开关，`ask` 侧不再声称切档成功
+  - 单测：新增 `tests/test_m4_4_focus_option_a.py`（24 条），全量 319 条 `rc=0`
+  - 副发现（未修，下轮）：DeepSeek 开启深度思考时推理正文会混进 `uia_delta` 结果
+    （「已思考（用时 N 秒）」头先被 base 噪声正则删掉，`strip_thinking_sections` 失去边界）
 
 ## 5. 维护约定
 
@@ -129,3 +161,5 @@ Bridge 是运行在 **Windows 副屏（x 轴 `-1440..0`，竖屏 1440×2560）**
 2. 新增工作项必须写进本文件再动手，禁止只写在 `runs/` 的临时 todo 里。
 3. 子说明用普通 `- ` 列表（**不要**写成 `- [ ]`），否则会被计为未完成主线项。
 4. 全部主项收口后，在本文件末尾另起一行写 `ALL_DONE`，调度器会立即优雅退出。
+
+ALL_DONE

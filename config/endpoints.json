@@ -394,7 +394,8 @@
         "fast",
         "auto",
         "expert",
-        "build"
+        "build",
+        "heavy"
       ],
       "model_aliases": {
         "free": [
@@ -425,6 +426,11 @@
           "Build",
           "构建",
           "build"
+        ],
+        "heavy": [
+          "Heavy",
+          "heavy",
+          "重型"
         ]
       },
       "selectors": {
@@ -506,17 +512,24 @@
         },
         "model_option": {
           "roles": [
-            "RadioButtonControl",
+            "CheckBoxControl",
             "MenuItemControl",
-            "ListItemControl"
+            "RadioButtonControl"
           ],
-          "name_contains": []
+          "name_contains": [],
+          "anchor_box_ratio": [
+            0.5,
+            0.6,
+            0.95,
+            0.98
+          ]
         }
       },
       "templates": {
         "send_button": "grok_send_on",
         "new_chat": "grok_newchat"
-      }
+      },
+      "models_note": "实测（2026-11-21 14:2x）下拉由 MenuControl 承载、选项为 CheckBoxControl：Auto / Fast / Expert / Build / Heavy；model_option 已按实测改为 CheckBoxControl + 锚定区域。Heavy 为新增档位、强弱未知，未纳入 model_policy，council 仍取最强已验证档 expert。"
     },
     "deepseek": {
       "kind": "web",
@@ -672,7 +685,8 @@
         "send_button": "ds_send_on",
         "new_chat": "ds_newchat"
       },
-      "attach_dialog_timeout": 12.0
+      "attach_dialog_timeout": 12.0,
+      "models_note": "网页版「深度思考」是输入框下方的开关 chip（AX 树只暴露 TextControl/LegacyIAccessible，没有 Invoke/Toggle 模式，也不回读开关状态），不是下拉菜单；因此 --profile council 的 think 档无法由 UI 自动化可靠切换，models --live 会如实返回 selector_not_found。需要 thinking 时请人工点开该开关。"
     },
     "codex": {
       "kind": "desktop",

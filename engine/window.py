@@ -5,8 +5,9 @@ import os
 import subprocess
 import threading
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any, Callable, Iterable
 
 #: Primary screen starts at x=0 and grows right; the automation screen is the
 #: one left of it (negative x). Never hardcode a positive origin for window
@@ -211,6 +212,199 @@ def is_on_primary_screen(rect: tuple[int, int, int, int] | None) -> bool:
     return ((left + right) / 2.0) >= PRIMARY_SCREEN_X
 
 
+def process_image_name(pid: int) -> str:
+    """Basename of the executable behind *pid* (``chrome.exe``), or ``""``."""
+    target = int(pid or 0)
+    if os.name != "nt" or target <= 0:
+        return ""
+    try:
+        import ctypes
+
+        kernel32 = ctypes.windll.kernel32
+        hproc = kernel32.OpenProcess(0x1000, False, target)  # QUERY_LIMITED_INFORMATION
+        if not hproc:
+            return ""
+        try:
+            buf = ctypes.create_unicode_buffer(260)
+            size = ctypes.c_ulong(260)
+            if kernel32.QueryFullProcessImageNameW(hproc, 0, buf, ctypes.byref(size)):
+                return os.path.basename(buf.value)
+            return ""
+        finally:
+            kernel32.CloseHandle(hproc)
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+#: A foreground switch is asynchronous: ``SetForegroundWindow`` returns before
+#: the desktop finishes the hand-over, so an immediate re-probe reports the old
+#: window and turns a good restore into a false ``focus_taken`` (measured
+#: 2026-11-21 14:3x while restoring 斗鱼客户端).
+FOREGROUND_POLL_TRIES = 6
+FOREGROUND_POLL_SECONDS = 0.04
+
+
+def _wait_foreground(hwnd: int, *, tries: int = FOREGROUND_POLL_TRIES,
+                     delay: float = FOREGROUND_POLL_SECONDS) -> bool:
+    """True once *hwnd* really owns the foreground (polled, never assumed)."""
+    target = int(hwnd or 0)
+    for _ in range(max(1, int(tries))):
+        try:
+            if foreground_hwnd() == target:
+                return True
+        except Exception:  # noqa: BLE001
+            return False
+        time.sleep(delay)
+    return False
+
+
+def _force_foreground(hwnd: int) -> bool:
+    """``SetForegroundWindow`` with the AttachThreadInput unlock.
+
+    Windows refuses a foreground transfer from a process that is not already
+    foreground; attaching to the current foreground thread is the documented
+    workaround and does not leave the two threads attached.
+    """
+    if os.name != "nt":
+        return False
+    try:
+        import ctypes
+
+        user32 = ctypes.windll.user32
+        kernel32 = ctypes.windll.kernel32
+        target = int(hwnd)
+        fg = int(user32.GetForegroundWindow() or 0)
+        if not fg or fg == target:
+            return bool(user32.SetForegroundWindow(target))
+        fg_tid = int(user32.GetWindowThreadProcessId(fg, None) or 0)
+        my_tid = int(kernel32.GetCurrentThreadId() or 0)
+        if not fg_tid or fg_tid == my_tid:
+            return bool(user32.SetForegroundWindow(target))
+        attached = bool(user32.AttachThreadInput(my_tid, fg_tid, True))
+        try:
+            user32.BringWindowToTop(target)
+            return bool(user32.SetForegroundWindow(target))
+        finally:
+            if attached:
+                user32.AttachThreadInput(my_tid, fg_tid, False)
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def restore_focus(hwnd: int) -> bool:
+    """Hand the foreground back to *hwnd*; True only when it really is foreground.
+
+    Focus option A (M4-4): automation may *borrow* the foreground for one click,
+    but the operator's primary-screen window has to get it back. The handle is
+    validated first so a stale/forged handle can never make this function touch
+    an unrelated window, and the result is re-probed instead of trusting
+    ``SetForegroundWindow``'s return value (it reports success for windows that
+    never actually took focus).
+    """
+    target = int(hwnd or 0)
+    if os.name != "nt" or target <= 0:
+        return False
+    try:
+        if foreground_hwnd() == target:
+            return True
+    except Exception:  # noqa: BLE001 - a probe must never raise
+        return False
+    if not _is_window(target):
+        return False
+    _set_foreground(target)
+    if _wait_foreground(target):
+        return True
+    # Denied outright (foreground lock): retry through the attach-thread path.
+    _force_foreground(target)
+    return _wait_foreground(target)
+
+
+def _is_window(hwnd: int) -> bool:
+    """True when *hwnd* still names a live window."""
+    if os.name != "nt":
+        return False
+    try:
+        import ctypes
+
+        return bool(ctypes.windll.user32.IsWindow(int(hwnd)))
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _set_foreground(hwnd: int) -> bool:
+    """Raw ``SetForegroundWindow``; isolated so tests can patch it."""
+    if os.name != "nt":
+        return False
+    try:
+        import ctypes
+
+        return bool(ctypes.windll.user32.SetForegroundWindow(int(hwnd)))
+    except Exception:  # noqa: BLE001
+        return False
+
+
+@contextmanager
+def preserved_focus(
+    *,
+    allow_restore: bool = True,
+    fg_fn: Callable[[], int] | None = None,
+    rect_fn: Callable[[int], tuple[int, int, int, int] | None] | None = None,
+    restore_fn: Callable[[int], bool] | None = None,
+) -> Iterable[dict[str, Any]]:
+    """Focus "plan A": borrow the foreground inside the block, hand it back in ``finally``.
+
+    Symmetric to :func:`engine.uia.preserved_clipboard`. Only a *primary-screen*
+    window is worth restoring: automation legitimately works on the negative-x
+    screen, so a block that started there must not be "restored" anywhere.
+    ``restored`` / ``restore_failed`` record what actually happened; a failed
+    restore is reported, never silently swallowed.
+    """
+    fg = fg_fn or foreground_hwnd
+    rect_of = rect_fn or window_rect
+    put_back = restore_fn or restore_focus
+    state: dict[str, Any] = {
+        "before": 0,
+        "before_on_primary": False,
+        "after": 0,
+        "restored": False,
+        "restore_failed": False,
+    }
+    try:
+        state["before"] = int(fg() or 0)
+    except Exception:  # noqa: BLE001
+        state["before"] = 0
+    if state["before"]:
+        try:
+            state["before_on_primary"] = is_on_primary_screen(rect_of(state["before"]))
+        except Exception:  # noqa: BLE001
+            state["before_on_primary"] = False
+    try:
+        yield state
+    finally:
+        try:
+            state["after"] = int(fg() or 0)
+        except Exception:  # noqa: BLE001
+            state["after"] = 0
+        if (
+            allow_restore
+            and state["before"]
+            and state["before_on_primary"]
+            and state["after"] != state["before"]
+        ):
+            restored = False
+            try:
+                restored = bool(put_back(state["before"]))
+            except Exception:  # noqa: BLE001 - a restore must never mask the block
+                restored = False
+            if restored:
+                try:
+                    restored = int(fg() or 0) == state["before"]
+                except Exception:  # noqa: BLE001
+                    restored = False
+            state["restored"] = restored
+            state["restore_failed"] = not restored
+
+
 #: ``focus_guard_strict`` is ON unless a config explicitly turns it off
 #: (M4-4). A silent focus theft used to be recorded and then ignored, which is
 #: how ``--headed`` dragged the operator's 斗鱼 client off the primary screen on
@@ -228,28 +422,41 @@ class FocusGuard:
     into a hard :class:`FocusTakenError`; otherwise the event is recorded and
     the caller carries on.
 
+    Focus option A (M4-4, ``restore_on_exit=True`` by default): a Chrome click
+    may need the window in the foreground, so leaving the context restores the
+    operator's window *first* and only reports a takeover when that restore did
+    not stick. A successful restore records ``focus_guard:restored:0x..`` and
+    never raises.
+
     Driving ``strict`` from :data:`FOCUS_GUARD_STRICT_DEFAULT` is the driver's
     job (``EndpointDriver.focus_guard_strict``): the class default stays False so
     direct users of the guard are unaffected, while every endpoint now runs
     strict unless its config says otherwise.
 
-    ``fg_fn`` / ``rect_fn`` are injectable for offline tests.
+    ``fg_fn`` / ``rect_fn`` / ``restore_fn`` are injectable for offline tests.
     """
 
     def __init__(
         self,
         *,
         strict: bool = False,
+        restore_on_exit: bool = True,
         fg_fn: Callable[[], int] | None = None,
         rect_fn: Callable[[int], tuple[int, int, int, int] | None] | None = None,
+        restore_fn: Callable[[int], bool] | None = None,
     ):
         self.strict = bool(strict)
+        #: Focus option A: hand the primary screen back before judging theft.
+        self.restore_on_exit = bool(restore_on_exit)
         self._fg = fg_fn or foreground_hwnd
         self._rect = rect_fn or window_rect
+        self._restore = restore_fn or restore_focus
         self.before = 0
         self.after = 0
         self.before_on_primary = False
         self.taken = False
+        self.restored = False
+        self.restore_failed = False
         self.diagnostics: list[str] = []
 
     def __enter__(self) -> "FocusGuard":
@@ -274,17 +481,30 @@ class FocusGuard:
             and self.before_on_primary
             and self.after
             and self.after != self.before
-            and not is_on_primary_screen(self._rect(self.after))
         ):
-            self.taken = True
-            self.diagnostics.append(
-                "focus_guard:primary_lost:0x%x->0x%x" % (self.before, self.after)
-            )
-            if self.strict:
-                raise FocusTakenError(
-                    "primary-screen focus was taken by automation "
-                    "(0x%x -> 0x%x)" % (self.before, self.after)
+            if self.restore_on_exit and self._restore(self.before):
+                try:
+                    put_back = int(self._fg() or 0) == self.before
+                except Exception:
+                    put_back = False
+                if put_back:
+                    self.restored = True
+                    self.after = self.before
+                    self.diagnostics.append(
+                        "focus_guard:restored:0x%x" % self.before
+                    )
+                    return False
+            self.restore_failed = bool(self.restore_on_exit)
+            if not is_on_primary_screen(self._rect(self.after)):
+                self.taken = True
+                self.diagnostics.append(
+                    "focus_guard:primary_lost:0x%x->0x%x" % (self.before, self.after)
                 )
+                if self.strict:
+                    raise FocusTakenError(
+                        "primary-screen focus was taken by automation "
+                        "(0x%x -> 0x%x)" % (self.before, self.after)
+                    )
         return False
 
     def warnings(self) -> list[str]:
@@ -333,6 +553,23 @@ def _set_window_pos(hwnd: int, x: int, y: int, width: int, height: int, flags: i
         )
     except Exception:
         return False
+
+
+def raise_window(hwnd: int) -> bool:
+    """Lift *hwnd* to the top of the Z-order **without** activating it.
+
+    Windows refuses ``SetForegroundWindow`` for a background process more often
+    than it accepts it (measured 2026-11-21: overlapping Gemini/Grok windows on
+    the automation screen made a physical click land on the wrong one). When the
+    foreground transfer is denied, raising the window is the minimum needed for
+    the click to hit the intended target, and ``SWP_NOACTIVATE`` keeps the
+    operator's foreground untouched.
+    """
+    if os.name != "nt" or int(hwnd or 0) <= 0:
+        return False
+    return _set_window_pos(
+        int(hwnd), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE
+    )
 
 
 def tile_windows_on_secondary_screen(

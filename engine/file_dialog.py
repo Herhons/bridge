@@ -139,11 +139,38 @@ def fill_windows_file_dialog(
     ``ctypes_module`` only exists so ``engine/base.py`` can keep marshalling
     through its own ``ctypes`` binding (offline tests monkeypatch it).
     """
-    marshaller = ctypes_module or ctypes
     u32 = user32 or _win32_user32()
     dialog_hwnd = find_file_dialog_window(
         owner_pid, timeout=timeout, poll=poll, user32=u32
     )
+    return fill_file_dialog(
+        dialog_hwnd,
+        paths,
+        timeout=timeout,
+        poll=poll,
+        user32=u32,
+        ctypes_module=ctypes_module,
+    )
+
+
+def fill_file_dialog(
+    dialog_hwnd: int,
+    paths: list[str],
+    *,
+    timeout: float = 10.0,
+    poll: float = 0.15,
+    user32=None,
+    ctypes_module=None,
+) -> str:
+    """Fill *dialog_hwnd* (already located) and press Open.
+
+    Split out because the dialog is not always owned by the window that raised
+    it: measured 2026-11-21, Gemini's picker is a #32770 owned by a *different*
+    ``chrome.exe`` process, so the caller has to locate it by appearance and
+    then hand the handle over.
+    """
+    marshaller = ctypes_module or ctypes
+    u32 = user32 or _win32_user32()
     absolute = [os.path.abspath(os.path.expanduser(str(p))) for p in paths]
     filename_text = " ".join('"%s"' % p for p in absolute)
 
@@ -167,6 +194,36 @@ def fill_windows_file_dialog(
     return "#32770:file_dialog"
 
 
+def _is_visible(user32, hwnd: int) -> bool:
+    """Visibility check that tolerates a fake user32 without the call."""
+    fn = getattr(user32, "IsWindowVisible", None)
+    if fn is None:
+        return True
+    try:
+        return bool(fn(hwnd))
+    except Exception:  # noqa: BLE001
+        return True
+
+
+def list_file_dialogs(*, user32=None, visible_only: bool = True) -> list[tuple[int, int]]:
+    """``(hwnd, pid)`` for every top-level #32770, visible ones by default.
+
+    A machine can carry a pile of *hidden* #32770 windows (an installed 网银
+    USBKey tool keeps six around, measured 2026-11-21), so "a dialog that did not
+    exist before" must never be computed over the invisible ones.
+    """
+    u32 = user32 or _win32_user32()
+    out: list[tuple[int, int]] = []
+    hwnd = 0
+    while True:
+        hwnd = u32.FindWindowExW(None, hwnd, FILE_DIALOG_CLASS, None)
+        if not hwnd:
+            return out
+        if visible_only and not _is_visible(u32, hwnd):
+            continue
+        out.append((int(hwnd), _window_pid(u32, hwnd)))
+
+
 # Re-exported for callers that inject a custom marshaller (see engine/base.py).
 __all__ = [
     "FILE_DIALOG_CLASS",
@@ -179,5 +236,7 @@ __all__ = [
     "_dialog_edit_hwnd",
     "find_existing_file_dialog",
     "find_file_dialog_window",
+    "list_file_dialogs",
+    "fill_file_dialog",
     "fill_windows_file_dialog",
 ]
