@@ -274,15 +274,45 @@ class EndpointDriver:
         except Exception:
             return None
 
+    def _find_target_window(self) -> WindowInfo | None:
+        """Process + title + WNDCLASS lookup, with a title-agnostic retry.
+
+        Electron apps rename their window after the active document: Antigravity
+        turns "Antigravity" into the conversation title as soon as a chat starts
+        (measured 2026-11-21), which used to make status()/ask() lose a window
+        that was plainly on screen. The retry drops only the title filter and
+        only for endpoints that pin a ``window_class`` -- process name alone is
+        not selective enough for shared ``chrome.exe`` web endpoints.
+        """
+        window_class = self.cfg.get("window_class")
+        title_contains = self.cfg.get("title_contains")
+        win = find_window(
+            process_names=self.cfg.get("process_names"),
+            title_contains=title_contains,
+            exclude_processes=self.cfg.get("exclude_processes"),
+            window_class=window_class,
+        )
+        if win is None and title_contains and window_class:
+            win = find_window(
+                process_names=self.cfg.get("process_names"),
+                title_contains=None,
+                exclude_processes=self.cfg.get("exclude_processes"),
+                window_class=window_class,
+            )
+            if win is not None:
+                safe_print(
+                    "[%s] window title no longer matches %r; matched by "
+                    "process+window_class instead"
+                    % (self.name, title_contains),
+                    stream=sys.stderr,
+                    flush=True,
+                )
+        return win
+
     def locate_window(self, *, auto_open: bool = False) -> WindowInfo | None:
         if self._window_fn is not None:
             return self._window_fn()
-        win = find_window(
-            process_names=self.cfg.get("process_names"),
-            title_contains=self.cfg.get("title_contains"),
-            exclude_processes=self.cfg.get("exclude_processes"),
-            window_class=self.cfg.get("window_class"),
-        )
+        win = self._find_target_window()
         if win is None and auto_open:
             launched = False
             if self.cfg.get("kind") == "web" and self.cfg.get("url"):
@@ -291,12 +321,7 @@ class EndpointDriver:
                 launched = launch_app_id(str(self.cfg["launch_app_id"]))
             if launched:
                 self._sleep(2.5)
-                win = find_window(
-                    process_names=self.cfg.get("process_names"),
-                    title_contains=self.cfg.get("title_contains"),
-                    exclude_processes=self.cfg.get("exclude_processes"),
-                    window_class=self.cfg.get("window_class"),
-                )
+                win = self._find_target_window()
         return win
 
     def take_snap(self, hwnd: int) -> Snapshot:

@@ -375,6 +375,41 @@ def _read_value(control: Any) -> str:
     return ""
 
 
+def _is_placeholder_doc_url(url: str) -> bool:
+    """True for shell/background documents that never hold the app UI.
+
+    Electron apps (Antigravity, Codex, DSH) expose several ``DocumentControl``
+    nodes: a ``data:text/html`` window background plus the real page. Picking the
+    background yields an empty tree, so those URLs are demoted.
+    """
+    text = (url or "").strip().lower()
+    if not text:
+        return True
+    return text.startswith(
+        ("data:", "about:blank", "chrome-error:", "devtools:", "edge:")
+    )
+
+
+def _pick_document_index(urls: list[str], url_host: str | None = None) -> int:
+    """Index of the document to snapshot, or ``-1`` when there is none.
+
+    Order: explicit ``url_host`` match, then the first real (non-placeholder)
+    page, then the legacy "first document" choice when every URL is a
+    placeholder.
+    """
+    if not urls:
+        return -1
+    host = (url_host or "").strip().lower()
+    if host:
+        for index, url in enumerate(urls):
+            if host in (url or "").lower():
+                return index
+    for index, url in enumerate(urls):
+        if not _is_placeholder_doc_url(url):
+            return index
+    return 0
+
+
 def _find_inner_document(root_ctrl: Any, *, url_host: str | None = None) -> tuple[Any, str, str]:
     """Locate the inner web/Electron ``DocumentControl``. Returns ``(ctrl, url, error_reason)``."""
     try:
@@ -389,18 +424,18 @@ def _find_inner_document(root_ctrl: Any, *, url_host: str | None = None) -> tupl
         if not found or found.Length == 0:
             return root_ctrl, "", "no_document_control"
 
-        best_ctrl = None
-        best_url = ""
+        ctrls: list[Any] = []
+        urls: list[str] = []
         for i in range(found.Length):
             el = found.GetElement(i)
             doc_ctrl = auto.DocumentControl(element=el)
-            url = _read_value(doc_ctrl)
-            if url_host and url_host.lower() in url.lower():
-                return doc_ctrl, url, ""
-            if best_ctrl is None or (url and not best_url):
-                best_ctrl = doc_ctrl
-                best_url = url
-        return (best_ctrl or root_ctrl), best_url, ""
+            ctrls.append(doc_ctrl)
+            urls.append(_read_value(doc_ctrl))
+
+        index = _pick_document_index(urls, url_host)
+        if index < 0:
+            return root_ctrl, "", ""
+        return ctrls[index], urls[index], ""
     except Exception as exc:
         return root_ctrl, "", f"inner_doc_error:{type(exc).__name__}:{exc}"
 
