@@ -211,6 +211,13 @@ def is_on_primary_screen(rect: tuple[int, int, int, int] | None) -> bool:
     return ((left + right) / 2.0) >= PRIMARY_SCREEN_X
 
 
+#: ``focus_guard_strict`` is ON unless a config explicitly turns it off
+#: (M4-4). A silent focus theft used to be recorded and then ignored, which is
+#: how ``--headed`` dragged the operator's 斗鱼 client off the primary screen on
+#: 2026-11-21 13:20; strict-by-default makes that a hard ``focus_taken``.
+FOCUS_GUARD_STRICT_DEFAULT = True
+
+
 class FocusGuard:
     """Snapshots the foreground window around an action and flags theft.
 
@@ -219,7 +226,12 @@ class FocusGuard:
     complains when the *before* window belonged to the primary side and the
     *after* window belongs somewhere else. ``strict=True`` turns the diagnostic
     into a hard :class:`FocusTakenError`; otherwise the event is recorded and
-    the caller carries on (default, so a legit window switch is not fatal).
+    the caller carries on.
+
+    Driving ``strict`` from :data:`FOCUS_GUARD_STRICT_DEFAULT` is the driver's
+    job (``EndpointDriver.focus_guard_strict``): the class default stays False so
+    direct users of the guard are unaffected, while every endpoint now runs
+    strict unless its config says otherwise.
 
     ``fg_fn`` / ``rect_fn`` are injectable for offline tests.
     """

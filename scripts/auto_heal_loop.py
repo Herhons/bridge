@@ -73,6 +73,43 @@ TASK_RE = re.compile(
 PATCH_RE = re.compile(
     r"<<<BRIDGE_PATCH_START>>>(.*?)<<<BRIDGE_PATCH_END>>>", re.S
 )
+#: Bodies that are prompt-example echoes, never real answers. A brain that
+#: repeats the instruction template used to win the first-match race and get
+#: dispatched verbatim ("...任务卡内容..." was literally sent as a task card on
+#: round 1 of 2026-11-21 13:36), so both extractors now skip these.
+PLACEHOLDER_MARKERS: tuple[str, ...] = ("任务卡内容", "unified diff")
+
+
+def _is_placeholder_block(text: str) -> bool:
+    """True for empty / prompt-example bodies that must never be acted on."""
+    body = (text or "").strip()
+    if not body:
+        return True
+    if any(marker in body for marker in PLACEHOLDER_MARKERS):
+        return True
+    stripped = body.strip("`").strip()
+    return bool(
+        len(stripped) < 40
+        and stripped.startswith("...")
+        and stripped.endswith("...")
+    )
+
+
+def _last_valid_block(pattern: re.Pattern[str], reply: str) -> str:
+    """Return the last matching block whose body is not a placeholder.
+
+    Brains echo the prompt template *before* their real answer, so first-match
+    is the worst possible choice; taking the last valid block prefers the real
+    answer and falls back to ``""`` when every block was an example.
+    """
+    best = ""
+    for match in pattern.finditer(reply or ""):
+        body = match.group(1)
+        if _is_placeholder_block(body):
+            continue
+        best = body
+    return best
+
 STATE_FILE = "state_machine.json"
 HANDOFF_FILE = "brain_handoff.md"
 PATCH_FILE = "brain_patch.diff"
@@ -861,15 +898,25 @@ def build_handoff_bundle(
 
 # ---------------------------------------------------------------- bridge calls
 def extract_task_card(reply: str) -> str:
-    match = TASK_RE.search(reply or "")
-    return match.group(1).strip() if match else ""
+    """Return the last real ``<<<WORKBUDDY_TASK_*>>>`` block (placeholder-safe)."""
+    return _last_valid_block(TASK_RE, reply).strip()
 
 
+MARKER_SYNTAX_HINT = (
+    "标记写法固定为「三个小于号 + 名字 + 三个大于号」（例如名字 `BRIDGE_PATCH_START`），"
+    "尖括号与名字之间不留空格、每个标记独占一行；标记之外不要输出任何文字。"
+    "不要照抄本说明里的示例文字，直接写真实内容。\n"
+)
+
+#: Deliberately spelled without any contiguous marker token: the prompt itself
+#: must never be matchable by ``TASK_RE`` / ``PATCH_RE``, otherwise a brain that
+#: echoes the instructions wins the extraction race with an empty example block.
 PATCH_HINT = (
-    "优先直接给出可 `git apply` 的统一 diff，写在 "
-    "<<<BRIDGE_PATCH_START>>> 与 <<<BRIDGE_PATCH_END>>> 之间"
+    "优先直接给出可 `git apply` 的统一 diff，用 `BRIDGE_PATCH_START` / "
+    "`BRIDGE_PATCH_END` 两个标记夹住它"
     "（diff --git 格式，路径相对仓库根，不要加代码围栏、不要解释）；"
-    "如果你更愿意让本地执行器自己动手，就把要求写成任务卡。\n"
+    "如果你更愿意让本地执行器自己动手，就把要求写成任务卡"
+    "（`WORKBUDDY_TASK_START` / `WORKBUDDY_TASK_END`）。\n"
 )
 
 
@@ -878,17 +925,11 @@ def build_gemini_prompt(attempt: int, report: Path) -> str:
         "【Bridge 无人值守自愈 round=%d】\n"
         "附件是完整的 runs/crash_report.md，包含失败堆栈、git diff 与失败用例源码。\n"
         "请分析根因并给出可直接落地的修复：\n"
-        "%s"
+        "%s%s"
         "- 每个标记块只能出现一次，标记外不要输出任何文字；\n"
         "- 严禁删除、跳过或弱化任何既有断言；\n"
         "- 改完必须让 py -3.10 -m unittest discover -s tests -v 全绿（rc=0）。\n\n"
-        "<<<BRIDGE_PATCH_START>>>\n"
-        "...unified diff...\n"
-        "<<<BRIDGE_PATCH_END>>>\n\n"
-        "<<<WORKBUDDY_TASK_START>>>\n"
-        "...任务卡内容...\n"
-        "<<<WORKBUDDY_TASK_END>>>\n\n"
-        "报告路径：%s\n" % (attempt, PATCH_HINT, report)
+        "报告路径：%s\n" % (attempt, PATCH_HINT, MARKER_SYNTAX_HINT, report)
     )
 
 
@@ -917,18 +958,12 @@ def build_task_prompt(round_no: int, backlog: str, base_commit: str) -> str:
         "%s\n\n"
         "最近 8 条 commit（已完成的不要重复提交）：\n%s\n\n"
         "请给出下一项小步、可独立测试、可由全量 unittest 验证的改进任务。\n"
-        "%s"
-        "只输出上述标记块，不要寒暄或解释。\n"
+        "%s%s"
+        "只输出一个标记块（补丁或任务卡），不要寒暄或解释。\n"
         "任务卡/补丁要写明：改动文件、具体修复点、禁止删除或弱化既有断言、"
         "以及最后必须运行全量单测；任务完成后请把 runs/overnight_todo.md "
-        "里对应条目标为 [已完成]。\n\n"
-        "<<<BRIDGE_PATCH_START>>>\n"
-        "...unified diff...\n"
-        "<<<BRIDGE_PATCH_END>>>\n\n"
-        "<<<WORKBUDDY_TASK_START>>>\n"
-        "...任务卡内容...\n"
-        "<<<WORKBUDDY_TASK_END>>>\n"
-        % (round_no, base_commit, backlog[:6000], recent, PATCH_HINT)
+        "里对应条目标为 [已完成]。\n"
+        % (round_no, base_commit, backlog[:6000], recent, PATCH_HINT, MARKER_SYNTAX_HINT)
     )
 
 
@@ -975,9 +1010,14 @@ def inline_attach_text(path: str | Path) -> str:
 
 
 def reply_has_contract(reply: str) -> bool:
-    """A usable brain reply carries either a patch block or a task card."""
+    """A usable brain reply carries a *real* patch block or task card.
+
+    Placeholder-only replies (a pure echo of the prompt template) no longer
+    satisfy the contract, so the brain chain falls through to the next endpoint
+    instead of dispatching an empty card downstream.
+    """
     body = reply or ""
-    return bool(PATCH_RE.search(body) or TASK_RE.search(body))
+    return bool(extract_patch(body) or extract_task_card(body))
 
 
 def _ask_brain_endpoint(
@@ -1332,11 +1372,14 @@ def call_executor(
 
 # ---------------------------------------------------------------- patches
 def extract_patch(reply: str) -> str:
-    """Return the unified diff inside the patch markers, fence-stripped."""
-    match = PATCH_RE.search(reply or "")
-    if not match:
+    """Return the last real unified diff inside the patch markers.
+
+    Placeholder blocks (``...unified diff...`` and friends) are skipped so an
+    echoed template can never reach ``git apply`` as an empty patch.
+    """
+    body = _last_valid_block(PATCH_RE, reply).strip("\n")
+    if not body:
         return ""
-    body = match.group(1).strip("\n")
     lines = body.splitlines()
     if lines and lines[0].strip().startswith("```"):
         lines = lines[1:]

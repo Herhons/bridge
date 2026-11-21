@@ -94,7 +94,13 @@ class TestV025Attach(unittest.TestCase):
 
     def test_missing_menu_item_sends_esc_and_returns_missing_resource(self):
         win = WindowInfo(hwnd=101, pid=1, process_name="Grok Bot.exe", title="Grok Bot")
-        s1 = _snap([UINode(role="ButtonControl", name="输入框操作", rect=(100, 720, 40, 30))], "s1")
+        # M4-4 gates --attach behind a composer/attach-button visibility check,
+        # so the fixture now carries a composer: the case under test is the
+        # missing menu item, not a half-loaded page.
+        s1 = _snap([
+            UINode(role="ButtonControl", name="输入框操作", rect=(100, 720, 40, 30)),
+            UINode(role="EditControl", name="输入你的问题", rect=(100, 700, 400, 40)),
+        ], "s1")
         s_empty = _snap([], "s2")
         snaps = [s1, s_empty]
         idx = {"i": 0}

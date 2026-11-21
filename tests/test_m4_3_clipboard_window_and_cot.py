@@ -259,7 +259,8 @@ class FocusGuardTests(unittest.TestCase):
 
         self.assertEqual(warnings, ["focus_guard:primary_lost:0x1111->0x2222"])
         self.assertEqual(drv.last_focus_event, "focus_guard:primary_lost:0x1111->0x2222")
-        self.assertFalse(drv.focus_guard_strict())
+        # M4-4 flipped the default: strict unless a config explicitly relaxes it.
+        self.assertTrue(drv.focus_guard_strict())
 
     def test_strict_config_blocks_the_ask_before_submit(self):
         """focus_guard_strict=True must refuse to send after stealing focus."""
@@ -270,7 +271,11 @@ class FocusGuardTests(unittest.TestCase):
         cfg = dict(get_endpoint_config("gemini"))
         cfg["focus_guard_strict"] = True
         rects = {0x1111: self._PRIMARY, 0x2222: self._SECONDARY_A}
-        seq = [0x1111, 0x2222]
+        # M4-4 added a pre-activation probe: when the primary screen already
+        # owns the foreground the driver skips activation entirely. The leading
+        # 0 means "primary free", so activation is still attempted here and the
+        # guard still has to catch the takeover.
+        seq = [0, 0x1111, 0x2222]
         with tempfile.TemporaryDirectory() as tmp:
             drv = EndpointDriver(
                 "gemini",

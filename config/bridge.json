@@ -7,5 +7,6 @@
   "stable_seconds": 2.5,
   "lock_timeout": 120.0,
   "chrome_path": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+  "focus_guard_strict": true,
   "headless_default": true
 }

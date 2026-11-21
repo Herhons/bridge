@@ -70,7 +70,9 @@ from engine.uia import (
     upload_via_file_dialog,
 )
 from engine.vision import capture_window, match_template
+from engine import window as window_mod  # mockable probe surface for focus checks
 from engine.window import (
+    FOCUS_GUARD_STRICT_DEFAULT,
     FocusGuard,
     WindowInfo,
     find_window,
@@ -526,8 +528,37 @@ class EndpointDriver:
 
     # ------------------------------------------------------- focus / write guard
     def focus_guard_strict(self) -> bool:
-        """Whether losing primary-screen focus must abort instead of just warn."""
-        return bool(self.cfg.get("focus_guard_strict", False))
+        """Whether losing primary-screen focus must abort instead of just warn.
+
+        ON by default since M4-4: a silent takeover (``--headed`` dragging the
+        operator's 斗鱼 client off the primary screen) is worse than a failed
+        send. Only an explicit ``false`` in the endpoint config or in
+        ``config/bridge.json`` relaxes it back to warn-only.
+        """
+        if "focus_guard_strict" in self.cfg:
+            return bool(self.cfg.get("focus_guard_strict"))
+        return bool(
+            self.bridge_cfg.get("focus_guard_strict", FOCUS_GUARD_STRICT_DEFAULT)
+        )
+
+    def _primary_foreground_hwnd(self) -> int:
+        """Foreground handle when it belongs to the primary screen, else ``0``.
+
+        Used to decide whether activating our secondary-screen window would
+        steal focus from the operator. Probes go through :mod:`engine.window`
+        so tests can patch them exactly like :class:`FocusGuard` does.
+        """
+        try:
+            hwnd = int(window_mod.foreground_hwnd() or 0)
+        except Exception:  # noqa: BLE001 - a probe must never break a send
+            return 0
+        if not hwnd:
+            return 0
+        try:
+            rect = window_mod.window_rect(hwnd)
+        except Exception:  # noqa: BLE001
+            return 0
+        return hwnd if window_mod.is_on_primary_screen(rect) else 0
 
     def _focus_taken_payload(self, clean_prompt: str, warnings, where: str) -> dict[str, Any]:
         """Structured block for a strict-mode focus takeover (nothing submitted)."""
@@ -772,6 +803,63 @@ class EndpointDriver:
             snap = self.take_snap(win.hwnd)
         return methods
 
+    def _ensure_composer_ready(
+        self,
+        win: WindowInfo,
+        snap: Snapshot,
+        *,
+        warnings: list[str],
+        attempts: int = 3,
+        delay: float = 0.25,
+    ) -> tuple[Snapshot, dict[str, Any] | None]:
+        """Guarantee composer + attach_button are visible before ``--attach``.
+
+        A chat that is still loading renders its composer a moment late, and the
+        old ``--attach`` path clicked the attach button against a snapshot with
+        no composer at all — the state that produced the empty ``#32770`` and the
+        "message box never appears" dead end. Scroll to the bottom and
+        re-snapshot a few times; if it is still missing, fail with a structured
+        payload instead of driving the native dialog blind.
+        """
+        selectors = self.cfg.get("selectors") or {}
+        needs_attach = bool(selectors.get("attach_button"))
+        rounds = max(1, int(attempts))
+        missing = ""
+        for index in range(rounds):
+            composer = self._find_composer(snap)
+            attach_btn = (
+                self._find_attach_control(snap, "attach_button")
+                if needs_attach
+                else None
+            )
+            if composer is not None and (not needs_attach or attach_btn is not None):
+                if index:
+                    warnings.append("composer_ready_after_retry:%d" % index)
+                return snap, None
+            missing = "composer" if composer is None else "attach_button"
+            if index + 1 >= rounds:
+                break
+            self._scroll_bottom(snap)
+            self._sleep(delay)
+            snap = self.take_snap(win.hwnd)
+
+        evidence = self._record_failure_evidence(
+            "composer_not_ready", snap, {"missing": missing, "attempts": rounds}
+        )
+        return snap, {
+            "ok": False,
+            "endpoint": self.name,
+            "error": "composer_not_ready",
+            "message": (
+                "%s never rendered %s after %d scroll/re-snapshot attempt(s); "
+                "refusing to drive the file dialog blind" % (self.name, missing, rounds)
+            ),
+            "missing": missing,
+            "attempts": rounds,
+            "evidence": evidence,
+            "reply": "",
+        }
+
     def attach_files(
         self,
         win: WindowInfo,
@@ -779,6 +867,7 @@ class EndpointDriver:
         paths: list[str],
         *,
         headed: bool,
+        warnings: list[str] | None = None,
     ) -> list[str]:
         """Public attachment hook grouped around one native file dialog.
 
@@ -801,9 +890,16 @@ class EndpointDriver:
         btn = self._find_attach_control(snap, "attach_button")
         if btn is None:
             raise UIAError("TARGET_NOT_FOUND", f"No attach_button found for {self.name}")
-        self._click_or_fallback(
-            btn, win.hwnd, self.cfg.get("templates", {}).get("attach_button"),
+        # A UIA Invoke on a Chrome button can still raise the window (measured
+        # 2026-11-21 on DeepSeek), so the click itself is guarded: a takeover is
+        # recorded and a strict run refuses to submit afterwards.
+        self.guarded_write(
+            self._click_or_fallback,
+            btn,
+            win.hwnd,
+            self.cfg.get("templates", {}).get("attach_button"),
             headed=headed,
+            warnings=warnings,
         )
         self._sleep(0.35)
 
@@ -822,7 +918,14 @@ class EndpointDriver:
             if item is None:
                 self._send_esc()
                 raise UIAError("TARGET_NOT_FOUND", f"No attach_menu_item found for {self.name}")
-            self._click_or_fallback(item, win.hwnd, None, headed=headed)
+            self.guarded_write(
+                self._click_or_fallback,
+                item,
+                win.hwnd,
+                None,
+                headed=headed,
+                warnings=warnings,
+            )
             self._sleep(0.35)
 
         method = fill_windows_file_dialog(
@@ -1014,8 +1117,10 @@ class EndpointDriver:
         if win is None:
             return {**base_out, "ok": False, "error": "window_not_found"}
         try:
-            if headed:
-                focus_window(win.hwnd)
+            if headed and not self._primary_foreground_hwnd():
+                # Same red line as ask(): probing a dropdown must not drag the
+                # operator's primary-screen window onto the secondary screen.
+                self.guarded_write(focus_window, win.hwnd, warnings=[])
                 self._sleep(0.15)
             snap = self.take_snap(win.hwnd)
             sel_node = self._find_model_selector(snap)
@@ -1163,15 +1268,25 @@ class EndpointDriver:
                 }
 
             if use_headed:
-                # Focus activation is itself a key action: snapshot it so a
-                # strict run can refuse to submit after stealing the primary
-                # screen, and a normal run records the event in ``warnings``.
-                self.guarded_write(focus_window, win.hwnd, warnings=warnings)
-                self._sleep(0.2)
-                if self.focus_guard_strict() and self.last_focus_event:
-                    return self._focus_taken_payload(
-                        clean_prompt, warnings, "headed focus"
+                # Never steal the operator's primary-screen foreground. When a
+                # window on x >= 0 owns focus (斗鱼 client, editor, terminal…)
+                # the interaction has to go through non-activating UIA instead
+                # of calling SetForegroundWindow on our secondary-screen window.
+                primary_fg = self._primary_foreground_hwnd()
+                if primary_fg:
+                    warnings.append(
+                        "focus_guard:skipped_activation:0x%x" % primary_fg
                     )
+                else:
+                    # Focus activation is itself a key action: snapshot it so a
+                    # strict run can refuse to submit after stealing the primary
+                    # screen, and a relaxed run records it in ``warnings``.
+                    self.guarded_write(focus_window, win.hwnd, warnings=warnings)
+                    self._sleep(0.2)
+                    if self.focus_guard_strict() and self.last_focus_event:
+                        return self._focus_taken_payload(
+                            clean_prompt, warnings, "headed focus"
+                        )
 
             before_meta = self.pre_send_meta(win)
             before_snap: Snapshot | None = None
@@ -1222,7 +1337,28 @@ class EndpointDriver:
                     )
 
                 if attach_paths:
-                    attach_methods = self.attach_files(win, before_snap, attach_paths, headed=use_headed)
+                    before_snap, not_ready = self._ensure_composer_ready(
+                        win, before_snap, warnings=warnings
+                    )
+                    if not_ready is not None:
+                        self.ledger.mark(
+                            clean_prompt,
+                            self.name,
+                            "failed_retryable",
+                            note="composer_not_ready",
+                        )
+                        return not_ready
+                    attach_methods = self.attach_files(
+                        win, before_snap, attach_paths,
+                        headed=use_headed, warnings=warnings,
+                    )
+                    if self.focus_guard_strict() and self.last_focus_event:
+                        # The upload may be complete, but nothing has been
+                        # submitted yet: abort here rather than type into a
+                        # window we stole from the operator.
+                        return self._focus_taken_payload(
+                            clean_prompt, warnings, "attach click"
+                        )
                     before_snap = self.take_snap(win.hwnd)
 
                 composer = self._find_composer(before_snap)
@@ -1249,7 +1385,11 @@ class EndpointDriver:
                     wrect = before_snap.window_rect
                     if wrect is None:
                         raise UIAError("NO_GEOMETRY", "Window geometry unavailable for ratio fallback")
-                    focus_window(win.hwnd)
+                    # Same rule as the pre-interaction probe: never pull the
+                    # operator's primary-screen window off its screen for a
+                    # ratio click, and let the guard decide on strictness.
+                    if not self._primary_foreground_hwnd():
+                        self.guarded_write(focus_window, win.hwnd, warnings=warnings)
                     self.guarded_write(
                         click_ratio_and_paste,
                         wrect, tuple(fallback_ratio), clean_prompt,
@@ -1267,23 +1407,31 @@ class EndpointDriver:
                         write_method = self._write_fn(composer, clean_prompt, use_headed, chunk_size)
                     else:
                         try:
-                            write_method = set_node_text(
+                            # Guarded so a paste that activates the window is
+                            # detected: strict mode must be able to refuse the
+                            # submit instead of silently stealing focus.
+                            write_method = self.guarded_write(
+                                set_node_text,
                                 composer,
                                 clean_prompt,
                                 headed=use_headed,
                                 chunk_size=chunk_size,
                                 prefer_paste=prefer_paste,
                                 icebreaker=bool(self.cfg.get("icebreaker_before_paste", False)),
+                                warnings=warnings,
                             )
                         except UIAError:
-                            focus_window(win.hwnd)
-                            write_method = set_node_text(
+                            if not self._primary_foreground_hwnd():
+                                self.guarded_write(focus_window, win.hwnd, warnings=warnings)
+                            write_method = self.guarded_write(
+                                set_node_text,
                                 composer,
                                 clean_prompt,
                                 headed=True,
                                 chunk_size=chunk_size,
                                 prefer_paste=True,
                                 icebreaker=bool(self.cfg.get("icebreaker_before_paste", False)),
+                                warnings=warnings,
                             )
                             use_headed = True
 

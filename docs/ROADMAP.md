@@ -94,11 +94,34 @@ Bridge 是运行在 **Windows 副屏（x 轴 `-1440..0`，竖屏 1440×2560）**
     CREATE_NEW_PROCESS_GROUP` 分离启动；关闭控制台不会带走调度器
   - 默认停在副屏左侧（`x < 0`，`480x700-500+40`），`SetWindowPos + SWP_NOACTIVATE`
     落地，不抢主屏焦点、不碰系统剪贴板
+- [x] **M4-bugfix**：任务卡占位符自匹配根治（过夜调度 13:36 把 `...任务卡内容...` 当卡片派发）
+  - `extract_task_card` / `extract_patch` 改为遍历 `finditer()` 取**最后一个非占位块**，
+    `_is_placeholder_block()` 过滤空串 / `...任务卡内容...` / `...unified diff...` / 短省略号示例；
+    全为占位块时返回 `""`
+  - `build_task_prompt` / `build_gemini_prompt` 不再内嵌任何可被 `TASK_RE` / `PATCH_RE` 命中的
+    示例块（标记名改写成文字说明），提示词自身永远不会被抽取
+  - `reply_has_contract` 同步收紧：纯回声不再算合法回执，脑链继续回落到下一个端点
 - [ ] **M4-4（P0）**：Gemini 附件真机闭环 + 焦点严格门禁默认化
   - composer 可见性前置检查（滚到底/等待输入区就绪）后再触发 `--attach`，把 `#32770`
     空框问题一次验穿，证据补进 `runs/m4_3_attach_verify.txt`
   - 真机回归统一开启 `focus_guard_strict: true`，让抢主屏焦点直接失败而非静默发生
   - 真机校准 `deepseek / grok` 的 `--profile council` 最高可用模型（`available_options=[]`）
+  - 本轮已完成（离线，已验）：`focus_guard_strict` 默认 `True`（`config/bridge.json` 显式写死，
+    调用方可用端点配置覆盖）；`--headed` 进入交互前先探主屏前台，有主屏前台时**不再调用**
+    `focus_window`，只在确实夺焦时按严格门禁返回 `error="focus_taken"`；新增
+    `_ensure_composer_ready()`（滚底 + 重采，仍缺则结构化失败）；attach 按钮/菜单点击纳入
+    `guarded_write`，夺焦即在提交前中止。新增 12 条离线单测
+    `tests/test_m4_4_focus_and_attach_ready.py`，全量 295 条 rc=0
+  - 本轮被阻塞（未验，原因已实测）：① Gemini「上传和工具」按钮**没有 InvokePattern**，
+    headless（`headless_default=true`，命令未带 `--headed`）点击即 `POLICY_DENIED`，
+    `#32770` 因此从未被触发——这是 M4-3 “空框未复现”的上游真因；`--headed` 的物理点击会
+    激活副屏窗口并抢走主屏前台，严格门禁下只会返回 `focus_taken`，需用户让出主屏或显式
+    关闭门禁方可重跑；② `deepseek / grok` 在非前台状态下 AX 树只暴露 1 个 `DocumentControl`，
+    无 `model_selector` 节点，展开下拉必须激活窗口，故 council 校准未做、配置未改（不编造）
+  - 本轮事故（如实记录）：13:44 只读探针用 `uia:invoke` 让 DeepSeek 窗口成为前台
+    （前台 529300→2362972），0.4s 内已还原为 529300；此后改为一律只读快照
+  - 副发现（未修）：`bridge.py status` 对 `deepseek / grok` 报 `ready=true`，实际是整页
+    `DocumentControl` 被 `_find_composer` 当成 composer 的假阳性，建议下一轮收窄角色/名字
 
 ## 5. 维护约定
 
