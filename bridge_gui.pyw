@@ -34,10 +34,14 @@ from datetime import datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
-ROADMAP_PATH = "docs/ROADMAP.md"
+from engine import daemon_state  # noqa: E402
+
+ROADMAP_PATH = daemon_state.ROADMAP_PATH
 LOG_PATH = "runs/overnight.log"
-COOLDOWN_PATH = "runs/opencode_cooldown.json"
+COOLDOWN_PATH = "runs/" + daemon_state.COOLDOWN_FILE
 DAEMON_SCRIPT = "scripts/auto_heal_loop.py"
 BRIDGE_SCRIPT = "bridge.py"
 
@@ -48,7 +52,8 @@ REFRESH_MS = 2500
 #: 动作回执在日志面板里保留的秒数（之后恢复为日志尾随）。
 NOTE_HOLD_S = 8.0
 LOG_TAIL_LINES = 40
-ALL_DONE_MARKER = "ALL_DONE"
+#: 与调度器共用同一份常量，避免 UI 与调度器对同一行文本判断不一致。
+ALL_DONE_MARKER = daemon_state.ALL_DONE_MARKER
 
 #: 严格按行匹配 ``- [x]`` / ``- [ ]``（缩进的子项若无复选框不计入）。
 ITEM_RE = re.compile(r"^[ \t]*-[ \t]+\[([ xX])\][ \t]*(.*)$")
@@ -119,7 +124,6 @@ def parse_roadmap(path: str | os.PathLike | None = None) -> dict:
         return doc
 
     items: list[dict] = []
-    all_done = False
     for lineno, line in enumerate(text.splitlines(), start=1):
         match = ITEM_RE.match(line)
         if match:
@@ -130,14 +134,13 @@ def parse_roadmap(path: str | os.PathLike | None = None) -> dict:
                     "text": (match.group(2) or "").strip(),
                 }
             )
-        elif line.strip().strip("`").strip() == ALL_DONE_MARKER:
-            all_done = True
 
     doc["items"] = items
     doc["total"] = len(items)
     doc["done"] = sum(1 for item in items if item["done"])
     doc["pending"] = doc["total"] - doc["done"]
-    doc["all_done"] = all_done
+    # 判定规则只有一份：``engine.daemon_state``（独立成行的 ``ALL_DONE`` 才算）。
+    doc["all_done"] = daemon_state.has_all_done_marker(text)
     return doc
 
 
@@ -191,10 +194,14 @@ def read_opencode_cooldown(
         return doc
 
     doc["hint"] = raw.get("hint")
-    doc["until"] = raw.get("until")
+    doc["until"] = raw.get("until") or raw.get("cooldown_until")
+    # 截止时间只解析一次：``engine.daemon_state`` 同时认 ``until`` 与
+    # ``cooldown_until``，过期/非法/缺键一律读作「可用」。
+    active = daemon_state.read_opencode_cooldown_until(target, now=current)
+    if not active:
+        return doc
     try:
-        until = datetime.fromisoformat(str(raw.get("until")))
-        remaining = (until - current).total_seconds()
+        remaining = (datetime.fromisoformat(active) - current).total_seconds()
     except (TypeError, ValueError):
         return doc
     if remaining <= 0:

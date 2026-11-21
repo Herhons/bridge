@@ -173,7 +173,13 @@ class TestGitGate(unittest.TestCase):
 
     def test_green_suite_commits_and_respects_no_push(self):
         calls: list[tuple[str, ...]] = []
-        with mock.patch.object(ahl, "git", side_effect=self._fake_git(calls)), \
+        # M4-7: run against a throwaway runs/ like every other test here, so a
+        # green round cannot overwrite the real runs/state_machine.json of a
+        # scheduler that is live at test time. Nothing about the assertions
+        # changes — only where the state machine writes.
+        with tempfile.TemporaryDirectory() as tmp, \
+                mock.patch.object(ahl, "RUNS", Path(tmp)), \
+                mock.patch.object(ahl, "git", side_effect=self._fake_git(calls)), \
                 mock.patch.object(ahl, "log"), \
                 mock.patch.object(ahl, "run_tests", return_value=(0, "OK")), \
                 mock.patch.object(ahl, "build_crash_report") as report:

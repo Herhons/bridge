@@ -24,7 +24,6 @@ M4-1 (v0.2.5) adds the control plane around that loop:
 from __future__ import annotations
 
 import argparse
-import ctypes
 import hashlib
 import json
 import os
@@ -41,6 +40,11 @@ ROOT = Path(__file__).resolve().parents[1]
 BRIDGE = ROOT / "bridge.py"
 RUNS = ROOT / "runs"
 PYTHON = sys.executable
+
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from engine import daemon_state  # noqa: E402
 
 TIMEOUT_RC = 124
 EXECUTOR_FALLBACK = {
@@ -110,38 +114,25 @@ def _last_valid_block(pattern: re.Pattern[str], reply: str) -> str:
         best = body
     return best
 
-STATE_FILE = "state_machine.json"
+STATE_FILE = daemon_state.STATE_FILE
 HANDOFF_FILE = "brain_handoff.md"
 PATCH_FILE = "brain_patch.diff"
 ATTACH_INLINE_LIMIT = 20000
-STOP_FILE = "STOP"
+STOP_FILE = daemon_state.STOP_FILE
 DISPATCH_DIR = "dispatched"
-COOLDOWN_FILE = "opencode_cooldown.json"
-ROADMAP_PATH = "docs/ROADMAP.md"
-ALL_DONE_MARKER = "ALL_DONE"
-STATE_NAMES: tuple[str, ...] = (
-    "IDLE",
-    "PICK_TASK",
-    "BRAIN_PLAN",
-    "APPLY_PATCH",
-    "DISPATCH_EXECUTOR",
-    "VERIFY_TESTS",
-    "BUG_REPORTED",
-    "STOPPED_ON_BUG",
-    "STUCK_TRIAGE",
-    "COMMIT_AND_PUSH",
-    "BLOCKED",
-    "STOPPED",
-    "STOPPED_BY_USER",
-    "ALL_DONE",
-)
+COOLDOWN_FILE = daemon_state.COOLDOWN_FILE
+ROADMAP_PATH = daemon_state.ROADMAP_PATH
+ALL_DONE_MARKER = daemon_state.ALL_DONE_MARKER
+#: Owned by ``engine.daemon_state`` so the CLI, the GUI and this scheduler
+#: validate transitions against one list.
+STATE_NAMES: tuple[str, ...] = daemon_state.STATE_NAMES
 # States whose history must survive the ``finally`` cleanup untouched.
 TERMINAL_STATES: tuple[str, ...] = ("STOPPED_ON_BUG", "STOPPED_BY_USER", "ALL_DONE")
 # ``- [ ]`` anywhere at the start of a line (indented list items included).
-ROADMAP_PENDING_RE = re.compile(r"^[ \t]*-[ \t]+\[ \]", re.M)
-ROADMAP_ITEM_RE = re.compile(r"^[ \t]*-[ \t]+\[[ xX]\]", re.M)
+ROADMAP_PENDING_RE = daemon_state.ROADMAP_PENDING_RE
+ROADMAP_ITEM_RE = daemon_state.ROADMAP_ITEM_RE
 #: First pending item *with* its body, used to name the round in prompts/commits.
-ROADMAP_FIRST_PENDING_RE = re.compile(r"^[ \t]*-[ \t]+\[ \][ \t]*(.+)$", re.M)
+ROADMAP_FIRST_PENDING_RE = daemon_state.ROADMAP_FIRST_PENDING_RE
 TASK_TITLE_MAX = 48
 DEFAULT_TASK_TITLE = "自动迭代"
 # A card stays blocked while a dispatch is still owed or died on the wire.
@@ -167,7 +158,7 @@ def scheduler_notice() -> str:
 
 LOG_NAMES: tuple[str, ...] = ("auto_heal_loop.log",)
 OVERNIGHT_LOG = "overnight.log"
-PID_FILE = "overnight.pid"
+PID_FILE = daemon_state.PID_FILE
 BACKLOG_CANDIDATES = (
     ROADMAP_PATH,
     "runs/overnight_todo.md",
@@ -207,63 +198,29 @@ def clear_pid() -> None:
 
 
 # ---------------------------------------------------------------- control plane
-def _pid_alive_windows(pid: int) -> bool:
-    """PROCESS_QUERY_LIMITED_INFORMATION probe: read-only, never signals."""
-    kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
-    handle = kernel32.OpenProcess(0x1000, False, int(pid))
-    if not handle:
-        return False
-    try:
-        code = ctypes.c_ulong(0)
-        ok = kernel32.GetExitCodeProcess(handle, ctypes.byref(code))
-        return bool(ok) and code.value == 259  # STILL_ACTIVE
-    finally:
-        kernel32.CloseHandle(handle)
+#: Liveness/STOP handling lives in ``engine.daemon_state`` so the scheduler and
+#: ``bridge.py`` cannot drift apart. Thin wrappers keep the historic no-argument
+#: signatures (``runs/STOP`` under this module's ``RUNS``) and stay patchable.
+_pid_alive_windows = daemon_state._pid_alive_windows
 
 
 def pid_alive(pid: int) -> bool:
     """Liveness probe that can never kill the target (``os.kill`` can on nt)."""
-    try:
-        pid = int(pid)
-    except (TypeError, ValueError):
-        return False
-    if pid <= 0:
-        return False
-    if os.name == "nt":
-        try:
-            return _pid_alive_windows(pid)
-        except (AttributeError, OSError, ValueError):
-            return False
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    except OSError:
-        return False
-    return True
+    return daemon_state.pid_alive(pid)
 
 
 def stop_path() -> Path:
-    return RUNS / STOP_FILE
+    return daemon_state.stop_path(RUNS)
 
 
 def stop_requested() -> bool:
     """True when an operator dropped ``runs/STOP`` (never raises)."""
-    try:
-        return stop_path().is_file()
-    except OSError:
-        return False
+    return daemon_state.stop_requested(RUNS)
 
 
 def clear_stop_files() -> None:
     """Remove ``runs/STOP`` and ``runs/overnight.pid`` (idempotent)."""
-    for name in (STOP_FILE, PID_FILE):
-        try:
-            (RUNS / name).unlink(missing_ok=True)
-        except OSError:
-            pass
+    daemon_state.clear_stop_files(RUNS)
 
 
 def sleep_with_stop_watch(seconds: float, poll: float | None = None) -> bool:
@@ -309,10 +266,7 @@ def _atomic_write_text(path: Path, text: str) -> None:
     Same-directory temp keeps the replace atomic on NTFS; a crash mid-write
     leaves the previous complete file untouched instead of a truncated one.
     """
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.parent / (path.name + ".tmp")
-    tmp.write_text(text, encoding="utf-8")
-    os.replace(tmp, path)
+    daemon_state._atomic_write_text(path, text)
 
 
 def roadmap_path() -> Path:
@@ -321,24 +275,22 @@ def roadmap_path() -> Path:
 
 def has_pending_roadmap_items(text: str) -> bool:
     """True when the roadmap still holds at least one ``- [ ]`` item."""
-    return bool(ROADMAP_PENDING_RE.search(text or ""))
+    return daemon_state.has_pending_roadmap_items(text)
 
 
 def has_all_done_marker(text: str) -> bool:
     """True only for a standalone ``ALL_DONE`` line (prose mentions ignored)."""
-    for line in (text or "").splitlines():
-        if line.strip().strip("`").strip() == ALL_DONE_MARKER:
-            return True
-    return False
+    return daemon_state.has_all_done_marker(text)
 
 
 def roadmap_counts(text: str) -> tuple[int, int]:
-    """Return ``(pending, total)`` checkbox counts for a roadmap body."""
-    body = text or ""
-    return (
-        len(ROADMAP_PENDING_RE.findall(body)),
-        len(ROADMAP_ITEM_RE.findall(body)),
-    )
+    """Return ``(pending, total)`` checkbox counts for a roadmap *body*.
+
+    Kept text-based because callers here already hold the content (the backlog
+    loader returns text); the path-based form is
+    ``daemon_state.roadmap_counts(path)``.
+    """
+    return daemon_state.count_roadmap_items(text)
 
 
 def current_roadmap_task_title(backlog: str) -> str:
@@ -363,18 +315,7 @@ def current_roadmap_task_title(backlog: str) -> str:
 
 def roadmap_all_done() -> tuple[bool, str]:
     """``(done, reason)`` — done when the roadmap exists and owes nothing."""
-    path = roadmap_path()
-    if not path.is_file():
-        return False, "roadmap_missing"
-    try:
-        text = path.read_text(encoding="utf-8", errors="replace")
-    except OSError as exc:
-        return False, "roadmap_unreadable:%r" % exc
-    if has_all_done_marker(text):
-        return True, "ALL_DONE line present"
-    if not has_pending_roadmap_items(text):
-        return True, "no pending checkbox"
-    return False, "pending items remain"
+    return daemon_state.roadmap_all_done(roadmap_path())
 
 
 # ---------------------------------------------------------------- dispatch ledger
@@ -613,113 +554,25 @@ def reset_hard(commit: str) -> bool:
 
 
 # ---------------------------------------------------------------- state machine
-class StateMachine:
-    """Tiny explicit state machine that persists every transition to JSON.
+class StateMachine(daemon_state.StateMachine):
+    """Scheduler-local view of the shared state machine.
 
-    The file is rewritten on each transition so an operator (or the next
-    round) can tell exactly where an unattended run stopped, even if the
-    process was killed without unwinding.
-
-    Two M4-1 guarantees: writes go through a sibling ``.tmp`` + ``os.replace``
-    so a crash can never leave a truncated JSON, and a scheduler never
-    overwrites the file of another scheduler that is still alive.
+    Only the wiring differs: this module's ``RUNS`` (which the offline suite
+    monkeypatches) decides the default file, and transitions keep going through
+    this module's ``pid_alive`` / ``log`` so the existing
+    ``mock.patch.object(ahl, ...)`` hooks still reach them. Behaviour, atomic
+    writes and the live-foreign-pid sidecar all live in
+    ``engine.daemon_state.StateMachine``.
     """
 
     def __init__(self, path: str | Path | None = None) -> None:
-        self._path = Path(path) if path is not None else None
-        self._effective: Path | None = None
-        self.state = "IDLE"
-        self.reason = ""
-        self.round = 0
-        self.history: list[dict[str, Any]] = []
-
-    @property
-    def path(self) -> Path:
-        return self._path if self._path is not None else RUNS / STATE_FILE
-
-    @property
-    def written_to(self) -> Path | None:
-        """File actually written (sidecar included); None until the first save."""
-        return self._effective
-
-    def _resolve_target(self) -> Path:
-        """Choose the write target, isolating from a live foreign scheduler.
-
-        ``runs/state_machine.json`` belongs to whoever wrote it last. When it
-        records a different pid that is still running, that process keeps the
-        canonical file and this one writes ``runs/state_machine.<pid>.json``
-        so the live scheduler's history is never clobbered. An explicit
-        ``path=`` is never isolated: the caller owns that file.
-        """
-        if self._effective is not None:
-            return self._effective
-        base = self.path
-        if self._path is not None:
-            self._effective = base
-            return base
-        foreign = 0
-        try:
-            existing = json.loads(base.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            existing = None
-        if isinstance(existing, dict):
-            try:
-                foreign = int(existing.get("pid") or 0)
-            except (TypeError, ValueError):
-                foreign = 0
-        if foreign and foreign != os.getpid() and pid_alive(foreign):
-            self._effective = base.with_name(
-                "%s.%d%s" % (base.stem, os.getpid(), base.suffix)
-            )
-            log(
-                "state machine isolated: pid=%d is alive and holds %s; "
-                "writing %s" % (foreign, base.name, self._effective.name),
-                "WARN",
-            )
-        else:
-            self._effective = base
-        return self._effective
-
-    def set(
-        self,
-        state: str,
-        *,
-        reason: str = "",
-        round_no: int | None = None,
-    ) -> str:
-        if state not in STATE_NAMES:
-            raise ValueError("unknown state %r" % state)
-        self.state = state
-        if reason:
-            self.reason = reason
-        if round_no is not None:
-            self.round = int(round_no)
-        stamp = datetime.now().isoformat(timespec="seconds")
-        self.history.append({"state": state, "at": stamp, "reason": self.reason})
-        if len(self.history) > 200:
-            self.history = self.history[-200:]
-        self.save(stamp=stamp)
-        return state
-
-    def snapshot(self, stamp: str = "") -> dict[str, Any]:
-        return {
-            "state": self.state,
-            "updated_at": stamp or datetime.now().isoformat(timespec="seconds"),
-            "pid": os.getpid(),
-            "round": self.round,
-            "reason": self.reason,
-            "history": list(self.history),
-        }
-
-    def save(self, stamp: str = "") -> None:
-        target = self._resolve_target()
-        try:
-            _atomic_write_text(
-                target,
-                json.dumps(self.snapshot(stamp), ensure_ascii=False, indent=2),
-            )
-        except OSError as exc:
-            log("state machine write failed: %r" % exc, "ERROR")
+        super().__init__(
+            path,
+            runs_dir=lambda: RUNS,
+            state_names=STATE_NAMES,
+            pid_alive_fn=lambda pid: pid_alive(pid),
+            log_fn=lambda message, level="INFO": log(message, level),
+        )
 
 
 def load_endpoint_config(endpoint: str) -> dict[str, Any]:
@@ -1688,22 +1541,13 @@ def opencode_cooldown_until(now: datetime | None = None) -> str:
     ``endpoints/opencode.py`` drops ``runs/opencode_cooldown.json`` when the CLI
     reports a quota / rate-limit hit. Handing the next card to a cooling lane
     means burning a full budget on a certain failure, so the auto chain skips it.
-    Read-only: an unparsable or expired marker simply reads as "clear".
+    Read-only, and both marker spellings (``until`` / ``cooldown_until``) are
+    honoured via ``engine.daemon_state``; an unparsable or expired marker
+    reads as "clear".
     """
-    try:
-        data = json.loads((RUNS / COOLDOWN_FILE).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return ""
-    until_raw = str((data or {}).get("until") or "") if isinstance(data, dict) else ""
-    if not until_raw:
-        return ""
-    try:
-        until = datetime.fromisoformat(until_raw)
-    except ValueError:
-        return ""
-    if until > (now or datetime.now()):
-        return until_raw
-    return ""
+    return daemon_state.read_opencode_cooldown_until(
+        RUNS / COOLDOWN_FILE, now=now
+    )
 
 
 def run_overnight(

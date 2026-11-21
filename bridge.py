@@ -19,10 +19,8 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import ctypes
 import json
 import os
-import re
 import subprocess
 import sys
 import time
@@ -34,7 +32,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from endpoints import ENDPOINT_NAMES, get_driver  # noqa: E402
-from engine import __version__  # noqa: E402
+from engine import __version__, daemon_state  # noqa: E402
 from engine.base import (  # noqa: E402
     configure_stdio_utf8,
     exit_code_for,
@@ -135,12 +133,14 @@ def normalize_attach_paths(
 
 
 # ---------------------------------------------------------------- scheduler control
-STOP_FILE = "STOP"
-PID_FILE = "overnight.pid"
-STATE_FILE = "state_machine.json"
-ROADMAP_PATH = "docs/ROADMAP.md"
-ROADMAP_PENDING_RE = re.compile(r"^[ \t]*-[ \t]+\[ \]", re.M)
-ROADMAP_ITEM_RE = re.compile(r"^[ \t]*-[ \t]+\[[ xX]\]", re.M)
+# Names and values are owned by ``engine.daemon_state`` so the CLI, the GUI and
+# ``scripts/auto_heal_loop.py`` can never disagree about the control files.
+STOP_FILE = daemon_state.STOP_FILE
+PID_FILE = daemon_state.PID_FILE
+STATE_FILE = daemon_state.STATE_FILE
+ROADMAP_PATH = daemon_state.ROADMAP_PATH
+ROADMAP_PENDING_RE = daemon_state.ROADMAP_PENDING_RE
+ROADMAP_ITEM_RE = daemon_state.ROADMAP_ITEM_RE
 UNFINISHED_DISPATCH_STATES = ("dispatched", "timed_out")
 STOP_WAIT_POLL = 0.2
 
@@ -160,54 +160,24 @@ def _unlink(path: Path) -> bool:
 
 
 def scheduler_pid(path: str | Path | None = None) -> int | None:
-    """Read the daemon pid file; None when absent, empty or unparsable."""
-    target = Path(path) if path is not None else runs_dir() / PID_FILE
-    try:
-        text = target.read_text(encoding="utf-8", errors="replace").strip()
-    except OSError:
-        return None
-    try:
-        pid = int(text.split()[0])
-    except (IndexError, ValueError):
-        return None
-    return pid if pid > 0 else None
+    """Read the daemon pid file; None when absent, empty or unparsable.
+
+    Accepts either the pid file itself (the historic call shape) or, when
+    omitted, ``<root>/runs/overnight.pid``.
+    """
+    if path is None:
+        return daemon_state.scheduler_pid(runs_dir())
+    return daemon_state.read_pid_file(Path(path))
 
 
 def pid_alive(pid: int) -> bool:
     """Liveness probe that can never kill the target.
 
     ``os.kill(pid, 0)`` terminates the process on Windows, so nt goes through
-    ``OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION)`` + ``GetExitCodeProcess``.
+    ``OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION)`` + ``GetExitCodeProcess``
+    (shared with the scheduler via ``engine.daemon_state``).
     """
-    try:
-        pid = int(pid)
-    except (TypeError, ValueError):
-        return False
-    if pid <= 0:
-        return False
-    if os.name == "nt":
-        try:
-            kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
-            handle = kernel32.OpenProcess(0x1000, False, pid)
-        except (AttributeError, OSError, ValueError):
-            return False
-        if not handle:
-            return False
-        try:
-            code = ctypes.c_ulong(0)
-            ok = kernel32.GetExitCodeProcess(handle, ctypes.byref(code))
-            return bool(ok) and code.value == 259  # STILL_ACTIVE
-        finally:
-            kernel32.CloseHandle(handle)
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    except OSError:
-        return False
-    return True
+    return daemon_state.pid_alive(pid)
 
 
 def kill_scheduler_tree(pid: int) -> int:
@@ -243,7 +213,7 @@ def stop_scheduler(
     """
     base = Path(runs) if runs is not None else runs_dir()
     base.mkdir(parents=True, exist_ok=True)
-    stop_path = base / STOP_FILE
+    stop_path = daemon_state.stop_path(base)
     pid_path = base / PID_FILE
     pid = scheduler_pid(pid_path)
     alive = bool(pid and pid_alive(pid))
@@ -345,8 +315,7 @@ def daemon_status(
             text = roadmap.read_text(encoding="utf-8", errors="replace")
         except OSError:
             text = ""
-        pending = len(ROADMAP_PENDING_RE.findall(text))
-        total = len(ROADMAP_ITEM_RE.findall(text))
+        pending, total = daemon_state.count_roadmap_items(text)
 
     unfinished = 0
     needs_review = 0
@@ -370,7 +339,7 @@ def daemon_status(
         "pid": pid,
         "running": alive,
         "pid_file": str(base / PID_FILE),
-        "stop_requested": (base / STOP_FILE).is_file(),
+        "stop_requested": daemon_state.stop_requested(base),
         "state": state_doc.get("state"),
         "state_reason": state_doc.get("reason"),
         "state_round": state_doc.get("round"),
