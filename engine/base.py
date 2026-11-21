@@ -38,6 +38,7 @@ from engine.config import (
     load_model_policy,
     resolve_profile,
 )
+from engine.drift import detect_model_drift, write_drift_report
 from engine.file_dialog import (  # noqa: F401 - compatibility re-exports
     BM_CLICK,
     FILE_DIALOG_CLASS,
@@ -366,6 +367,34 @@ class EndpointDriver:
             if snap is not None:
                 payload["snapshot"] = snap.to_dict(interactive_only=False, limit=300)
             path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+            return str(path)
+        except Exception:
+            return None
+
+    def _record_drift_report(
+        self,
+        *,
+        kind: str,
+        reason: str,
+        observed_options: list[str] | None = None,
+        new_models: list[str] | None = None,
+        missing_models: list[str] | None = None,
+        ui_controls: list[Any] | None = None,
+        extra: dict[str, Any] | None = None,
+    ) -> str | None:
+        try:
+            drift_dir = getattr(self, "drift_dir", None)
+            path = write_drift_report(
+                self.name,
+                kind=kind,
+                reason=reason,
+                observed_options=observed_options,
+                new_models=new_models,
+                missing_models=missing_models,
+                ui_controls=ui_controls,
+                extra=extra,
+                drift_dir=drift_dir,
+            )
             return str(path)
         except Exception:
             return None
@@ -872,12 +901,29 @@ class EndpointDriver:
 
         selector_node = self._find_model_selector(snap)
         if selector_node is None:
-            return {
+            drift = detect_model_drift(
+                self.name,
+                [],
+                self.cfg.get("models"),
+                self.cfg.get("model_aliases"),
+            )
+            report = self._record_drift_report(
+                kind="selector_not_found",
+                reason=f"Model selector not found on {self.name}",
+                observed_options=[],
+                missing_models=drift.get("missing_models"),
+                ui_controls=getattr(snap, "nodes", None),
+                extra={"requested_model": model, "enforce_free": enforce_free},
+            )
+            out = {
                 "attempted": True,
                 "switched": False,
                 "reason": "selector_not_found",
                 "blocked_paid": enforce_free,
             }
+            if report:
+                out["drift_report"] = report
+            return out
 
         try:
             with self._borrowed_focus(win, allow=headed):
@@ -894,16 +940,37 @@ class EndpointDriver:
                 if option_node is None:
                     self._send_esc()
                     self._sleep(0.25)
-                    return {
+                    reason = "free_option_not_found" if (free_only or req_low == "free") else "option_not_found"
+                    out = {
                         "attempted": True,
                         "switched": False,
-                        "reason": "free_option_not_found" if (free_only or req_low == "free") else "option_not_found",
+                        "reason": reason,
                         "blocked_paid": enforce_free or (free_only and classify_model_label(selector_node.name, policy=self.model_policy) == "paid"),
                         "available_options": [
                             {"name": o.name, "tier": classify_model_label(o.name, policy=self.model_policy)}
                             for o in all_options
                         ],
                     }
+                    if reason in ("selector_not_found", "option_not_found"):
+                        obs = [o.name for o in all_options]
+                        drift = detect_model_drift(
+                            self.name,
+                            obs,
+                            self.cfg.get("models"),
+                            self.cfg.get("model_aliases"),
+                        )
+                        report = self._record_drift_report(
+                            kind=reason,
+                            reason=f"Option '{model}' not found on {self.name} ({drift.get('reason')})",
+                            observed_options=obs,
+                            new_models=drift.get("new_models"),
+                            missing_models=drift.get("missing_models"),
+                            ui_controls=all_options,
+                            extra={"requested_model": model},
+                        )
+                        if report:
+                            out["drift_report"] = report
+                    return out
 
                 tier = classify_model_label(option_node.name, policy=self.model_policy)
                 if free_only and tier == "paid":
@@ -1427,6 +1494,28 @@ class EndpointDriver:
                 }
                 for o in opts
             ]
+            opt_names = [
+                o.name if hasattr(o, "name") else (o.get("name") if isinstance(o, dict) else str(o))
+                for o in opts
+            ]
+            drift = detect_model_drift(
+                self.name,
+                opt_names,
+                self.cfg.get("models"),
+                self.cfg.get("model_aliases"),
+            )
+            base_out["drift"] = drift
+            if drift.get("drift_detected"):
+                report = self._record_drift_report(
+                    kind="model_drift",
+                    reason=drift.get("reason") or "model drift detected",
+                    observed_options=opt_names,
+                    new_models=drift.get("new_models"),
+                    missing_models=drift.get("missing_models"),
+                    ui_controls=opts,
+                )
+                if report:
+                    base_out["drift_report"] = report
             return base_out
         except UIAError as exc:
             self._send_esc()
@@ -1767,14 +1856,23 @@ class EndpointDriver:
             if composer is None and not fallback_ratio:
                 ev = self._record_failure_evidence("composer_not_found", before_snap)
                 self.ledger.mark(clean_prompt, self.name, "failed_retryable", note="composer_not_found")
-                return {
+                report = self._record_drift_report(
+                    kind="composer_not_found",
+                    reason=f"Composer not found on {self.name}",
+                    ui_controls=getattr(before_snap, "nodes", None),
+                    extra={"evidence": ev},
+                )
+                err_dict = {
                     "ok": False,
                     "endpoint": self.name,
                     "error": "composer_not_found",
                     "message": f"No input composer found in {self.name}; page may be on login/loading screen",
                     "evidence": ev,
                     "reply": "",
-                }, {}
+                }
+                if report:
+                    err_dict["drift_report"] = report
+                return err_dict, {}
 
             chunk_size = int(self.cfg.get("paste_chunk", 0))
             if composer is None and fallback_ratio:

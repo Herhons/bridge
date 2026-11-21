@@ -45,6 +45,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from engine import daemon_state  # noqa: E402
+from engine.drift import format_drift_handoff_section, load_latest_drift_report  # noqa: E402
 
 TIMEOUT_RC = 124
 EXECUTOR_FALLBACK = {
@@ -72,10 +73,15 @@ BRAIN_FALLBACK: dict[str, str] = {
 }
 PROFILE_CHOICES: tuple[str, ...] = ("test", "routine", "council", "none")
 TASK_RE = re.compile(
-    r"<<<WORKBUDDY_TASK_START>>>(.*?)<<<WORKBUDDY_TASK_END>>>", re.S
+    r"(?:<<<|===)WORKBUDDY_TASK_START(?:>>>|===)(.*?)(?:<<<|===)WORKBUDDY_TASK_END(?:>>>|===)",
+    re.S,
 )
 PATCH_RE = re.compile(
-    r"<<<BRIDGE_PATCH_START>>>(.*?)<<<BRIDGE_PATCH_END>>>", re.S
+    r"(?:<<<|===)BRIDGE_PATCH_START(?:>>>|===)(.*?)(?:<<<|===)BRIDGE_PATCH_END(?:>>>|===)",
+    re.S,
+)
+ALL_DONE_SIGN_OFF_RE = re.compile(
+    r"(?:<<<|===)BRIDGE_ALL_DONE(?:>>>|===)"
 )
 #: Bodies that are prompt-example echoes, never real answers. A brain that
 #: repeats the instruction template used to win the first-match race and get
@@ -763,6 +769,19 @@ def build_handoff_bundle(
             text = report_path.read_text(encoding="utf-8", errors="replace")
             error_summary = text[:4000]
 
+    drift_section = ""
+    try:
+        drift_dir = (
+            (target.parent / "drift")
+            if (path is not None and (target.parent / "drift").is_dir())
+            else (RUNS / "drift")
+        )
+        latest_drift = load_latest_drift_report(drift_dir=drift_dir, only_unacked=True)
+        if latest_drift:
+            drift_section = format_drift_handoff_section(latest_drift)
+    except Exception:
+        drift_section = ""
+
     content = (
         "# Bridge brain handoff\n\n"
         "- 仓库路径: %s\n- 分支: %s\n- HEAD: %s\n- 触发原因: %s\n"
@@ -786,6 +805,8 @@ def build_handoff_bundle(
             error_summary or "(none)",
         )
     )
+    if drift_section:
+        content += "\n" + drift_section
     target.write_text(content, encoding="utf-8")
     log("handoff bundle written: %s" % target)
     return target
@@ -798,8 +819,10 @@ def extract_task_card(reply: str) -> str:
 
 
 MARKER_SYNTAX_HINT = (
-    "标记写法固定为「三个小于号 + 名字 + 三个大于号」（例如名字 `BRIDGE_PATCH_START`），"
-    "尖括号与名字之间不留空格、每个标记独占一行；标记之外不要输出任何文字。"
+    "标记写法优先使用「三个等号 + 名字 + 三个等号」（如 ===WORKBUDDY_TASK_START===），"
+    "亦兼容「三个小于号 + 名字 + 三个大于号」，"
+    "避免网页 Markdown 将尖括号当成 HTML 标签吞掉；"
+    "等号/尖括号与名字之间不留空格、每个标记独占一行；标记之外不要输出任何文字。"
     "不要照抄本说明里的示例文字，直接写真实内容。\n"
 )
 
@@ -878,7 +901,9 @@ def brain_signed_off_all_done(reply: str) -> bool:
     ``build_signoff_prompt`` never embeds it — the prompt spells the token out
     in words, so a brain that merely echoes the prompt cannot sign itself off.
     """
-    return ALL_DONE_SIGN_OFF_MARKER in (reply or "")
+    if not reply:
+        return False
+    return bool(ALL_DONE_SIGN_OFF_RE.search(reply)) or (ALL_DONE_SIGN_OFF_MARKER in reply)
 
 
 def read_roadmap_text() -> str:
@@ -904,8 +929,11 @@ def _redact_signoff_marker(text: str) -> str:
     quotes the roadmap — without this, a brain that echoes the prompt would
     "sign off" by accident.
     """
-    return (text or "").replace(
+    redacted = (text or "").replace(
         ALL_DONE_SIGN_OFF_MARKER, "BRIDGE_ALL_DONE（三个小于号 + 该词 + 三个大于号）"
+    )
+    return redacted.replace(
+        "===BRIDGE_ALL_DONE===", "BRIDGE_ALL_DONE（三个等号 + 该词 + 三个等号）"
     )
 
 
@@ -930,8 +958,8 @@ def build_signoff_prompt(
         "全量单测结果：\n%s\n\n"
         "路线图原文（节选）：\n%s\n\n"
         "请二选一，只输出其中一样：\n"
-        "1) 若确认可以收口：只回复签收标记 —— 三个小于号 + BRIDGE_ALL_DONE "
-        "+ 三个大于号，不要附加任何解释；\n"
+        "1) 若确认可以收口：只回复签收标记 —— 优先「三个等号 + BRIDGE_ALL_DONE "
+        "+ 三个等号」（亦可使用三个小于号/三个大于号），不要附加任何解释；\n"
         "2) 若仍需继续推进：按既有格式输出一个补丁块或任务卡块。\n"
         "本地执行器不会自行写 ALL_DONE，必须等你的签收标记。\n"
         % (
