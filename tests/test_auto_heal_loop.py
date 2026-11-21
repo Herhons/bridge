@@ -326,5 +326,22 @@ class TestOvernightLoop(unittest.TestCase):
             self.assertIn("THREE_IDLE_ROUNDS", overnight_log)
 
 
+class TestSchedulerNotice(unittest.TestCase):
+    def test_call_workbuddy_writes_notice_with_current_pid(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.object(ahl, "RUNS", Path(tmp)), \
+                    mock.patch.object(
+                        ahl, "run_cmd",
+                        return_value=(0, '{"ok": true, "reply": "ok"}'),
+                    ), \
+                    mock.patch.object(ahl, "log"):
+                ahl.call_workbuddy("step one: patch code", 9, 60)
+            text = (Path(tmp) / "workbuddy_task_round9.md").read_text(encoding="utf-8")
+
+        self.assertTrue(text.startswith(ahl.scheduler_notice()))
+        self.assertIn("PID=%d" % os.getpid(), text)
+        self.assertIn("step one: patch code", text)
+
+
 if __name__ == "__main__":
     unittest.main()

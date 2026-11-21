@@ -14,6 +14,7 @@ import re
 import subprocess
 import sys
 import time
+import traceback
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -34,6 +35,15 @@ FAIL_INLINE_RE = re.compile(
     r"^(\S+)\s+\(([^)]+)\)\s*\.\.\.\s*(?:FAIL|ERROR)\b", re.M
 )
 COMMIT_RE = re.compile(r"[0-9a-f]{7,40}\Z")
+
+def scheduler_notice() -> str:
+    """Fixed preamble telling WorkBuddy not to kill its serial dispatcher."""
+    return (
+        "【调度器保护声明】你当前正由后台过夜调度器 scripts/auto_heal_loop.py"
+        "（PID=%d）串行调度执行，调度器正在等待你回复，不会与你并发改工作区。"
+        "严禁终止/杀掉该 PID，严禁删除 runs/overnight.pid。\n" % os.getpid()
+    )
+
 
 LOG_NAMES: tuple[str, ...] = ("auto_heal_loop.log",)
 OVERNIGHT_LOG = "overnight.log"
@@ -408,7 +418,7 @@ def call_workbuddy(task_card: str, attempt: int, timeout: float) -> str:
     task_file = RUNS / ("workbuddy_task_round%d.md" % attempt)
     saved = RUNS / ("workbuddy_reply_round%d.txt" % attempt)
     task_file.parent.mkdir(parents=True, exist_ok=True)
-    task_file.write_text(task_card, encoding="utf-8")
+    task_file.write_text(scheduler_notice() + task_card, encoding="utf-8")
     bridge_timeout = max(30, int(timeout - 30))
     cmd = [
         PYTHON, str(BRIDGE), "ask", "workbuddy", "",
@@ -694,21 +704,32 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
-    if args.overnight:
-        return run_overnight(
-            max_rounds=args.max_rounds,
+    try:
+        args = build_parser().parse_args(argv)
+        if args.overnight:
+            return run_overnight(
+                max_rounds=args.max_rounds,
+                no_push=args.no_push,
+                timeout=args.timeout,
+                sleep=args.sleep,
+                delay_start=args.delay_start,
+            )
+        return heal(
+            max_retries=args.max_retries,
             no_push=args.no_push,
             timeout=args.timeout,
-            sleep=args.sleep,
-            delay_start=args.delay_start,
+            report_path=args.report,
         )
-    return heal(
-        max_retries=args.max_retries,
-        no_push=args.no_push,
-        timeout=args.timeout,
-        report_path=args.report,
-    )
+    except Exception:  # noqa: BLE001 - hidden console must not swallow crashes
+        detail = traceback.format_exc()
+        try:
+            RUNS.mkdir(parents=True, exist_ok=True)
+            with (RUNS / OVERNIGHT_LOG).open("a", encoding="utf-8") as handle:
+                handle.write(detail)
+        except OSError:
+            pass
+        print(detail, file=sys.stderr, flush=True)
+        return 1
 
 
 if __name__ == "__main__":
