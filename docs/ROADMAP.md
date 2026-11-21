@@ -154,6 +154,16 @@ Bridge 是运行在 **Windows 副屏（x 轴 `-1440..0`，竖屏 1440×2560）**
   - 单测：新增 `tests/test_m4_4_focus_option_a.py`（24 条），全量 319 条 `rc=0`
   - 副发现（未修，下轮）：DeepSeek 开启深度思考时推理正文会混进 `uia_delta` 结果
     （「已思考（用时 N 秒）」头先被 base 噪声正则删掉，`strip_thinking_sections` 失去边界）
+- [ ] **M4-5（GUI 体验修复）**：修复 `bridge_gui.pyw` 两处实机观感问题
+  - 修复「执行器 Profile」下拉框白底浅灰字对比度过低问题（改为深色高对比样式，readonly 状态下清晰可读）
+  - 修复底部实时日志区长行右侧截断问题（合理换行/水平滚动并保证最新行自动滚底）
+  - 补齐对应离线单测
+- [ ] **M4-6（DeepSeek CoT 正文净化）**：修复 DeepSeek 开启深度思考时推理正文混入 `uia_delta`
+  - 在 `DEFAULT_NOISE_REGEXES` 删除「已思考（用时 N 秒）」之前保留边界并精准剥离思考段落，只返回最终回答正文
+  - 补充包含真实思考头与多段推理正文的离线回归单测
+- [ ] **M4-7（架构瘦身与单测卫生）**：消除 `scripts/auto_heal_loop.py` 与 `bridge.py` 重复控制逻辑
+  - 将两处重复的 PID 存活探测、`StateMachine` 原子落盘、`docs/ROADMAP.md` 解析与 `runs/STOP` 控制抽离到独立模块 `engine/daemon_state.py`，两端统一导入（100% 保持既有函数名与 CLI 行为兼容）
+  - 隔离既有旧单测 `test_green_suite_commits_and_respects_no_push` 的 `RUNS` 路径（不改任何断言，只避免写脏真实 `runs/state_machine.json`）
 
 ## 5. 维护约定
 
@@ -161,5 +171,3 @@ Bridge 是运行在 **Windows 副屏（x 轴 `-1440..0`，竖屏 1440×2560）**
 2. 新增工作项必须写进本文件再动手，禁止只写在 `runs/` 的临时 todo 里。
 3. 子说明用普通 `- ` 列表（**不要**写成 `- [ ]`），否则会被计为未完成主线项。
 4. 全部主项收口后，在本文件末尾另起一行写 `ALL_DONE`，调度器会立即优雅退出。
-
-ALL_DONE
