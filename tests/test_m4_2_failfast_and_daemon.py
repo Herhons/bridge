@@ -298,16 +298,25 @@ class BlockingPopupFailFastTests(unittest.TestCase):
             driver = self._driver(tmp, "gemini", nodes)
             self._assert_blocked(driver, "帮我审一下这段代码", "解锁 4 carbon")
 
-    def test_antigravity_request_review_aborts_the_wait(self):
-        # Only the dialog title is present, so this proves "Request Review"
-        # alone is enough to trip the detector (not just the body wording).
+    def test_antigravity_permission_dialog_aborts_the_wait(self):
         nodes = [
-            UINode(role="TextControl", name="Request Review", rect=(10, 10, 200, 24)),
-            UINode(role="ButtonControl", name="Continue", rect=(10, 70, 160, 30)),
+            UINode(role="TextControl", name="Waiting for user input", rect=(10, 10, 240, 24)),
+            UINode(role="ButtonControl", name="Yes, allow this time", rect=(10, 70, 160, 30)),
         ]
         with tempfile.TemporaryDirectory() as tmp:
             driver = self._driver(tmp, "antigravity", nodes)
-            self._assert_blocked(driver, "修一下这个函数", "request review")
+            self._assert_blocked(driver, "修一下这个函数", "waiting for user input")
+
+    def test_request_review_button_is_not_a_blocking_popup(self):
+        """v0.2.5 M4-3: it is a permanently visible button, not a dialog."""
+        nodes = [
+            UINode(role="ButtonControl", name="Request Review", rect=(1100, 900, 120, 30)),
+            UINode(role="EditControl", name="Ask anything", rect=(10, 700, 500, 40)),
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            driver = self._driver(tmp, "antigravity", nodes)
+            self.assertEqual(driver.detect_blocking_popup(_snap(nodes)), "")
+            self.assertNotIn("request review", driver.blocking_popup_patterns())
 
     def test_normal_snapshot_is_not_flagged(self):
         nodes = [
@@ -335,8 +344,9 @@ class BlockingPopupFailFastTests(unittest.TestCase):
             self.assertEqual(hit, "自定义付费墙")
 
     def test_defaults_cover_the_live_paywall_and_permission_wording(self):
-        for needle in ("解锁 4 carbon", "us$99.99", "waiting for user input", "request review"):
+        for needle in ("解锁 4 carbon", "us$99.99", "waiting for user input", "allow check "):
             self.assertIn(needle, DEFAULT_BLOCKING_POPUP_PATTERNS)
+        self.assertNotIn("request review", DEFAULT_BLOCKING_POPUP_PATTERNS)
 
 
 class GeminiCouncilPolicyTests(unittest.TestCase):

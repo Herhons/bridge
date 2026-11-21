@@ -16,6 +16,7 @@ import re
 import time
 import uuid
 from collections import Counter
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any, Callable, Iterable
 
@@ -627,6 +628,7 @@ def set_node_text(
     chunk_size: int = 0,
     prefer_paste: bool = False,
     paste_fn: Callable[[UINode, str], None] | None = None,
+    icebreaker: bool = False,
 ) -> str:
     ctrl = node.control
     if not prefer_paste and ctrl is not None and chunk_size <= 0:
@@ -648,7 +650,9 @@ def set_node_text(
     if not headed:
         raise UIAError("POLICY_DENIED", "Headless text write unavailable; retry with headed=True")
 
-    _headed_paste_text(node, text, chunk_size=chunk_size)
+    _headed_paste_text(
+        node, text, chunk_size=chunk_size, icebreaker=icebreaker
+    )
     return "headed:paste_chunked" if chunk_size > 0 and len(text) > chunk_size else "headed:paste"
 
 
@@ -806,6 +810,107 @@ def get_clipboard() -> str:
         user32.CloseClipboard()
 
 
+def _clipboard_has_text() -> bool:
+    if os.name != "nt":
+        return False
+    try:
+        import ctypes
+
+        return bool(ctypes.windll.user32.IsClipboardFormatAvailable(13))
+    except Exception:
+        return False
+
+
+def _clipboard_is_empty() -> bool:
+    """True when the clipboard holds no format at all (safe to restore to "")."""
+    if os.name != "nt":
+        return False
+    try:
+        import ctypes
+
+        return int(ctypes.windll.user32.EnumClipboardFormats(0) or 0) == 0
+    except Exception:
+        return False
+
+
+def backup_clipboard(
+    *,
+    read_fn: Callable[[], str] | None = None,
+    has_text_fn: Callable[[], bool] | None = None,
+    is_empty_fn: Callable[[], bool] | None = None,
+) -> dict[str, Any]:
+    """Snapshot the user's clipboard before automation writes to it.
+
+    Three outcomes matter: text (restore verbatim), truly empty (restore to
+    empty), or *non-text content* such as a copied image, which this module
+    cannot reproduce — that one is reported ``restorable=False`` instead of
+    silently overwriting it with an empty string.
+    """
+    read = read_fn or get_clipboard
+    has_text = has_text_fn or _clipboard_has_text
+    is_empty = is_empty_fn or _clipboard_is_empty
+    try:
+        had_text = bool(has_text())
+    except Exception:
+        had_text = False
+    try:
+        empty = bool(is_empty())
+    except Exception:
+        empty = False
+    text = ""
+    if had_text:
+        try:
+            text = read() or ""
+        except Exception:
+            text = ""
+    restorable = bool(had_text or empty)
+    return {
+        "had_text": had_text,
+        "empty": empty and not had_text,
+        "text": text,
+        "restorable": restorable,
+        "reason": "" if restorable else "non_text_content",
+    }
+
+
+def restore_clipboard(
+    backup: dict[str, Any] | None,
+    *,
+    write_fn: Callable[[str], None] | None = None,
+) -> bool:
+    """Put a :func:`backup_clipboard` snapshot back; False when not possible."""
+    if not backup or not backup.get("restorable"):
+        return False
+    write = write_fn or set_clipboard
+    try:
+        write(str(backup.get("text") or ""))
+        return True
+    except Exception:
+        return False
+
+
+@contextmanager
+def preserved_clipboard(
+    *,
+    read_fn: Callable[[], str] | None = None,
+    has_text_fn: Callable[[], bool] | None = None,
+    is_empty_fn: Callable[[], bool] | None = None,
+    write_fn: Callable[[str], None] | None = None,
+) -> Iterable[dict[str, Any]]:
+    """Clipboard "plan A": back up before the block, restore in ``finally``.
+
+    Wrapping every paste path keeps the operator's clipboard intact whether the
+    write succeeds, raises, or times out mid-way.
+    """
+    backup = backup_clipboard(
+        read_fn=read_fn, has_text_fn=has_text_fn, is_empty_fn=is_empty_fn
+    )
+    try:
+        yield backup
+    finally:
+        restore_clipboard(backup, write_fn=write_fn)
+
+
 def send_hotkey(*keys: str) -> None:
     if os.name != "nt":
         raise UIAError("PLATFORM_UNSUPPORTED", "Hotkeys require Windows")
@@ -819,6 +924,8 @@ def send_hotkey(*keys: str) -> None:
         "esc": 0x1B,
         "tab": 0x09,
         "delete": 0x2E,
+        "space": 0x20,
+        "backspace": 0x08,
         "a": 0x41,
         "c": 0x43,
         "v": 0x56,
@@ -836,7 +943,25 @@ def send_hotkey(*keys: str) -> None:
         time.sleep(0.02)
 
 
-def _headed_paste_text(node: UINode, text: str, *, chunk_size: int = 0) -> None:
+def _icebreaker_keystroke() -> None:
+    """One harmless space + backspace to wake a composer that ignores paste.
+
+    Some web composers only start accepting input after a real keystroke; the
+    space is deleted immediately so nothing is left behind.
+    """
+    send_hotkey("space")
+    time.sleep(0.03)
+    send_hotkey("backspace")
+    time.sleep(0.05)
+
+
+def _headed_paste_text(
+    node: UINode,
+    text: str,
+    *,
+    chunk_size: int = 0,
+    icebreaker: bool = False,
+) -> None:
     center = node.center
     if center is not None:
         _physical_click(*center)
@@ -846,15 +971,18 @@ def _headed_paste_text(node: UINode, text: str, *, chunk_size: int = 0) -> None:
             node.control.SetFocus()
         except Exception:
             pass
+    if icebreaker:
+        _icebreaker_keystroke()
     send_hotkey("ctrl", "a")
     time.sleep(0.05)
     send_hotkey("delete")
     time.sleep(0.05)
-    for chunk in _split_chunks(text, chunk_size):
-        set_clipboard(chunk)
-        time.sleep(0.05)
-        send_hotkey("ctrl", "v")
-        time.sleep(0.25)
+    with preserved_clipboard():
+        for chunk in _split_chunks(text, chunk_size):
+            set_clipboard(chunk)
+            time.sleep(0.05)
+            send_hotkey("ctrl", "v")
+            time.sleep(0.25)
 
 
 def click_ratio_and_paste(window_rect: tuple[int, int, int, int], ratio_xy: tuple[float, float], text: str, *, chunk_size: int = 0) -> None:
@@ -867,12 +995,13 @@ def click_ratio_and_paste(window_rect: tuple[int, int, int, int], ratio_xy: tupl
     time.sleep(0.05)
     send_hotkey("delete")
     time.sleep(0.05)
-    for chunk in _split_chunks(text, chunk_size):
-        set_clipboard(chunk)
-        time.sleep(0.05)
-        send_hotkey("ctrl", "v")
-        time.sleep(0.25)
-    send_hotkey("enter")
+    with preserved_clipboard():
+        for chunk in _split_chunks(text, chunk_size):
+            set_clipboard(chunk)
+            time.sleep(0.05)
+            send_hotkey("ctrl", "v")
+            time.sleep(0.25)
+        send_hotkey("enter")
 
 
 def upload_via_file_dialog(file_path: str, *, timeout: float = 8.0) -> str:
@@ -891,22 +1020,28 @@ def upload_via_file_dialog(file_path: str, *, timeout: float = 8.0) -> str:
                 if not edit.Exists(0.15, 0.05):
                     edit = dlg.EditControl()
                 if edit.Exists(0.15, 0.05):
-                    edit.SetFocus()
-                    time.sleep(0.1)
-                    set_clipboard(abs_path)
-                    time.sleep(0.05)
-                    send_hotkey("ctrl", "a")
-                    time.sleep(0.05)
-                    send_hotkey("ctrl", "v")
-                    time.sleep(0.15)
-                    send_hotkey("enter")
-                    time.sleep(0.4)
-                    if dlg.Exists(0.15, 0.05):
-                        for btn_name in ("打开(O)", "打开", "Open"):
-                            ob = dlg.ButtonControl(Name=btn_name)
-                            if ob.Exists(0.15, 0.05):
-                                ob.Click()
-                                break
+                    backup = backup_clipboard()
+                    try:
+                        edit.SetFocus()
+                        time.sleep(0.1)
+                        set_clipboard(abs_path)
+                        time.sleep(0.05)
+                        send_hotkey("ctrl", "a")
+                        time.sleep(0.05)
+                        send_hotkey("ctrl", "v")
+                        time.sleep(0.15)
+                        send_hotkey("enter")
+                        time.sleep(0.4)
+                        if dlg.Exists(0.15, 0.05):
+                            for btn_name in ("打开(O)", "打开", "Open"):
+                                ob = dlg.ButtonControl(Name=btn_name)
+                                if ob.Exists(0.15, 0.05):
+                                    ob.Click()
+                                    break
+                    finally:
+                        # Plan A: the dialog already consumed the path, so the
+                        # operator's clipboard goes back the way it was.
+                        restore_clipboard(backup)
                     return "uia:file_dialog"
         time.sleep(0.2)
     raise UIAError("DIALOG_NOT_FOUND", f"File dialog did not appear within {timeout:.1f}s")

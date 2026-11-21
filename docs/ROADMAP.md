@@ -58,19 +58,39 @@ Bridge 是运行在 **Windows 副屏（x 轴 `-1440..0`，竖屏 1440×2560）**
     回落前先比对工作区指纹，上一级已写完代码但没回执时**停止回落**交单测门禁，杜绝双发；
     `auto` 链遇到冷却中的 opencode 记 `executor_skip=opencode reason=cooldown_active` 直接跳过
   - 阻断弹窗速败：`engine/base.py` 新增 `blocking_popup_patterns`（默认覆盖 `解锁 4 Carbon` /
-    `US$99.99` / `升级到` / `Waiting for user input` / `Yes, allow this time` / `Request Review`，
+    `US$99.99` / `升级到` / `Waiting for user input` / `Yes, allow this time` / `Allow check `，
     可按端点在 `config/endpoints.json` 扩展），`ask()` 在发写前与等待循环内命中即返回
     `error="blocking_popup"`，账本记 `failed_retryable` 不锁死
+    （M4-3 已把误报的裸词 `Request Review` 移出词表：它是常驻按钮，不是弹窗）
   - Gemini `council` 从付费墙档位 `carbon` 改为 `flash`（`carbon` 仍保留在 `models` 中供 `--model` 手动使用）
   - 遗留：`deepseek / grok` 网页版 `--profile council` 下拉最高可用模型的**真机**校准仍需真实窗口，
-    并入 M4-3 一并收口
-- [ ] **M4-3（P1）**：剪贴板与窗口层收编
-  - 真机校准 `deepseek / grok` 的 `--profile council` 最高可用模型（`available_options=[]` 待修）
-  - 剪贴板「方案 A」：粘贴前备份、粘贴后无损还原，破冰键入后再粘贴（防输入框未激活 bug）
-  - 主屏 `GetForegroundWindow()` 防抢焦点运行时门禁
-  - 真机验证 `#32770` 修复后的 Gemini `--attach` 闭环
-  - DeepSeek 过滤思考过程（CoT），只取最终正文
-  - 副屏 `SetWindowPos + SWP_NOACTIVATE` 无感平铺收编进 `engine/window.py`
+    顺延到 M4-4
+- [x] **M4-3（P1）**：剪贴板与窗口层收编
+  - 剪贴板「方案 A」：`engine/uia.py` 新增 `backup_clipboard` / `restore_clipboard` /
+    `preserved_clipboard()`，`_headed_paste_text`、`click_ratio_and_paste`、
+    `upload_via_file_dialog` 三条粘贴路径全部改为先备份、`finally` 无损还原；
+    非文本剪贴板（图片等）标记 `restorable=False` 而不是用空串覆盖
+  - 破冰键入：端点配置项 `icebreaker_before_paste: true`，粘贴前发一次 space+backspace
+  - 主屏焦点运行时门禁：`engine/window.py` 新增 `FocusGuard` / `foreground_hwnd` /
+    `is_on_primary_screen`；`focus_window`、ratio 粘贴、composer 写入三处均纳入门禁，
+    事件写 `warnings.focus_guard:primary_lost:0x..->0x..`，`focus_guard_strict: true` 时
+    在提交前返回 `error="focus_taken"`
+  - DeepSeek 去思考：`endpoints/deepseek.py` 新增 `strip_thinking_sections`，base 过滤前后
+    各剥一次（`已思考（用时 N 秒）` 会被 base 噪声正则先删掉，故必须先剥再交给 base）
+  - 副屏平铺：`tile_windows_on_secondary_screen()` 用 `SetWindowPos + SWP_NOACTIVATE |
+    SWP_NOZORDER` 纵向平铺，坐标全部来自副屏 bounds（自动读 `right <= 0` 的显示器）
+  - 真机验证（2026-11-21 13:20，证据 `runs/m4_3_attach_verify.txt`）：
+    **剪贴板已验无损还原**（2598 字符逐字节一致）；**Gemini `--attach` 未闭环**——
+    当时快照里 composer 与“上传和工具”按钮都不在 AX 树（可见区仅剩正文 + 打开边栏/设置），
+    `attach_menu_item` 必然找不到，#32770 从未被触发，故“空框卡死”既未复现也未证伪
+  - 另发现（如实记录）：`--headed` 的 `focus_window` 把主屏前台（斗鱼客户端 529300）抢到
+    副屏 Gemini(332038)；本轮已把该调用纳入 `FocusGuard`，但 `focus_guard_strict` 默认关闭，
+    故本次仍实际抢了焦点
+- [ ] **M4-4（P0）**：Gemini 附件真机闭环 + 焦点严格门禁默认化
+  - composer 可见性前置检查（滚到底/等待输入区就绪）后再触发 `--attach`，把 `#32770`
+    空框问题一次验穿，证据补进 `runs/m4_3_attach_verify.txt`
+  - 真机回归统一开启 `focus_guard_strict: true`，让抢主屏焦点直接失败而非静默发生
+  - 真机校准 `deepseek / grok` 的 `--profile council` 最高可用模型（`available_options=[]`）
 
 ## 5. 维护约定
 

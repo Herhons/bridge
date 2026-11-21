@@ -70,7 +70,14 @@ from engine.uia import (
     upload_via_file_dialog,
 )
 from engine.vision import capture_window, match_template
-from engine.window import WindowInfo, find_window, focus_window, launch_app_id, launch_url_in_chrome
+from engine.window import (
+    FocusGuard,
+    WindowInfo,
+    find_window,
+    focus_window,
+    launch_app_id,
+    launch_url_in_chrome,
+)
 
 EXIT_CODES = {
     "ok": 0,
@@ -96,10 +103,12 @@ DEFAULT_BLOCKING_POPUP_PATTERNS: tuple[str, ...] = (
     "unlock 4 carbon",
     "us$99.99",
     "升级到",
-    # Antigravity / web permission confirmation.
+    # Antigravity / web permission confirmation. "Request Review" is
+    # deliberately absent: it is a permanently visible button in the lower-right
+    # corner, so matching it fired on every normal conversation.
     "waiting for user input",
     "yes, allow this time",
-    "request review",
+    "allow check ",
     # Generic paid-wall wording.
     "upgrade to continue",
     "升级以继续",
@@ -271,6 +280,8 @@ class EndpointDriver:
         self._lock_path = lock_path
         self._evidence_dir = evidence_dir or (RUNS_DIR / "fail")
         self.ledger = SubmissionLedger(ledger_path) if ledger_path is not None else SubmissionLedger()
+        #: Last ``focus_guard:*`` diagnostic; "" when focus stayed put.
+        self.last_focus_event = ""
 
     # ----------------------------------------------------------------- helpers
     def _send_hotkey_safe(self, *keys: str) -> None:
@@ -512,6 +523,47 @@ class EndpointDriver:
                     return opt
 
         return None
+
+    # ------------------------------------------------------- focus / write guard
+    def focus_guard_strict(self) -> bool:
+        """Whether losing primary-screen focus must abort instead of just warn."""
+        return bool(self.cfg.get("focus_guard_strict", False))
+
+    def _focus_taken_payload(self, clean_prompt: str, warnings, where: str) -> dict[str, Any]:
+        """Structured block for a strict-mode focus takeover (nothing submitted)."""
+        self.ledger.mark(
+            clean_prompt, self.name, "failed_retryable", note="focus_taken"
+        )
+        return {
+            "ok": False,
+            "endpoint": self.name,
+            "error": "focus_taken",
+            "message": (
+                "primary-screen focus was taken (%s); strict focus guard "
+                "blocked the submit" % where
+            ),
+            "focus_event": self.last_focus_event,
+            "warnings": list(warnings or []),
+            "reply": "",
+        }
+
+    def guarded_write(self, fn, *args, warnings=None, **kwargs):
+        """Run one window/paste action under a :class:`FocusGuard`.
+
+        The guard is always diagnostic: a takeover is appended to ``warnings``
+        as ``focus_guard:primary_lost:0x..->0x..`` and remembered on the driver
+        as ``self.last_focus_event``. Blocking is decided by the caller with
+        :meth:`focus_guard_strict`, so a single focus blip cannot silently kill
+        an otherwise valid send while a strict run still refuses to submit.
+        """
+        guard = FocusGuard()
+        with guard:
+            result = fn(*args, **kwargs)
+        if warnings is not None:
+            warnings.extend(guard.warnings())
+        if guard.taken:
+            self.last_focus_event = guard.diagnostics[-1]
+        return result
 
     def blocking_popup_patterns(self) -> tuple[str, ...]:
         """Default paywall/permission wording plus this endpoint's own entries.
@@ -1111,8 +1163,15 @@ class EndpointDriver:
                 }
 
             if use_headed:
-                focus_window(win.hwnd)
+                # Focus activation is itself a key action: snapshot it so a
+                # strict run can refuse to submit after stealing the primary
+                # screen, and a normal run records the event in ``warnings``.
+                self.guarded_write(focus_window, win.hwnd, warnings=warnings)
                 self._sleep(0.2)
+                if self.focus_guard_strict() and self.last_focus_event:
+                    return self._focus_taken_payload(
+                        clean_prompt, warnings, "headed focus"
+                    )
 
             before_meta = self.pre_send_meta(win)
             before_snap: Snapshot | None = None
@@ -1191,9 +1250,18 @@ class EndpointDriver:
                     if wrect is None:
                         raise UIAError("NO_GEOMETRY", "Window geometry unavailable for ratio fallback")
                     focus_window(win.hwnd)
-                    click_ratio_and_paste(wrect, tuple(fallback_ratio), clean_prompt, chunk_size=chunk_size)
+                    self.guarded_write(
+                        click_ratio_and_paste,
+                        wrect, tuple(fallback_ratio), clean_prompt,
+                        chunk_size=chunk_size,
+                        warnings=warnings,
+                    )
                     write_method = "ratio:paste"
                     submit_method = "ratio:enter"
+                    if self.focus_guard_strict() and self.last_focus_event:
+                        return self._focus_taken_payload(
+                            clean_prompt, warnings, "ratio paste"
+                        )
                 else:
                     if self._write_fn is not None:
                         write_method = self._write_fn(composer, clean_prompt, use_headed, chunk_size)
@@ -1205,6 +1273,7 @@ class EndpointDriver:
                                 headed=use_headed,
                                 chunk_size=chunk_size,
                                 prefer_paste=prefer_paste,
+                                icebreaker=bool(self.cfg.get("icebreaker_before_paste", False)),
                             )
                         except UIAError:
                             focus_window(win.hwnd)
@@ -1214,8 +1283,14 @@ class EndpointDriver:
                                 headed=True,
                                 chunk_size=chunk_size,
                                 prefer_paste=True,
+                                icebreaker=bool(self.cfg.get("icebreaker_before_paste", False)),
                             )
                             use_headed = True
+
+                    if self.focus_guard_strict() and self.last_focus_event:
+                        return self._focus_taken_payload(
+                            clean_prompt, warnings, "composer write"
+                        )
 
                     if confirm:
                         if not self._confirm_fn(self.name, clean_prompt, effective_model):
