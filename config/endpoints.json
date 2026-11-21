@@ -308,10 +308,23 @@
           "roles": [
             "ButtonControl"
           ],
+          "names": [
+            "上传和工具",
+            "上传文件",
+            "添加文件",
+            "Upload and tools",
+            "Add files"
+          ],
           "name_contains": [
             "上传和工具",
             "Upload",
             "添加文件"
+          ],
+          "anchor_box_ratio": [
+            0.04,
+            0.55,
+            0.99,
+            0.99
           ]
         },
         "attach_menu_item": {
@@ -322,14 +335,17 @@
           ],
           "name_contains": [
             "上传文件",
-            "Upload file"
+            "Upload file",
+            "从设备上传",
+            "Upload from device"
           ]
         }
       },
       "templates": {
         "send_button": "gem_send_on",
         "new_chat": "gem_newchat"
-      }
+      },
+      "attach_dialog_timeout": 12.0
     },
     "grok": {
       "kind": "web",
@@ -627,15 +643,22 @@
           "roles": [
             "ButtonControl"
           ],
+          "names": [
+            "上传附件",
+            "添加附件",
+            "上传文件",
+            "Attach files",
+            "Upload files"
+          ],
           "name_contains": [
             "上传",
             "附件",
             "Upload"
           ],
           "anchor_box_ratio": [
-            0.15,
-            0.72,
-            0.96,
+            0.04,
+            0.62,
+            0.99,
             0.99
           ]
         }
@@ -643,7 +666,8 @@
       "templates": {
         "send_button": "ds_send_on",
         "new_chat": "ds_newchat"
-      }
+      },
+      "attach_dialog_timeout": 12.0
     },
     "codex": {
       "kind": "desktop",

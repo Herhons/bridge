@@ -25,6 +25,8 @@ RUNS = ROOT / "runs"
 PYTHON = sys.executable
 
 TIMEOUT_RC = 124
+EXECUTOR_CHOICES: tuple[str, ...] = ("auto", "workbuddy", "opencode")
+EXECUTOR_FALLBACK = {"workbuddy": "opencode", "opencode": "workbuddy"}
 TASK_RE = re.compile(
     r"<<<WORKBUDDY_TASK_START>>>(.*?)<<<WORKBUDDY_TASK_END>>>", re.S
 )
@@ -414,24 +416,109 @@ def request_task_from_gemini(
     return reply
 
 
-def call_workbuddy(task_card: str, attempt: int, timeout: float) -> str:
-    task_file = RUNS / ("workbuddy_task_round%d.md" % attempt)
-    saved = RUNS / ("workbuddy_reply_round%d.txt" % attempt)
+def _executor_header(executor: str, endpoint: str) -> str:
+    """One-line dispatch hint so the agent knows who else may pick this up."""
+    fallback = EXECUTOR_FALLBACK.get(endpoint, "none")
+    return "[executor] mode=%s endpoint=%s fallback=%s\n" % (
+        executor, endpoint, fallback
+    )
+
+
+def _ask_endpoint(
+    endpoint: str,
+    task_card: str,
+    attempt: int,
+    timeout: float,
+    *,
+    executor: str = "",
+) -> str:
+    task_file = RUNS / ("%s_task_round%d.md" % (endpoint, attempt))
+    saved = RUNS / ("%s_reply_round%d.txt" % (endpoint, attempt))
     task_file.parent.mkdir(parents=True, exist_ok=True)
-    task_file.write_text(scheduler_notice() + task_card, encoding="utf-8")
+    header = scheduler_notice()
+    if executor:
+        header += _executor_header(executor, endpoint)
+    task_file.write_text(header + task_card, encoding="utf-8")
     bridge_timeout = max(30, int(timeout - 30))
     cmd = [
-        PYTHON, str(BRIDGE), "ask", "workbuddy", "",
+        PYTHON, str(BRIDGE), "ask", endpoint, "",
         "--file", str(task_file),
         "--profile", "test", "--headed",
         "--timeout", str(bridge_timeout), "--json", "--save", str(saved),
     ]
     rc, output = run_cmd(cmd, timeout=timeout, cwd=ROOT)
+    if rc != 0:
+        # A non-zero bridge rc means the UI run failed; never let partial
+        # stdout masquerade as a usable reply.
+        log("%s rc=%s (no reply accepted)" % (endpoint, rc), "ERROR")
+        return ""
     reply = parse_reply(rc, output, saved)
     if not reply:
-        reply = read_reply("workbuddy", saved, timeout=60)
-    log("workbuddy rc=%s reply_chars=%d" % (rc, len(reply)))
+        reply = read_reply(endpoint, saved, timeout=60)
+    log("%s rc=%s reply_chars=%d" % (endpoint, rc, len(reply)))
     return reply
+
+
+def call_workbuddy(
+    task_card: str,
+    attempt: int,
+    timeout: float,
+    *,
+    executor: str = "",
+) -> str:
+    return _ask_endpoint(
+        "workbuddy", task_card, attempt, timeout, executor=executor
+    )
+
+
+def call_opencode(
+    task_card: str,
+    attempt: int,
+    timeout: float,
+    *,
+    executor: str = "",
+) -> str:
+    return _ask_endpoint(
+        "opencode", task_card, attempt, timeout, executor=executor
+    )
+
+
+def call_executor(
+    task_card: str,
+    attempt: int,
+    timeout: float,
+    executor: str = "auto",
+) -> str:
+    """Dispatch a task card, falling back between WorkBuddy and OpenCode.
+
+    ``auto`` tries WorkBuddy first and falls back to OpenCode when WorkBuddy
+    returns an empty reply or a non-zero bridge rc. Explicit executors never
+    fall back, so an operator can pin one target.
+    """
+    mode = (executor or "auto").strip().lower()
+    if mode not in EXECUTOR_CHOICES:
+        raise ValueError(
+            "unknown executor %r (choose from %s)"
+            % (executor, ", ".join(EXECUTOR_CHOICES))
+        )
+    order = (
+        ["workbuddy", EXECUTOR_FALLBACK["workbuddy"]]
+        if mode == "auto" else [mode]
+    )
+    for endpoint in order:
+        if endpoint == "opencode":
+            reply = call_opencode(
+                task_card, attempt, timeout, executor=mode
+            )
+        else:
+            reply = call_workbuddy(
+                task_card, attempt, timeout, executor=mode
+            )
+        if reply:
+            log("executor_hit=%s round=%d" % (endpoint, attempt))
+            return reply
+        log("executor_hit=none round=%d endpoint=%s" % (attempt, endpoint), "ERROR")
+    return ""
 
 
 def run_tests(timeout: float) -> tuple[int, str]:
@@ -540,6 +627,7 @@ def run_overnight(
     timeout: float = 300,
     sleep: float = 60,
     delay_start: float = 0,
+    executor: str = "auto",
 ) -> int:
     """Multi-round overnight loop: red -> self-heal, green -> next task."""
     global LOG_NAMES
@@ -614,7 +702,9 @@ def run_overnight(
                 (RUNS / ("overnight_accepted_task_round%d.md" % round_no)).write_text(
                     card, encoding="utf-8"
                 )
-                wb_reply = call_workbuddy(card, round_no, timeout)
+                wb_reply = call_executor(
+                    card, round_no, timeout, executor=executor
+                )
                 log("round %d: workbuddy reply_chars=%d" % (round_no, len(wb_reply)))
                 post_rc, _ = run_tests(timeout)
                 if post_rc != 0:
@@ -700,6 +790,8 @@ def build_parser() -> argparse.ArgumentParser:
                         help="seconds between overnight rounds")
     parser.add_argument("--delay-start", type=float, default=0,
                         help="seconds to wait before the first round")
+    parser.add_argument("--executor", choices=EXECUTOR_CHOICES, default="auto",
+                        help="overnight task executor (auto falls back)")
     return parser
 
 
@@ -713,6 +805,7 @@ def main(argv: list[str] | None = None) -> int:
                 timeout=args.timeout,
                 sleep=args.sleep,
                 delay_start=args.delay_start,
+                executor=args.executor,
             )
         return heal(
             max_retries=args.max_retries,
