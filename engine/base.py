@@ -1487,56 +1487,20 @@ class EndpointDriver:
         poll = float(self.bridge_cfg.get("poll_interval", 0.5))
         stable_need = float(self.cfg.get("stable_seconds", self.bridge_cfg.get("stable_seconds", 2.5)))
         use_headed = (not self.bridge_cfg.get("headless_default", True)) if headed is None else bool(headed)
-        min_rel_x = float(self.cfg.get("content_min_rel_x", 0.0))
-        max_rel_x = float(self.cfg.get("content_max_rel_x", 1.0))
-        prefer_paste = bool(self.cfg.get("prefer_paste", False))
-        require_receipt = bool(self.cfg.get("require_send_receipt", False))
-        require_new_copy = bool(self.cfg.get("require_new_copy_button", False))
-
-        # Resolve --profile into effective model + free_only guard
-        effective_model = model
-        effective_free_only = bool(free_only)
-        if profile:
-            try:
-                prof_model, prof_free = resolve_profile(self.name, profile, policy=self.model_policy)
-            except ValueError as exc:
-                return {"ok": False, "endpoint": self.name, "error": "invalid_profile", "message": str(exc), "reply": ""}
-            if not effective_model:
-                effective_model = prof_model
-            if prof_free:
-                effective_free_only = True
-
-        raw_attach = [attach] if isinstance(attach, str) else list(attach or [])
-        attach_paths: list[str] = []
-        for entry in raw_attach:
-            for part in str(entry).split(","):
-                if part.strip():
-                    attach_paths.append(str(Path(part.strip())))
-        for ap in attach_paths:
-            if not Path(ap).is_file():
-                return {"ok": False, "endpoint": self.name, "error": "missing_resource", "message": f"Attachment not found: {ap}", "reply": ""}
-        if attach_paths and not ((self.cfg.get("selectors") or {}).get("attach_button")):
-            raise NotImplementedError(
-                "endpoint %s has no attach_button selector; --attach is not supported"
-                % self.name
-            )
-
-        clean_prompt = self.prepare_prompt(prompt)
-        if not clean_prompt.strip():
-            return {"ok": False, "endpoint": self.name, "error": "empty_prompt", "reply": ""}
-
-        if not force:
-            allowed, prev_state = self.ledger.check(clean_prompt, self.name)
-            if not allowed:
-                return {
-                    "ok": False,
-                    "endpoint": self.name,
-                    "error": "duplicate",
-                    "previous_state": prev_state,
-                    "ledger_key": self.ledger.key(clean_prompt, self.name),
-                    "message": f"Duplicate prompt blocked (state={prev_state}); pass --force or clear ledger to resend",
-                    "reply": "",
-                }
+        prepared_error, prepared = self._prepare_ask_inputs(
+            prompt,
+            profile=profile,
+            model=model,
+            free_only=free_only,
+            attach=attach,
+            force=force,
+        )
+        if prepared_error is not None:
+            return prepared_error
+        clean_prompt = prepared["clean_prompt"]
+        effective_model = prepared["effective_model"]
+        effective_free_only = prepared["effective_free_only"]
+        attach_paths = prepared["attach_paths"]
 
         model_switch_info: dict[str, Any] | None = None
         attach_methods: list[str] = []
@@ -1575,226 +1539,416 @@ class EndpointDriver:
                         )
 
             before_meta = self.pre_send_meta(win)
-            before_snap: Snapshot | None = None
+            submitted_error, submitted = self._submit_prompt_to_window(
+                win,
+                None,
+                clean_prompt,
+                use_headed=use_headed,
+                effective_model=effective_model,
+                confirm=confirm,
+                warnings=warnings,
+                profile=profile,
+                started=started,
+                new_chat=new_chat,
+                effective_free_only=effective_free_only,
+                attach_paths=attach_paths,
+                attach_methods=attach_methods,
+                model_switch_info=model_switch_info,
+            )
+            if submitted_error is not None:
+                return submitted_error
+            before_snap = submitted["before_snap"]
+            write_method = submitted["write_method"]
+            submit_method = submitted["submit_method"]
+            use_headed = submitted["use_headed"]
+            model_switch_info = submitted["model_switch_info"]
+            attach_methods = submitted["attach_methods"]
+
+        return self._await_reply_convergence(
+            win,
+            before_snap,
+            before_meta,
+            clean_prompt,
+            started=started,
+            budget=budget,
+            poll=poll,
+            stable_need=stable_need,
+            use_headed=use_headed,
+            write_method=write_method,
+            submit_method=submit_method,
+            effective_model=effective_model,
+            profile=profile,
+            model_switch_info=model_switch_info,
+            attach_paths=attach_paths,
+            attach_methods=attach_methods,
+            warnings=warnings,
+        )
+
+    # -- ask() phases (M4-10) -------------------------------------------
+    def _prepare_ask_inputs(
+        self,
+        prompt: str,
+        *,
+        profile: str | None,
+        model: str | None,
+        free_only: bool,
+        attach: list[str] | None,
+        force: bool,
+    ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+        """Stage 1 — resolve ``--profile``/attach and gate the ledger.
+
+        Returns ``(error_payload, inputs)``: a non-None payload is a *final*
+        ``ask()`` result (invalid profile, missing attachment, empty prompt,
+        duplicate submission) and the caller must return it verbatim. Inputs
+        hold ``clean_prompt`` / ``effective_model`` / ``effective_free_only`` /
+        ``attach_paths``. The unsupported-attach case still raises, exactly as
+        before: it is a programming error, not an agent-level failure.
+        """
+        # Resolve --profile into effective model + free_only guard
+        effective_model = model
+        effective_free_only = bool(free_only)
+        if profile:
             try:
-                before_snap = self.take_snap(win.hwnd)
-                if before_snap.degraded:
-                    warnings.append(f"snapshot_degraded:{before_snap.degraded_reason}")
+                prof_model, prof_free = resolve_profile(self.name, profile, policy=self.model_policy)
+            except ValueError as exc:
+                return {"ok": False, "endpoint": self.name, "error": "invalid_profile", "message": str(exc), "reply": ""}, {}
+            if not effective_model:
+                effective_model = prof_model
+            if prof_free:
+                effective_free_only = True
 
-                if new_chat:
-                    nc = self._find_new_chat_button(before_snap)
-                    if nc is not None:
-                        with self._borrowed_focus(win, warnings=warnings, allow=use_headed):
-                            self._click_or_fallback(nc, win.hwnd, self.cfg.get("templates", {}).get("new_chat"), headed=use_headed)
-                        self._sleep(0.8)
-                        before_snap = self.take_snap(win.hwnd)
+        raw_attach = [attach] if isinstance(attach, str) else list(attach or [])
+        attach_paths: list[str] = []
+        for entry in raw_attach:
+            for part in str(entry).split(","):
+                if part.strip():
+                    attach_paths.append(str(Path(part.strip())))
+        for ap in attach_paths:
+            if not Path(ap).is_file():
+                return {"ok": False, "endpoint": self.name, "error": "missing_resource", "message": f"Attachment not found: {ap}", "reply": ""}, {}
+        if attach_paths and not ((self.cfg.get("selectors") or {}).get("attach_button")):
+            raise NotImplementedError(
+                "endpoint %s has no attach_button selector; --attach is not supported"
+                % self.name
+            )
 
-                if effective_model or (effective_free_only and self.cfg.get("enforce_free_switch", False)):
-                    target_model = effective_model or "free"
-                    model_switch_info = self.switch_model(
-                        win,
-                        before_snap,
-                        target_model,
-                        headed=use_headed,
-                        free_only=effective_free_only,
-                    )
-                    if model_switch_info.get("blocked_paid"):
-                        return {
-                            "ok": False,
-                            "endpoint": self.name,
-                            "error": "tier_unconfirmed",
-                            "message": f"Free-only guard blocked sending on {self.name} (reason={model_switch_info.get('reason')})",
-                            "profile": profile,
-                            "model_requested": target_model,
-                            "model_switch": model_switch_info,
-                            "reply": "",
-                        }
-                    if model_switch_info.get("switched"):
-                        before_snap = self.take_snap(win.hwnd)
-                    elif model_switch_info.get("attempted"):
-                        warnings.append(f"model_switch_failed:{model_switch_info.get('reason')}")
+        clean_prompt = self.prepare_prompt(prompt)
+        if not clean_prompt.strip():
+            return {"ok": False, "endpoint": self.name, "error": "empty_prompt", "reply": ""}, {}
 
-                # A paywall or permission dialog can appear right after a model
-                # switch; abort before writing anything rather than paste into a
-                # window that will never answer.
-                blocking = self.detect_blocking_popup(before_snap)
-                if blocking:
-                    return self._blocking_popup_payload(
-                        blocking, before_snap, clean_prompt, started, warnings
-                    )
-
-                if attach_paths:
-                    before_snap, not_ready = self._ensure_composer_ready(
-                        win, before_snap, warnings=warnings
-                    )
-                    if not_ready is not None:
-                        self.ledger.mark(
-                            clean_prompt,
-                            self.name,
-                            "failed_retryable",
-                            note="composer_not_ready",
-                        )
-                        return not_ready
-                    attach_methods = self.attach_files(
-                        win, before_snap, attach_paths,
-                        headed=use_headed, warnings=warnings,
-                    )
-                    if self.focus_guard_strict() and self.last_focus_event:
-                        # The upload may be complete, but nothing has been
-                        # submitted yet: abort here rather than type into a
-                        # window we stole from the operator.
-                        return self._focus_taken_payload(
-                            clean_prompt, warnings, "attach click"
-                        )
-                    before_snap = self.take_snap(win.hwnd)
-
-                composer = self._find_composer(before_snap)
-                fallback_ratio = self.cfg.get("fallback_composer_ratio")
-
-                if composer is None and not fallback_ratio:
-                    ev = self._record_failure_evidence("composer_not_found", before_snap)
-                    self.ledger.mark(clean_prompt, self.name, "failed_retryable", note="composer_not_found")
-                    return {
-                        "ok": False,
-                        "endpoint": self.name,
-                        "error": "composer_not_found",
-                        "message": f"No input composer found in {self.name}; page may be on login/loading screen",
-                        "evidence": ev,
-                        "reply": "",
-                    }
-
-                chunk_size = int(self.cfg.get("paste_chunk", 0))
-                if composer is None and fallback_ratio:
-                    if confirm and not self._confirm_fn(self.name, clean_prompt, effective_model):
-                        self.ledger.mark(clean_prompt, self.name, "failed_retryable", note="cancelled_by_user")
-                        return {"ok": False, "endpoint": self.name, "error": "cancelled_by_user", "reply": ""}
-                    self.ledger.mark(clean_prompt, self.name, "submitting")
-                    wrect = before_snap.window_rect
-                    if wrect is None:
-                        raise UIAError("NO_GEOMETRY", "Window geometry unavailable for ratio fallback")
-                    # Same rule as the pre-interaction probe: never pull the
-                    # operator's primary-screen window off its screen for a
-                    # ratio click, and let the guard decide on strictness.
-                    if not self._primary_foreground_hwnd():
-                        self.guarded_write(focus_window, win.hwnd, warnings=warnings)
-                    self.guarded_write(
-                        click_ratio_and_paste,
-                        wrect, tuple(fallback_ratio), clean_prompt,
-                        chunk_size=chunk_size,
-                        warnings=warnings,
-                        borrow_hwnd=win.hwnd if use_headed else 0,
-                    )
-                    write_method = "ratio:paste"
-                    submit_method = "ratio:enter"
-                    if self.focus_guard_strict() and self.last_focus_event:
-                        return self._focus_taken_payload(
-                            clean_prompt, warnings, "ratio paste"
-                        )
-                else:
-                    if self._write_fn is not None:
-                        write_method = self._write_fn(composer, clean_prompt, use_headed, chunk_size)
-                    else:
-                        try:
-                            # Guarded so a paste that activates the window is
-                            # detected: strict mode must be able to refuse the
-                            # submit instead of silently stealing focus. Option A
-                            # borrows the foreground for the paste only.
-                            write_method = self.guarded_write(
-                                set_node_text,
-                                composer,
-                                clean_prompt,
-                                headed=use_headed,
-                                chunk_size=chunk_size,
-                                prefer_paste=prefer_paste,
-                                icebreaker=bool(self.cfg.get("icebreaker_before_paste", False)),
-                                warnings=warnings,
-                                borrow_hwnd=win.hwnd if use_headed else 0,
-                            )
-                        except UIAError:
-                            if not self._primary_foreground_hwnd():
-                                self.guarded_write(focus_window, win.hwnd, warnings=warnings)
-                            write_method = self.guarded_write(
-                                set_node_text,
-                                composer,
-                                clean_prompt,
-                                headed=True,
-                                chunk_size=chunk_size,
-                                prefer_paste=True,
-                                icebreaker=bool(self.cfg.get("icebreaker_before_paste", False)),
-                                warnings=warnings,
-                                borrow_hwnd=win.hwnd,
-                            )
-                            use_headed = True
-
-                    if self.focus_guard_strict() and self.last_focus_event:
-                        return self._focus_taken_payload(
-                            clean_prompt, warnings, "composer write"
-                        )
-
-                    if confirm:
-                        if not self._confirm_fn(self.name, clean_prompt, effective_model):
-                            self.ledger.mark(clean_prompt, self.name, "failed_retryable", note="cancelled_by_user")
-                            return {
-                                "ok": False,
-                                "endpoint": self.name,
-                                "error": "cancelled_by_user",
-                                "reply": "",
-                            }
-
-                    self.ledger.mark(clean_prompt, self.name, "submitting")
-                    self._sleep(0.3)
-                    post_write_snap = self.take_snap(win.hwnd)
-                    send_btn = self._find_send_button(post_write_snap)
-                    send_tpl = self.cfg.get("templates", {}).get("send_button")
-                    # The submit click and the Enter hotkey both land on whatever
-                    # is foreground, so they run inside one borrow: activate, act,
-                    # restore. Losing the operator's window here cannot un-send the
-                    # message, so the abort below is marked ``submitted``.
-                    with self._borrowed_focus(win, warnings=warnings, allow=use_headed):
-                        if send_btn is not None:
-                            submit_method = self._click_or_fallback(send_btn, win.hwnd, send_tpl, headed=use_headed)
-                        else:
-                            submit_method = ""
-                            if send_tpl and use_headed and self._invoke_fn is None:
-                                try:
-                                    submit_method = self._click_or_fallback(None, win.hwnd, send_tpl, headed=True)
-                                except UIAError:
-                                    submit_method = ""
-                            if not submit_method:
-                                submit_keys = tuple(str(self.cfg.get("submit_hotkey", "enter")).lower().split("+"))
-                                if self._invoke_fn is not None:
-                                    submit_method = f"{'+'.join(submit_keys)}:stub"
-                                else:
-                                    if self.cfg.get("submit_focus_composer", False) and composer.control is not None:
-                                        try:
-                                            composer.control.SetFocus()
-                                            self._sleep(0.08)
-                                        except Exception:
-                                            pass
-                                    elif not use_headed:
-                                        focus_window(win.hwnd)
-                                    self._send_hotkey_safe(*submit_keys)
-                                    submit_method = f"headed:{'+'.join(submit_keys)}"
-
-                    if self.focus_guard_strict() and self.last_focus_event:
-                        # The click is already out; aborting the wait is the only
-                        # honest option when the operator's focus never came back.
-                        return self._focus_taken_payload(
-                            clean_prompt, warnings, "submit", submitted=True
-                        )
-            except UIAError as exc:
-                ev = self._record_failure_evidence(exc.code, before_snap, {"message": exc.message})
-                self.ledger.mark(clean_prompt, self.name, "failed_retryable", note=exc.code)
+        if not force:
+            allowed, prev_state = self.ledger.check(clean_prompt, self.name)
+            if not allowed:
                 return {
                     "ok": False,
                     "endpoint": self.name,
-                    "error": exc.code,
-                    "message": exc.message,
+                    "error": "duplicate",
+                    "previous_state": prev_state,
+                    "ledger_key": self.ledger.key(clean_prompt, self.name),
+                    "message": f"Duplicate prompt blocked (state={prev_state}); pass --force or clear ledger to resend",
+                    "reply": "",
+                }, {}
+
+        return None, {
+            "clean_prompt": clean_prompt,
+            "effective_model": effective_model,
+            "effective_free_only": effective_free_only,
+            "attach_paths": attach_paths,
+        }
+
+    def _submit_prompt_to_window(
+        self,
+        win: "WindowInfo",
+        before_snap: "Snapshot | None",
+        clean_prompt: str,
+        *,
+        use_headed: bool,
+        effective_model: str | None,
+        confirm: bool,
+        warnings: list[str],
+        profile: str | None,
+        started: float,
+        new_chat: bool = False,
+        effective_free_only: bool = False,
+        attach_paths: list[str] | None = None,
+        attach_methods: list[str] | None = None,
+        model_switch_info: dict[str, Any] | None = None,
+    ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+        """Stage 2 — write the prompt into the window and press send.
+
+        Returns ``(error_payload, state)``. ``state`` carries everything the
+        wait phase needs (``before_snap`` is the *post*-switch/attach snapshot,
+        ``use_headed`` may have been promoted by the paste fallback), and is
+        empty on error because the caller returns immediately.
+
+        Besides the parameters named above, the body needs ``profile`` /
+        ``started`` (payloads) and the attach/model-switch results, so they are
+        passed in rather than recomputed.
+        """
+        attach_paths = list(attach_paths or [])
+        attach_methods = list(attach_methods or [])
+        prefer_paste = bool(self.cfg.get("prefer_paste", False))
+        try:
+            if before_snap is None:
+                before_snap = self.take_snap(win.hwnd)
+            if before_snap.degraded:
+                warnings.append(f"snapshot_degraded:{before_snap.degraded_reason}")
+
+            if new_chat:
+                nc = self._find_new_chat_button(before_snap)
+                if nc is not None:
+                    with self._borrowed_focus(win, warnings=warnings, allow=use_headed):
+                        self._click_or_fallback(nc, win.hwnd, self.cfg.get("templates", {}).get("new_chat"), headed=use_headed)
+                    self._sleep(0.8)
+                    before_snap = self.take_snap(win.hwnd)
+
+            if effective_model or (effective_free_only and self.cfg.get("enforce_free_switch", False)):
+                target_model = effective_model or "free"
+                model_switch_info = self.switch_model(
+                    win,
+                    before_snap,
+                    target_model,
+                    headed=use_headed,
+                    free_only=effective_free_only,
+                )
+                if model_switch_info.get("blocked_paid"):
+                    return {
+                        "ok": False,
+                        "endpoint": self.name,
+                        "error": "tier_unconfirmed",
+                        "message": f"Free-only guard blocked sending on {self.name} (reason={model_switch_info.get('reason')})",
+                        "profile": profile,
+                        "model_requested": target_model,
+                        "model_switch": model_switch_info,
+                        "reply": "",
+                    }, {}
+                if model_switch_info.get("switched"):
+                    before_snap = self.take_snap(win.hwnd)
+                elif model_switch_info.get("attempted"):
+                    warnings.append(f"model_switch_failed:{model_switch_info.get('reason')}")
+
+            # A paywall or permission dialog can appear right after a model
+            # switch; abort before writing anything rather than paste into a
+            # window that will never answer.
+            blocking = self.detect_blocking_popup(before_snap)
+            if blocking:
+                return self._blocking_popup_payload(
+                    blocking, before_snap, clean_prompt, started, warnings
+                ), {}
+
+            if attach_paths:
+                before_snap, not_ready = self._ensure_composer_ready(
+                    win, before_snap, warnings=warnings
+                )
+                if not_ready is not None:
+                    self.ledger.mark(
+                        clean_prompt,
+                        self.name,
+                        "failed_retryable",
+                        note="composer_not_ready",
+                    )
+                    return not_ready, {}
+                attach_methods = self.attach_files(
+                    win, before_snap, attach_paths,
+                    headed=use_headed, warnings=warnings,
+                )
+                if self.focus_guard_strict() and self.last_focus_event:
+                    # The upload may be complete, but nothing has been
+                    # submitted yet: abort here rather than type into a
+                    # window we stole from the operator.
+                    return self._focus_taken_payload(
+                        clean_prompt, warnings, "attach click"
+                    ), {}
+                before_snap = self.take_snap(win.hwnd)
+
+            composer = self._find_composer(before_snap)
+            fallback_ratio = self.cfg.get("fallback_composer_ratio")
+
+            if composer is None and not fallback_ratio:
+                ev = self._record_failure_evidence("composer_not_found", before_snap)
+                self.ledger.mark(clean_prompt, self.name, "failed_retryable", note="composer_not_found")
+                return {
+                    "ok": False,
+                    "endpoint": self.name,
+                    "error": "composer_not_found",
+                    "message": f"No input composer found in {self.name}; page may be on login/loading screen",
                     "evidence": ev,
                     "reply": "",
-                }
+                }, {}
 
-        # Wait for reply convergence
+            chunk_size = int(self.cfg.get("paste_chunk", 0))
+            if composer is None and fallback_ratio:
+                if confirm and not self._confirm_fn(self.name, clean_prompt, effective_model):
+                    self.ledger.mark(clean_prompt, self.name, "failed_retryable", note="cancelled_by_user")
+                    return {"ok": False, "endpoint": self.name, "error": "cancelled_by_user", "reply": ""}, {}
+                self.ledger.mark(clean_prompt, self.name, "submitting")
+                wrect = before_snap.window_rect
+                if wrect is None:
+                    raise UIAError("NO_GEOMETRY", "Window geometry unavailable for ratio fallback")
+                # Same rule as the pre-interaction probe: never pull the
+                # operator's primary-screen window off its screen for a
+                # ratio click, and let the guard decide on strictness.
+                if not self._primary_foreground_hwnd():
+                    self.guarded_write(focus_window, win.hwnd, warnings=warnings)
+                self.guarded_write(
+                    click_ratio_and_paste,
+                    wrect, tuple(fallback_ratio), clean_prompt,
+                    chunk_size=chunk_size,
+                    warnings=warnings,
+                    borrow_hwnd=win.hwnd if use_headed else 0,
+                )
+                write_method = "ratio:paste"
+                submit_method = "ratio:enter"
+                if self.focus_guard_strict() and self.last_focus_event:
+                    return self._focus_taken_payload(
+                        clean_prompt, warnings, "ratio paste"
+                    ), {}
+            else:
+                if self._write_fn is not None:
+                    write_method = self._write_fn(composer, clean_prompt, use_headed, chunk_size)
+                else:
+                    try:
+                        # Guarded so a paste that activates the window is
+                        # detected: strict mode must be able to refuse the
+                        # submit instead of silently stealing focus. Option A
+                        # borrows the foreground for the paste only.
+                        write_method = self.guarded_write(
+                            set_node_text,
+                            composer,
+                            clean_prompt,
+                            headed=use_headed,
+                            chunk_size=chunk_size,
+                            prefer_paste=prefer_paste,
+                            icebreaker=bool(self.cfg.get("icebreaker_before_paste", False)),
+                            warnings=warnings,
+                            borrow_hwnd=win.hwnd if use_headed else 0,
+                        )
+                    except UIAError:
+                        if not self._primary_foreground_hwnd():
+                            self.guarded_write(focus_window, win.hwnd, warnings=warnings)
+                        write_method = self.guarded_write(
+                            set_node_text,
+                            composer,
+                            clean_prompt,
+                            headed=True,
+                            chunk_size=chunk_size,
+                            prefer_paste=True,
+                            icebreaker=bool(self.cfg.get("icebreaker_before_paste", False)),
+                            warnings=warnings,
+                            borrow_hwnd=win.hwnd,
+                        )
+                        use_headed = True
+
+                if self.focus_guard_strict() and self.last_focus_event:
+                    return self._focus_taken_payload(
+                        clean_prompt, warnings, "composer write"
+                    ), {}
+
+                if confirm:
+                    if not self._confirm_fn(self.name, clean_prompt, effective_model):
+                        self.ledger.mark(clean_prompt, self.name, "failed_retryable", note="cancelled_by_user")
+                        return {
+                            "ok": False,
+                            "endpoint": self.name,
+                            "error": "cancelled_by_user",
+                            "reply": "",
+                        }, {}
+
+                self.ledger.mark(clean_prompt, self.name, "submitting")
+                self._sleep(0.3)
+                post_write_snap = self.take_snap(win.hwnd)
+                send_btn = self._find_send_button(post_write_snap)
+                send_tpl = self.cfg.get("templates", {}).get("send_button")
+                # The submit click and the Enter hotkey both land on whatever
+                # is foreground, so they run inside one borrow: activate, act,
+                # restore. Losing the operator's window here cannot un-send the
+                # message, so the abort below is marked ``submitted``.
+                with self._borrowed_focus(win, warnings=warnings, allow=use_headed):
+                    if send_btn is not None:
+                        submit_method = self._click_or_fallback(send_btn, win.hwnd, send_tpl, headed=use_headed)
+                    else:
+                        submit_method = ""
+                        if send_tpl and use_headed and self._invoke_fn is None:
+                            try:
+                                submit_method = self._click_or_fallback(None, win.hwnd, send_tpl, headed=True)
+                            except UIAError:
+                                submit_method = ""
+                        if not submit_method:
+                            submit_keys = tuple(str(self.cfg.get("submit_hotkey", "enter")).lower().split("+"))
+                            if self._invoke_fn is not None:
+                                submit_method = f"{'+'.join(submit_keys)}:stub"
+                            else:
+                                if self.cfg.get("submit_focus_composer", False) and composer.control is not None:
+                                    try:
+                                        composer.control.SetFocus()
+                                        self._sleep(0.08)
+                                    except Exception:
+                                        pass
+                                elif not use_headed:
+                                    focus_window(win.hwnd)
+                                self._send_hotkey_safe(*submit_keys)
+                                submit_method = f"headed:{'+'.join(submit_keys)}"
+
+                if self.focus_guard_strict() and self.last_focus_event:
+                    # The click is already out; aborting the wait is the only
+                    # honest option when the operator's focus never came back.
+                    return self._focus_taken_payload(
+                        clean_prompt, warnings, "submit", submitted=True
+                    ), {}
+        except UIAError as exc:
+            ev = self._record_failure_evidence(exc.code, before_snap, {"message": exc.message})
+            self.ledger.mark(clean_prompt, self.name, "failed_retryable", note=exc.code)
+            return {
+                "ok": False,
+                "endpoint": self.name,
+                "error": exc.code,
+                "message": exc.message,
+                "evidence": ev,
+                "reply": "",
+            }, {}
+
+        return None, {
+            "before_snap": before_snap,
+            "write_method": write_method,
+            "submit_method": submit_method,
+            "use_headed": use_headed,
+            "model_switch_info": model_switch_info,
+            "attach_methods": attach_methods,
+        }
+
+    def _await_reply_convergence(
+        self,
+        win: "WindowInfo",
+        before_snap: "Snapshot | None",
+        before_meta: dict[str, Any],
+        clean_prompt: str,
+        *,
+        started: float,
+        budget: float,
+        poll: float,
+        stable_need: float,
+        use_headed: bool,
+        write_method: str,
+        submit_method: str,
+        effective_model: str | None,
+        profile: str | None,
+        model_switch_info: dict[str, Any] | None,
+        attach_paths: list[str],
+        attach_methods: list[str],
+        warnings: list[str],
+    ) -> dict[str, Any]:
+        """Stage 3 — poll until the reply settles, then return the final payload.
+
+        Owns every terminal outcome of a send that already left the window:
+        fallback read, copy-button reply, ``returned_at_deadline`` and the
+        timeout / ``submit_not_verified`` diagnostics (ledger + evidence file).
+        The four gate settings are re-read from config here because they are
+        pure ``self.cfg`` reads — same values ``ask()`` used before the split.
+        """
+        min_rel_x = float(self.cfg.get("content_min_rel_x", 0.0))
+        max_rel_x = float(self.cfg.get("content_max_rel_x", 1.0))
+        require_receipt = bool(self.cfg.get("require_send_receipt", False))
+        require_new_copy = bool(self.cfg.get("require_new_copy_button", False))
         deadline = started + budget
         last_text = ""
         stable_since: float | None = None
