@@ -13,7 +13,7 @@ RUNS_DIR = ROOT / "runs"
 TEMPLATES_DIR = ROOT / "assets" / "templates"
 
 DEFAULT_BRIDGE_CONFIG: dict[str, Any] = {
-    "version": "0.2.5",
+    "version": "0.2.6",
     "host": "127.0.0.1",
     "port": 18765,
     "default_timeout": 180.0,

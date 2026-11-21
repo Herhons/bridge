@@ -1,5 +1,5 @@
 {
-  "version": "0.2.5",
+  "version": "0.2.6",
   "note": "Legacy summary mirror of config/model_policy.json. Use --profile test|routine|council for policy-driven model selection.",
   "purposes": {
     "test": "Free/0.00x tier for smoke & regression tests (Fail-Closed on paid multipliers)",

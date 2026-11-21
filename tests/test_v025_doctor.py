@@ -17,7 +17,7 @@ class TestV025Doctor(unittest.TestCase):
         self.assertEqual(res["issues"], [])
 
     def test_cli_doctor_returns_zero(self):
-        self.assertEqual(__version__, "0.2.5")
+        self.assertEqual(__version__, "0.2.6")
         rc = bridge.main(["doctor"])
         self.assertEqual(rc, 0)
 

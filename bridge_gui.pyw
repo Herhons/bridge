@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Bridge 桌面控制台（v0.2.5）——原生无黑框、极薄的仪表盘 + 按钮壳。
+"""Bridge 桌面控制台（v0.2.6）——原生无黑框、极薄的仪表盘 + 按钮壳。
 
 设计边界
 --------
@@ -865,7 +865,7 @@ class BridgeConsole:
     def _build(self) -> None:
         _load_tk()
         root = self.root
-        root.title("Bridge v0.2.5 — 桌面控制台")
+        root.title("Bridge v0.2.6 — 桌面控制台")
         root.configure(bg=BG)
         root.minsize(420, 560)
         place_window_on_secondary(root, compute_secondary_geometry())
@@ -884,7 +884,7 @@ class BridgeConsole:
         )
         self.status_label.pack(side="left", padx=(6, 0))
         self.version_label = tk.Label(
-            head, text="v0.2.5", bg=BG, fg=FG_DIM, font=("Consolas", 8)
+            head, text="v0.2.6", bg=BG, fg=FG_DIM, font=("Consolas", 8)
         )
         self.version_label.pack(side="right")
 
