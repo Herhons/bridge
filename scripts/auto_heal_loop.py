@@ -140,6 +140,10 @@ TERMINAL_STATES: tuple[str, ...] = ("STOPPED_ON_BUG", "STOPPED_BY_USER", "ALL_DO
 # ``- [ ]`` anywhere at the start of a line (indented list items included).
 ROADMAP_PENDING_RE = re.compile(r"^[ \t]*-[ \t]+\[ \]", re.M)
 ROADMAP_ITEM_RE = re.compile(r"^[ \t]*-[ \t]+\[[ xX]\]", re.M)
+#: First pending item *with* its body, used to name the round in prompts/commits.
+ROADMAP_FIRST_PENDING_RE = re.compile(r"^[ \t]*-[ \t]+\[ \][ \t]*(.+)$", re.M)
+TASK_TITLE_MAX = 48
+DEFAULT_TASK_TITLE = "自动迭代"
 # A card stays blocked while a dispatch is still owed or died on the wire.
 BLOCKING_DISPATCH_STATES: tuple[str, ...] = ("dispatched", "timed_out")
 # Slice length for the interruptible sleep (STOP is honoured within this lag).
@@ -335,6 +339,26 @@ def roadmap_counts(text: str) -> tuple[int, int]:
         len(ROADMAP_PENDING_RE.findall(body)),
         len(ROADMAP_ITEM_RE.findall(body)),
     )
+
+
+def current_roadmap_task_title(backlog: str) -> str:
+    """Title of the first unchecked roadmap item, for prompts and commit subjects.
+
+    ``- [ ] **M4-6（DeepSeek CoT 正文净化）**：修复 …`` becomes
+    ``M4-6（DeepSeek CoT 正文净化）``: the checkbox and the emphasis markers are
+    removed and only the part before the first colon is kept, so the title stays
+    readable inside a one-line prompt header or commit subject. A backlog with
+    no checkbox item at all (the derived git-log fallback) reports the neutral
+    ``自动迭代`` instead of an empty label.
+    """
+    match = ROADMAP_FIRST_PENDING_RE.search(backlog or "")
+    if match is None:
+        return DEFAULT_TASK_TITLE
+    title = match.group(1).replace("**", "").strip()
+    for separator in ("：", ":"):
+        if separator in title:
+            title = title.split(separator, 1)[0].strip()
+    return title[:TASK_TITLE_MAX] or DEFAULT_TASK_TITLE
 
 
 def roadmap_all_done() -> tuple[bool, str]:
@@ -951,7 +975,7 @@ def load_backlog() -> tuple[str, str]:
 def build_task_prompt(round_no: int, backlog: str, base_commit: str) -> str:
     recent = git_text("log", "-n", "8", "--oneline").strip() or "(no commits)"
     return (
-        "【Bridge 过夜迭代 round=%d | BASE_COMMIT=%s】\n"
+        "【Bridge 自动迭代 round=%d | %s | BASE_COMMIT=%s】\n"
         "主线来源：docs/ROADMAP.md 是唯一权威主线；只挑其中未勾选的 `- [ ]` "
         "小步推进，不要另立主线、不要跳到后面的项。\n"
         "现有自动循环/待办清单（若某项已完成，请挑下一项未完成的小步）：\n"
@@ -963,7 +987,15 @@ def build_task_prompt(round_no: int, backlog: str, base_commit: str) -> str:
         "任务卡/补丁要写明：改动文件、具体修复点、禁止删除或弱化既有断言、"
         "以及最后必须运行全量单测；任务完成后请把 runs/overnight_todo.md "
         "里对应条目标为 [已完成]。\n"
-        % (round_no, base_commit, backlog[:6000], recent, PATCH_HINT, MARKER_SYNTAX_HINT)
+        % (
+            round_no,
+            current_roadmap_task_title(backlog),
+            base_commit,
+            backlog[:6000],
+            recent,
+            PATCH_HINT,
+            MARKER_SYNTAX_HINT,
+        )
     )
 
 
@@ -1280,6 +1312,10 @@ def call_executor(
 
     Two further brakes apply before a fallback is allowed:
 
+    * a level that committed but never answered (``HEAD`` moved) is counted as
+      *done* — ``executor_committed`` is logged and the chain stops, because
+      re-handing an already committed task to the next executor is the worst
+      possible double work;
     * the worktree fingerprint is compared before/after each level — if the
       level wrote files but returned no reply (bridge timeout while the code was
       already saved), the chain stops and returns ``EXECUTOR_DIRTY_MARKER`` so
@@ -1321,6 +1357,7 @@ def call_executor(
                 )
                 continue
         before = worktree_fingerprint()
+        before_head = head_commit()
         try:
             reply = callers[endpoint](
                 task_card, attempt, timeout, executor=mode,
@@ -1345,6 +1382,20 @@ def call_executor(
             % (endpoint, attempt),
             "ERROR",
         )
+        after_head = head_commit()
+        if after_head and after_head != before_head:
+            log(
+                "executor_committed=%s round=%d: HEAD moved %s -> %s without a "
+                "reply; counting the level as done so no second executor redoes "
+                "the same task"
+                % (endpoint, attempt, (before_head or "?")[:12], after_head[:12]),
+                "WARN",
+            )
+            finish_dispatch(
+                card_id, completed=True, endpoint=endpoint,
+                detail="HEAD advanced without reply; fallback suppressed",
+            )
+            return EXECUTOR_DIRTY_MARKER % endpoint
         after = worktree_fingerprint()
         if after and after != before:
             log(
@@ -1694,6 +1745,7 @@ def run_overnight(
                 return 0
 
         for round_no in range(1, max(1, max_rounds) + 1):
+            round_backlog = ""
             if stop_requested():
                 halt_for_stop(machine, round_no, "at round start")
                 reason = "STOPPED_BY_USER"
@@ -1778,6 +1830,7 @@ def run_overnight(
             else:
                 failure_streak = 0
                 backlog, source = load_backlog()
+                round_backlog = backlog
                 log("round %d: next-task source=%s" % (round_no, source))
                 machine.set("PICK_TASK", reason="source=%s" % source,
                             round_no=round_no)
@@ -1894,7 +1947,8 @@ def run_overnight(
                 machine.set("COMMIT_AND_PUSH", reason="gate green",
                             round_no=round_no)
                 gate_rc = commit_and_push(
-                    "chore(overnight): round %d auto improvement" % round_no,
+                    "chore(auto): round %d %s"
+                    % (round_no, current_roadmap_task_title(round_backlog)),
                     no_push,
                 )
                 if gate_rc == 0:
@@ -1908,8 +1962,15 @@ def run_overnight(
                         reason = "THREE_CONSECUTIVE_FAILURES"
                         break
             else:
-                log("round %d: green but no changes; no commit" % round_no)
-                idle_streak += 1
+                current_head = head_commit()
+                if current_head != base:
+                    log("round %d: green, worktree clean but HEAD advanced to %s "
+                        "(executor already committed); idle_streak reset"
+                        % (round_no, (current_head or "?")[:12]))
+                    idle_streak = 0
+                else:
+                    log("round %d: green but no changes; no commit" % round_no)
+                    idle_streak += 1
 
             if idle_streak >= 3:
                 reason = "THREE_IDLE_ROUNDS"

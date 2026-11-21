@@ -34,6 +34,16 @@ THINKING_END_RE = re.compile(
     r"^(?:最终(?:回答|答案)|正式回答|答案|回答|final answer|answer)\s*[:：]?$",
     re.IGNORECASE,
 )
+#: Openers DeepSeek's reasoning body uses on nearly every line. Used as a
+#: *secondary* boundary when the header or the blank-line structure has already
+#: been eaten by the base noise filter (deep-thinking replies arrive as one
+#: unbroken blob), so trailing reasoning paragraphs can still be trimmed.
+REASONING_LINE_RE = re.compile(
+    r"^(?:嗯[，,。]|好[，,。]|好的[，,。]|首先[，,]|我们需要|用户(?:问|要求|希望|想要|给)"
+    r"|让我(?:先|来)?|先(?:看|想|分析|确认)|仔细看|分析一下|等等[，,]|注意[：:]"
+    r"|okay[,\s]|alright[,\s]|let'?s\s|the user\s|we need to\s|first[,\s])",
+    re.IGNORECASE,
+)
 
 
 def _paragraphs(lines: list[str]) -> list[list[str]]:
@@ -51,6 +61,20 @@ def _paragraphs(lines: list[str]) -> list[list[str]]:
     return groups
 
 
+def _skip_reasoning_prefix(items: list[str], keep_at_least: int = 1) -> int:
+    """Index of the first item that no longer looks like a reasoning opener.
+
+    ``keep_at_least`` items are always left behind, so a block that is nothing
+    but reasoning openers degenerates to "keep the tail" instead of returning
+    an empty reply.
+    """
+    limit = max(0, len(items) - max(1, keep_at_least))
+    index = 0
+    while index < limit and REASONING_LINE_RE.match(items[index].strip()):
+        index += 1
+    return index
+
+
 def strip_thinking_sections(lines: list[str]) -> list[str]:
     """Drop a leading reasoning block, keeping only the final answer.
 
@@ -58,7 +82,12 @@ def strip_thinking_sections(lines: list[str]) -> list[str]:
 
     1. a ``最终回答``-style label closes it — everything before is dropped;
     2. otherwise the body is the first blank-line separated paragraph, so it is
-       dropped and the remaining paragraphs are the answer.
+       dropped and the remaining paragraphs are the answer. Extra paragraphs
+       that still open like reasoning (``我们需要…`` / ``好的，…``) are dropped
+       as well, which keeps multi-paragraph CoT out of the reply;
+    3. a blob with no blank lines at all (the usual ``uia_delta`` shape once the
+       base noise filter has eaten ``已思考（用时 N 秒）``) is trimmed line by
+       line on the same reasoning openers.
 
     A single indistinguishable blob is returned untouched: returning nothing
     would turn a readable reply into a timeout, which is worse than a CoT line
@@ -85,9 +114,20 @@ def strip_thinking_sections(lines: list[str]) -> list[str]:
 
     groups = _paragraphs(tail)
     if len(groups) >= 2:
-        kept = [line for group in groups[1:] for line in group]
+        # Only a paragraph's *first* line may open reasoning; the rest of a
+        # kept paragraph is ordinary prose and must stay intact.
+        openers = [group[0] for group in groups]
+        start = 1 + _skip_reasoning_prefix(openers[1:])
+        kept = [line for group in groups[start:] for line in group]
         if kept:
             return head + kept
+        return head + tail
+    if groups:
+        skip = _skip_reasoning_prefix(groups[0])
+        if skip:
+            kept = groups[0][skip:]
+            if kept:
+                return head + kept
     return head + tail
 
 

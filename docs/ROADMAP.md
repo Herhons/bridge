@@ -172,9 +172,20 @@ Bridge 是运行在 **Windows 副屏（x 轴 `-1440..0`，竖屏 1440×2560）**
   - 单测：`tests/test_bridge_gui.py` 新增 7 条（readonly 高对比映射、弹出列表配色、
     注入伪 `Style` 的调用顺序、无 Tk 的纯逻辑返回值、`wrap=char`、仅在底部自动滚底、
     加宽后仍在副屏），全量 326 条 `rc=0`；`bridge.py doctor` `ok:true`（未实例化任何真实 Tk 窗口）
-- [ ] **M4-6（DeepSeek CoT 正文净化）**：修复 DeepSeek 开启深度思考时推理正文混入 `uia_delta`
+- [x] **M4-6（DeepSeek CoT 正文净化）**：修复 DeepSeek 开启深度思考时推理正文混入 `uia_delta`
   - 在 `DEFAULT_NOISE_REGEXES` 删除「已思考（用时 N 秒）」之前保留边界并精准剥离思考段落，只返回最终回答正文
   - 补充包含真实思考头与多段推理正文的离线回归单测
+  - 落地（已验）：`endpoints/deepseek.py` 新增 `REASONING_LINE_RE`（`嗯，` / `好的，` / `我们需要` /
+    `用户问` / `让我先` / `let's` / `the user` 等推理开口），`strip_thinking_sections()` 在
+    「显式 `最终回答：` 标签」之后新增两道兜底：多段（`len(groups) >= 2`）时跳过开头连续的推理段、
+    无空行（单段）时跳过开头连续的推理行，两者都**至少保留最后 1 段/1 行**，绝不返回空回复
+  - 落地（已验）：`scripts/auto_heal_loop.py` 新增 `current_roadmap_task_title()`，`build_task_prompt()`
+    首行改 `【Bridge 自动迭代 round=N | <主线项> | BASE_COMMIT=<sha>】`；`call_executor()` 在
+    某一级「回复为空但 `HEAD` 前进」时记 `executor_committed` 并按完成收口、抑制误回落；
+    `run_overnight()` 提交信息改 `chore(auto): round N <主线项>`，`has_changes()` 为假但 `HEAD`
+    已前进时归零 `idle_streak`
+  - 单测：新增 `tests/test_m4_6_cot_and_scheduler_fixes.py`（7 条），全量 333 条 `rc=0`；
+    `bridge.py doctor` `ok:true`（version 仍 0.2.5）
 - [ ] **M4-7（架构瘦身与单测卫生）**：消除 `scripts/auto_heal_loop.py` 与 `bridge.py` 重复控制逻辑
   - 将两处重复的 PID 存活探测、`StateMachine` 原子落盘、`docs/ROADMAP.md` 解析与 `runs/STOP` 控制抽离到独立模块 `engine/daemon_state.py`，两端统一导入（100% 保持既有函数名与 CLI 行为兼容）
   - 隔离既有旧单测 `test_green_suite_commits_and_respects_no_push` 的 `RUNS` 路径（不改任何断言，只避免写脏真实 `runs/state_machine.json`）
