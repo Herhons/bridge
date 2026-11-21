@@ -1427,9 +1427,16 @@
         "发送"
       ],
       "models": [
-        "default"
+        "default",
+        "gemini_38_flash_medium"
       ],
-      "models_note": "Reply text comes from UIA snapshot deltas; controls are matched by Name/ControlType because automation ids are runtime-generated.",
+      "model_aliases": {
+        "gemini_38_flash_medium": [
+          "Gemini 3.8 Flash Medium",
+          "Gemini 3.8 Flash"
+        ]
+      },
+      "models_note": "Reply text comes from UIA snapshot deltas; controls are matched by Name/ControlType because automation ids are runtime-generated. Model selector measured 2026-11-21 (read-only UIA): ButtonControl named 'Select model, current: <model>' with ExpandCollapse+Invoke patterns, sitting in the composer row. Only 'Gemini 3.8 Flash Medium' has been observed; the dropdown options could not be enumerated because opening it requires a click.",
       "selectors": {
         "composer": {
           "roles": [
@@ -1506,6 +1513,7 @@
             "ButtonControl"
           ],
           "name_contains": [
+            "Select model, current:",
             "Select model",
             "current:"
           ]
