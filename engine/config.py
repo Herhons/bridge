@@ -13,7 +13,7 @@ RUNS_DIR = ROOT / "runs"
 TEMPLATES_DIR = ROOT / "assets" / "templates"
 
 DEFAULT_BRIDGE_CONFIG: dict[str, Any] = {
-    "version": "0.2.4",
+    "version": "0.2.5",
     "host": "127.0.0.1",
     "port": 18765,
     "default_timeout": 180.0,
@@ -105,3 +105,39 @@ def classify_model_label(label: str, *, policy: dict[str, Any] | None = None) ->
     if any(str(m).lower() in low for m in free_markers):
         return "free"
     return "unknown"
+
+
+def run_doctor(endpoint_names: tuple[str, ...] | list[str], *, root: Path | None = None) -> dict[str, Any]:
+    """Validate config integrity, template PNGs, ratio boxes, and policy coverage."""
+    base = Path(root) if root else ROOT
+    endpoints = load_endpoints_config(root=base)
+    policy = load_model_policy(root=base)
+    pol_eps = policy.get("endpoints") or {}
+    tpl_dir = base / "assets" / "templates"
+    issues: list[str] = []
+
+    for name in endpoint_names:
+        if name not in endpoints:
+            issues.append(f"missing_endpoint_config:{name}")
+            continue
+        if name not in pol_eps:
+            issues.append(f"missing_model_policy:{name}")
+        ecfg = endpoints[name]
+        for tpl_key, tpl_name in (ecfg.get("templates") or {}).items():
+            if tpl_name and not (tpl_dir / f"{tpl_name}.png").is_file():
+                issues.append(f"missing_template:{name}.{tpl_key}:{tpl_name}.png")
+        for sel_key, sel in (ecfg.get("selectors") or {}).items():
+            box = (sel or {}).get("anchor_box_ratio")
+            if box is not None:
+                if len(box) != 4 or not (0.0 <= box[0] < box[2] <= 1.0 and 0.0 <= box[1] < box[3] <= 1.0):
+                    issues.append(f"invalid_ratio_box:{name}.{sel_key}:{box}")
+        min_x = float(ecfg.get("content_min_rel_x", 0.0))
+        max_x = float(ecfg.get("content_max_rel_x", 1.0))
+        if not (0.0 <= min_x < max_x <= 1.0):
+            issues.append(f"invalid_content_x:{name}:{min_x}..{max_x}")
+
+    return {
+        "ok": len(issues) == 0,
+        "endpoint_count": len(endpoint_names),
+        "issues": issues,
+    }

@@ -10,6 +10,8 @@ Usage:
     python bridge.py models workbuddy [--live]
     python bridge.py status
     python bridge.py snapshot hermes
+    python bridge.py stop [--force-wait 5]
+    python bridge.py daemon-status
     python bridge.py ledger list
     python bridge.py ledger clear [--key <hash>]
     python bridge.py serve [--port 18765]
@@ -17,7 +19,11 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
+import os
+import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -26,7 +32,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from endpoints import ENDPOINT_NAMES, get_driver  # noqa: E402
-from engine import __version__  # noqa: E402
+from engine import __version__, daemon_state  # noqa: E402
 from engine.base import (  # noqa: E402
     configure_stdio_utf8,
     exit_code_for,
@@ -34,6 +40,7 @@ from engine.base import (  # noqa: E402
     safe_print_json,
     save_reply_file,
 )
+from engine.config import run_doctor  # noqa: E402
 from engine.ledger import SubmissionLedger  # noqa: E402
 from engine.server import create_server  # noqa: E402
 
@@ -56,6 +63,7 @@ def dispatch(action: str, endpoint: str, opts: dict[str, Any] | None = None, *, 
             free_only=bool(opts.get("free_only", False)),
             confirm=bool(opts.get("confirm", False)),
             force=bool(opts.get("force", False)),
+            attach=opts.get("attach"),
         )
     if action == "read":
         return driver.read()
@@ -71,10 +79,286 @@ def dispatch(action: str, endpoint: str, opts: dict[str, Any] | None = None, *, 
     return {"ok": False, "endpoint": endpoint, "error": "unknown_action", "message": f"Unknown action: {action}"}
 
 
+def ask_with_structured_errors(
+    endpoint: str,
+    opts: dict[str, Any],
+    *,
+    driver_factory=get_driver,
+) -> dict[str, Any]:
+    """``dispatch("ask")`` that turns an endpoint capability gap into JSON.
+
+    ``EndpointDriver.ask`` raises ``NotImplementedError`` when ``--attach`` is
+    passed to an endpoint without an ``attach_button`` selector. Letting that
+    escape printed a raw traceback even under ``--json``, so it is mapped to
+    the same ``attach_unsupported`` code the CLI-shaped endpoints return.
+    """
+    try:
+        return dispatch("ask", endpoint, opts, driver_factory=driver_factory)
+    except NotImplementedError as exc:
+        return {
+            "ok": False,
+            "endpoint": endpoint,
+            "error": "attach_unsupported",
+            "message": str(exc),
+            "attachments": list(opts.get("attach") or []),
+            "reply": "",
+        }
+
+
+def normalize_attach_paths(
+    values: list[str] | str | None,
+    *,
+    base_dir: str | Path | None = None,
+) -> list[str]:
+    """Expand, absolutize and validate attachment paths before any UI work.
+
+    Comma-separated entries and repeated ``--attach`` flags are flattened.
+    Raises FileNotFoundError as soon as any path does not resolve to a file.
+    """
+    if not values:
+        return []
+    entries = [values] if isinstance(values, str) else list(values)
+    resolved: list[str] = []
+    for entry in entries:
+        for part in str(entry).split(","):
+            if not part.strip():
+                continue
+            raw = os.path.expanduser(part.strip())
+            candidate = raw if os.path.isabs(raw) else str((Path(base_dir) if base_dir else Path.cwd()) / raw)
+            absolute = os.path.abspath(candidate)
+            if not os.path.isfile(absolute):
+                raise FileNotFoundError("Attachment not found: %s" % absolute)
+            resolved.append(absolute)
+    return resolved
+
+
+# ---------------------------------------------------------------- scheduler control
+# Names and values are owned by ``engine.daemon_state`` so the CLI, the GUI and
+# ``scripts/auto_heal_loop.py`` can never disagree about the control files.
+STOP_FILE = daemon_state.STOP_FILE
+PID_FILE = daemon_state.PID_FILE
+STATE_FILE = daemon_state.STATE_FILE
+ROADMAP_PATH = daemon_state.ROADMAP_PATH
+ROADMAP_PENDING_RE = daemon_state.ROADMAP_PENDING_RE
+ROADMAP_ITEM_RE = daemon_state.ROADMAP_ITEM_RE
+UNFINISHED_DISPATCH_STATES = ("dispatched", "timed_out")
+STOP_WAIT_POLL = 0.2
+
+
+def runs_dir() -> Path:
+    """``runs/`` under the repo root (``ROOT`` is patched by offline tests)."""
+    return ROOT / "runs"
+
+
+def _unlink(path: Path) -> bool:
+    """Remove ``path`` if present; True only when something was deleted."""
+    try:
+        path.unlink()
+        return True
+    except OSError:
+        return False
+
+
+def scheduler_pid(path: str | Path | None = None) -> int | None:
+    """Read the daemon pid file; None when absent, empty or unparsable.
+
+    Accepts either the pid file itself (the historic call shape) or, when
+    omitted, ``<root>/runs/overnight.pid``.
+    """
+    if path is None:
+        return daemon_state.scheduler_pid(runs_dir())
+    return daemon_state.read_pid_file(Path(path))
+
+
+def pid_alive(pid: int) -> bool:
+    """Liveness probe that can never kill the target.
+
+    ``os.kill(pid, 0)`` terminates the process on Windows, so nt goes through
+    ``OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION)`` + ``GetExitCodeProcess``
+    (shared with the scheduler via ``engine.daemon_state``).
+    """
+    return daemon_state.pid_alive(pid)
+
+
+def kill_scheduler_tree(pid: int) -> int:
+    """``taskkill /F /T`` the scheduler tree; returns taskkill's rc (-1 on error)."""
+    try:
+        proc = subprocess.run(
+            ["taskkill", "/F", "/T", "/PID", str(int(pid))],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=30,
+        )
+        return int(proc.returncode)
+    except (OSError, subprocess.SubprocessError):
+        return -1
+
+
+def stop_scheduler(
+    force_wait: float = 5.0,
+    *,
+    runs: str | Path | None = None,
+) -> dict[str, Any]:
+    """Ask the overnight scheduler to stop, force-killing its tree if it will not.
+
+    ``runs/STOP`` is written first: the loop polls it at round start, before
+    every dispatch and inside its sleep slices. After ``force_wait`` seconds a
+    still-living PID gets ``taskkill /F /T``. A stale pid file (no live process)
+    is cleaned *without* writing STOP, so the next run is not stopped on arrival;
+    STOP is removed once the scheduler is confirmed gone.
+    """
+    base = Path(runs) if runs is not None else runs_dir()
+    base.mkdir(parents=True, exist_ok=True)
+    stop_path = daemon_state.stop_path(base)
+    pid_path = base / PID_FILE
+    pid = scheduler_pid(pid_path)
+    alive = bool(pid and pid_alive(pid))
+    started = time.monotonic()
+    result: dict[str, Any] = {
+        "ok": True,
+        "action": "stop",
+        "pid": pid,
+        "running": alive,
+        "stop_file": str(stop_path),
+        "pid_file": str(pid_path),
+        "stop_written": False,
+        "waited_s": 0.0,
+        "exited_gracefully": False,
+        "killed": False,
+        "taskkill_rc": None,
+        "pid_file_removed": False,
+        "detail": "",
+    }
+    if not alive:
+        result["pid_file_removed"] = _unlink(pid_path)
+        result["detail"] = "no live scheduler; nothing to stop"
+        return result
+
+    try:
+        stop_path.write_text(
+            "pid=%d requested_at=%s\n"
+            % (pid, time.strftime("%Y-%m-%dT%H:%M:%S")),
+            encoding="utf-8",
+        )
+    except OSError as exc:
+        result["ok"] = False
+        result["detail"] = "cannot write STOP: %r" % exc
+        return result
+    result["stop_written"] = True
+
+    deadline = started + max(0.0, float(force_wait))
+    while time.monotonic() < deadline:
+        if not pid_alive(pid):
+            break
+        time.sleep(min(STOP_WAIT_POLL, max(0.0, deadline - time.monotonic())))
+    result["waited_s"] = round(time.monotonic() - started, 2)
+
+    if pid_alive(pid):
+        current = scheduler_pid(pid_path)
+        if current not in (None, pid):
+            result["ok"] = False
+            result["detail"] = (
+                "pid file now points at %s; refusing to kill the wrong tree"
+                % current
+            )
+            return result
+        result["killed"] = True
+        result["taskkill_rc"] = kill_scheduler_tree(pid)
+
+    still = pid_alive(pid)
+    result["running"] = still
+    result["ok"] = not still
+    result["exited_gracefully"] = not still and not result["killed"]
+    result["pid_file_removed"] = _unlink(pid_path)
+    if still:
+        result["detail"] = "scheduler still alive after taskkill rc=%s" % (
+            result["taskkill_rc"]
+        )
+    else:
+        result["detail"] = (
+            "stopped via taskkill" if result["killed"] else "stopped gracefully"
+        )
+        _unlink(stop_path)
+    return result
+
+
+def daemon_status(
+    *,
+    runs: str | Path | None = None,
+    root: str | Path | None = None,
+) -> dict[str, Any]:
+    """Read-only scheduler snapshot: liveness, state machine, roadmap backlog."""
+    base = Path(runs) if runs is not None else runs_dir()
+    repo = Path(root) if root is not None else ROOT
+    pid = scheduler_pid(base / PID_FILE)
+    alive = bool(pid and pid_alive(pid))
+
+    state_path = base / STATE_FILE
+    state_doc: dict[str, Any] = {}
+    try:
+        loaded = json.loads(state_path.read_text(encoding="utf-8"))
+        if isinstance(loaded, dict):
+            state_doc = loaded
+    except (OSError, ValueError):
+        state_doc = {}
+
+    roadmap = repo / ROADMAP_PATH
+    roadmap_present = roadmap.is_file()
+    pending: int | None = None
+    total: int | None = None
+    if roadmap_present:
+        try:
+            text = roadmap.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            text = ""
+        pending, total = daemon_state.count_roadmap_items(text)
+
+    unfinished = 0
+    needs_review = 0
+    dispatched_dir = base / "dispatched"
+    if dispatched_dir.is_dir():
+        for item in sorted(dispatched_dir.glob("*.json")):
+            try:
+                doc = json.loads(item.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            if not isinstance(doc, dict):
+                continue
+            if doc.get("status") in UNFINISHED_DISPATCH_STATES:
+                unfinished += 1
+            if doc.get("needs_review"):
+                needs_review += 1
+
+    return {
+        "ok": True,
+        "action": "daemon-status",
+        "pid": pid,
+        "running": alive,
+        "pid_file": str(base / PID_FILE),
+        "stop_requested": daemon_state.stop_requested(base),
+        "state": state_doc.get("state"),
+        "state_reason": state_doc.get("reason"),
+        "state_round": state_doc.get("round"),
+        "state_pid": state_doc.get("pid"),
+        "state_updated_at": state_doc.get("updated_at"),
+        "state_file": str(state_path),
+        "roadmap": ROADMAP_PATH,
+        "roadmap_present": roadmap_present,
+        "roadmap_pending": pending,
+        "roadmap_total": total,
+        "dispatch_unfinished": unfinished,
+        "dispatch_needs_review": needs_review,
+    }
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="bridge.py",
-        description=f"Bridge v{__version__} — Universal AI-to-AI caller (10 endpoints, UIA-first + screenshot fallback)",
+        description=f"Bridge v{__version__} — Universal AI-to-AI caller (11 endpoints, UIA-first + screenshot fallback)",
     )
     parser.add_argument("--version", action="version", version=f"Bridge {__version__}")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -83,6 +367,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_ask.add_argument("endpoint", help=f"Endpoint name or comma-separated list ({', '.join(ENDPOINT_NAMES)})")
     p_ask.add_argument("prompt", nargs="?", default="", help="Prompt text")
     p_ask.add_argument("--file", "-f", dest="prompt_file", help="Read prompt from UTF-8 file")
+    p_ask.add_argument("--attach", "-a", action="append", default=None, help="Attach file path(s) before sending")
     p_ask.add_argument("--save", "-o", dest="save_path", help="Save full reply text to UTF-8 file")
     p_ask.add_argument("--new", action="store_true", help="Start a new chat before sending")
     p_ask.add_argument("--model", default=None, help="Switch to this model before sending")
@@ -102,6 +387,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_models = sub.add_parser("models", help="List configured (or --live probed) models & policy tiers for an endpoint")
     p_models.add_argument("endpoint", choices=ENDPOINT_NAMES)
     p_models.add_argument("--live", action="store_true", help="Open UIA model dropdown on Windows to probe live options & pricing")
+    p_models.add_argument(
+        "--json",
+        action="store_true",
+        dest="as_json",
+        help="Accepted for parity with the single-endpoint scripts "
+             "(models output is always JSON)",
+    )
 
     p_status = sub.add_parser("status", help="Show window & readiness status (one or all endpoints)")
     p_status.add_argument("endpoint", nargs="?", choices=ENDPOINT_NAMES, default=None)
@@ -111,7 +403,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_snap.add_argument("--all", action="store_true", help="Include non-interactive nodes")
     p_snap.add_argument("--limit", type=int, default=300)
 
-    p_list = sub.add_parser("list", help="List all 10 registered endpoints")
+    p_list = sub.add_parser("list", help="List all 11 registered endpoints")
+    sub.add_parser("doctor", help="Validate configs, model policy, ratio boxes, and template PNGs")
     p_list.add_argument("--json", action="store_true", dest="as_json")
 
     p_ledger = sub.add_parser("ledger", help="Inspect or clear the duplicate-submission ledger")
@@ -122,6 +415,22 @@ def build_parser() -> argparse.ArgumentParser:
     p_serve.add_argument("--host", default=None)
     p_serve.add_argument("--port", type=int, default=None)
 
+    p_stop = sub.add_parser(
+        "stop",
+        help="Ask the overnight scheduler to stop gracefully, then taskkill /F /T if it will not",
+    )
+    p_stop.add_argument(
+        "--force-wait",
+        type=float,
+        default=5.0,
+        help="Seconds to wait for a graceful exit before force-killing the tree (default 5)",
+    )
+
+    sub.add_parser(
+        "daemon-status",
+        help="Read-only status: scheduler PID liveness, state machine, ROADMAP backlog",
+    )
+
     return parser
 
 
@@ -129,6 +438,11 @@ def main(argv: list[str] | None = None, *, driver_factory=get_driver) -> int:
     configure_stdio_utf8()
     parser = build_parser()
     args = parser.parse_args(argv)
+
+    if args.command == "doctor":
+        res = {"version": __version__, **run_doctor(ENDPOINT_NAMES)}
+        safe_print_json(res)
+        return 0 if res["ok"] else 1
 
     if args.command == "list":
         if args.as_json:
@@ -148,9 +462,21 @@ def main(argv: list[str] | None = None, *, driver_factory=get_driver) -> int:
         return 0
 
     if args.command == "ask":
-        prompt = args.prompt
-        if args.prompt_file:
-            prompt = Path(args.prompt_file).read_text(encoding="utf-8")
+        try:
+            attach_paths = normalize_attach_paths(args.attach)
+            prompt_file = (
+                os.path.abspath(os.path.expanduser(str(args.prompt_file)))
+                if args.prompt_file else None
+            )
+            prompt = args.prompt
+            if prompt_file:
+                prompt = Path(prompt_file).read_text(encoding="utf-8")
+        except (FileNotFoundError, OSError) as exc:
+            safe_print_json(
+                {"ok": False, "error": "missing_resource", "message": str(exc), "reply": ""},
+                indent=None, stream=sys.stderr,
+            )
+            return 3
         targets = [t.strip().lower() for t in args.endpoint.split(",") if t.strip()]
         opts = {
             "prompt": prompt,
@@ -162,9 +488,12 @@ def main(argv: list[str] | None = None, *, driver_factory=get_driver) -> int:
             "free_only": args.free_only,
             "confirm": args.confirm,
             "force": args.force,
+            "attach": attach_paths or None,
         }
         if len(targets) == 1:
-            res = dispatch("ask", targets[0], opts, driver_factory=driver_factory)
+            res = ask_with_structured_errors(
+                targets[0], opts, driver_factory=driver_factory
+            )
             if res.get("ok") and args.save_path:
                 res["saved_to"] = save_reply_file(args.save_path, res["reply"])
             if args.as_json:
@@ -175,7 +504,10 @@ def main(argv: list[str] | None = None, *, driver_factory=get_driver) -> int:
                 safe_print_json(res, indent=None, stream=sys.stderr)
             return exit_code_for(res)
 
-        results = {t: dispatch("ask", t, opts, driver_factory=driver_factory) for t in targets}
+        results = {
+            t: ask_with_structured_errors(t, opts, driver_factory=driver_factory)
+            for t in targets
+        }
         all_ok = all(r.get("ok") for r in results.values())
         if args.save_path and all_ok:
             combined = "\n\n".join(f"=== {k} ===\n{v['reply']}" for k, v in results.items())
@@ -201,6 +533,9 @@ def main(argv: list[str] | None = None, *, driver_factory=get_driver) -> int:
         return exit_code_for(res)
 
     if args.command == "models":
+        # ``--json`` is accepted for CLI parity with the single-endpoint scripts
+        # (``models`` there also defaults to JSON); the payload shape is
+        # identical either way so no flagless caller changes behaviour.
         res = dispatch("models", args.endpoint, {"live": args.live, "headed": True}, driver_factory=driver_factory)
         safe_print_json(res)
         return exit_code_for(res)
@@ -223,6 +558,15 @@ def main(argv: list[str] | None = None, *, driver_factory=get_driver) -> int:
         )
         safe_print_json(res)
         return exit_code_for(res)
+
+    if args.command == "stop":
+        res = stop_scheduler(args.force_wait)
+        safe_print_json(res)
+        return 0 if res.get("ok") else 1
+
+    if args.command == "daemon-status":
+        safe_print_json(daemon_status())
+        return 0
 
     if args.command == "serve":
         srv = create_server(

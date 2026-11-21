@@ -48,7 +48,10 @@ class TestV023Fixes(unittest.TestCase):
         self.assertEqual(m, "free")
         self.assertTrue(free_only)
         m2, free2 = resolve_profile("gemini", "council")
-        self.assertEqual(m2, "carbon")
+        # v0.2.5: council moved off "carbon" because that target immediately
+        # hits the US$99.99 paywall dialog on the live account; "flash" is the
+        # highest model the council profile can actually reach today.
+        self.assertEqual(m2, "flash")
         self.assertFalse(free2)
 
     def test_workbuddy_profile_test_auto_picks_free_000x(self):

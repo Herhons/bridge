@@ -23,6 +23,14 @@ STATES = (
     "failed_terminal",
 )
 BLOCKING_STATES = frozenset({"submitting", "accepted", "unknown"})
+# ``unknown`` is recorded when a submit may or may not have landed. These two
+# notes mean *our* side gave up before a verified delivery, so a retry cannot
+# double-submit: blocking them turned one timeout into a permanent
+# ``duplicate rc=6`` lock that no amount of retrying could clear.
+RETRYABLE_UNKNOWN_NOTES = frozenset({"timeout", "submit_not_verified"})
+# A ``submitting`` row left behind by a killed process would block the key
+# forever; past this age it is treated as abandoned rather than in flight.
+SUBMITTING_STALE_SECONDS = 900.0
 
 
 class SubmissionLedger:
@@ -54,14 +62,52 @@ class SubmissionLedger:
         raw = f"{endpoint.strip().lower()}:{prompt}"
         return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
 
-    def check(self, prompt: str, endpoint: str) -> tuple[bool, str]:
-        """Return ``(allowed, previous_state)``. Fail-closed on submitting/accepted/unknown."""
+    def check(
+        self,
+        prompt: str,
+        endpoint: str,
+        *,
+        allow_retry_unknown: bool = True,
+        now: float | None = None,
+    ) -> tuple[bool, str]:
+        """Return ``(allowed, previous_state)``.
+
+        ``accepted`` always blocks: that prompt really was delivered, and
+        resending it would be a genuine duplicate.
+
+        ``unknown`` blocks *unless* it was recorded with a transient note
+        (``timeout`` / ``submit_not_verified``) and ``allow_retry_unknown`` is
+        left on. Those notes mean our side stopped waiting before a verified
+        receipt, so the remote never confirmed anything; a bare ``unknown`` with
+        no note (or any other note) keeps the fail-closed behaviour.
+
+        ``submitting`` blocks only while the row is fresh. A process killed
+        mid-submit cannot be distinguished from a live one, so after
+        ``SUBMITTING_STALE_SECONDS`` the key is reclaimed instead of staying
+        wedged forever.
+
+        ``now`` exists for tests; production callers use the wall clock.
+        """
         k = self.key(prompt, endpoint)
-        data = self._load()
-        state = str(data.get(k, {}).get("state") or "draft")
-        if state in BLOCKING_STATES:
+        entry = self._load().get(k) or {}
+        state = str(entry.get("state") or "draft")
+        if state not in BLOCKING_STATES:
+            return True, state
+        note = str(entry.get("note") or "")
+        if state == "unknown":
+            if allow_retry_unknown and note in RETRYABLE_UNKNOWN_NOTES:
+                return True, state
             return False, state
-        return True, state
+        if state == "submitting":
+            stamp = float(now if now is not None else time.time())
+            try:
+                age = stamp - float(entry.get("ts") or 0.0)
+            except (TypeError, ValueError):
+                age = 0.0
+            if age >= SUBMITTING_STALE_SECONDS:
+                return True, state
+            return False, state
+        return False, state
 
     def mark(self, prompt: str, endpoint: str, state: str, *, note: str = "") -> dict[str, Any]:
         if state not in STATES:

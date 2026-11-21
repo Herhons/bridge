@@ -1,5 +1,5 @@
 {
-  "version": "0.2.4",
+  "version": "0.2.5",
   "updated_at": "2026-11-20",
   "profiles": {
     "test": {
@@ -42,9 +42,10 @@
   },
   "endpoints": {
     "gemini": {
+      "_note": "council 曾指向 carbon，但当前账号选 carbon 会命中 US$99.99 付费墙（快照出现『解锁 4 Carbon』弹窗），因此改为真实可用的 flash；carbon 仍在 models/verified_models 中保留，等账号有额度再切回。",
       "test": "hydrogen",
       "routine": "neon",
-      "council": "carbon",
+      "council": "flash",
       "verified_models": [
         {"id": "hydrogen", "ui_label": "日常帮助 4 Hydrogen", "tier": "free"},
         {"id": "neon", "ui_label": "Neon", "tier": "standard"},
@@ -89,6 +90,16 @@
       "council": "default",
       "verified_models": [
         {"id": "default", "ui_label": "GrokBot 默认", "tier": "free"}
+      ]
+    },
+    "antigravity": {
+      "test": "default",
+      "routine": "default",
+      "council": "default",
+      "note": "2026-11-21 只读 UIA 探测：选择器为 ButtonControl 'Select model, current: Gemini 3.8 Flash Medium'（ExpandCollapse+Invoke 可用）。下拉需点击才能展开，本次禁止，故可用档位未枚举；三个 profile 一律保持 default（endpoints.json 中 skip_default_model_switch=true，不会触发切换）。tier 为人工标注，UI 标签无价格/倍率标记，未经计费实测。",
+      "verified_models": [
+        {"id": "default", "ui_label": "Antigravity", "tier": "free"},
+        {"id": "gemini_38_flash_medium", "ui_label": "Gemini 3.8 Flash Medium", "tier": "standard"}
       ]
     },
     "hermes": {

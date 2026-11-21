@@ -1,0 +1,305 @@
+# Bridge 路线图（唯一权威主线）
+
+> 本文件是 Bridge 的**唯一权威主线**。多主脑（`gemini` / `deepseek` / `grok`）与多执行器
+> （`workbuddy` / `opencode` / `antigravity`）一律只依据本文件中未勾选的 `- [ ]` 项推进，
+> 不得自行另立主线、不得跳过未完成项去做后面的活。
+>
+> 调度器 `scripts/auto_heal_loop.py` 把本文件列为 `BACKLOG_CANDIDATES` 的第一顺位；
+> 一旦本文件不存在 `- [ ]` 待办（或正文出现 `ALL_DONE` 标记），状态机直接记 `ALL_DONE`
+> 并优雅退出，不再空转。
+
+---
+
+## 1. 项目定位
+
+Bridge 是运行在 **Windows 副屏（x 轴 `-1440..0`，竖屏 1440×2560）** 上的**多 AI 调度总线**：
+把「规划」与「落地」拆成两层，用 UI 自动化把多家 AI 串成一条流水线，并在这条流水线之上
+做**不依赖单一 AI 的自迭代系统**——自愈（红测试 → 报告 → 修复）、自排期（读本路线图取下一小步）、
+自提交（全量单测为门禁，绿了才 commit/push）。
+
+单一厂商限流、付费墙、改版、下线都不会让系统停摆：任一层失效即降级到下一层。
+
+## 2. 红线（所有自动化必须遵守，不可协商）
+
+- **双屏**：只在副屏 `-1440..0` 内操作窗口；**严禁抢占主屏（`0..2560` × `0..1440`）前台焦点**，
+  严禁在本任务中打开或点击真实窗口。窗口移动一律 `SetWindowPos + SWP_NOACTIVATE`。
+- **剪贴板**：**严禁污染系统剪贴板**。写入前必须备份、写入后必须无损还原（方案 A）。
+- **单测**：**严禁删除、跳过或弱化任何既有单测断言**；任何改动后
+  `py -3.10 -m unittest discover -s tests -v` 必须 `rc=0`（既有条数只增不减）。
+- **Git**：严禁 `force push`、严禁删分支、严禁触碰 `v0.0.8` / `v0.0.9`。
+- **运行态数据**：`runs/` 不入库；`ledger.json`、`state_machine*.json`、`dispatched/` 只作诊断用途。
+
+## 3. 双层兜底架构
+
+| 层 | 顺序 | 降级条件 |
+| --- | --- | --- |
+| **主脑**（规划 / 诊断） | `gemini -> deepseek -> grok` | 非零 rc、超时、空回执、缺少 `<<<BRIDGE_PATCH_*>>>` 或 `<<<WORKBUDDY_TASK_*>>>` 标记块 |
+| **执行器**（落地） | `workbuddy -> opencode -> antigravity` | 空回执、非零 rc（含超时 124）、抛异常 |
+
+同一张任务卡（`card_id = round + sha256(card)[:12]`）一旦处于 `dispatched` 或 `timed_out`，
+**严禁盲目重派给下一个执行器**——先标记 `needs_review` 并上报，杜绝 WorkBuddy 与 Antigravity 并发双发。
+
+## 4. 主线进度
+
+- [x] **M1 / M2 / M3**：基础框架、11 端点驱动、模型策略与 `--profile`、doctor 自检、HTTP 只读服务
+- [x] `engine/file_dialog.py` 拆分（从 `engine/base.py` 抽出文件对话框逻辑，行为不变）
+- [x] OpenCode 调度修复与 5 轮基础闭环（截至 `585bdaa`，162/162 单测全绿）
+- [x] **M4-1（P0）**：入库 `docs/ROADMAP.md`（唯一权威主线）
+  - `bridge.py stop` / `bridge.py daemon-status` 一键急停与只读状态
+  - `ALL_DONE` 立即优雅退出（本文件无 `- [ ]` 时不再空转 3 轮）
+  - `--daemon` 正式命名（与 `--overnight` 等价，保留兼容）
+  - `StateMachine` 原子落盘（`.tmp` + `os.replace`）与 PID 隔离（活着的调度器历史不被覆盖）
+  - 任务卡幂等防双发（`runs/dispatched/<card_id>.json` 记录 `dispatched / completed / timed_out`）
+- [x] **M4-2（P0.5）**：模型与驱动层速败
+  - 第 1 批：`ledger` 超时解锁（`unknown` + `timeout`/`submit_not_verified` 可重试，不再 `duplicate rc=6`）、
+    `bridge.py models --json` 统一、`opencode.EXE` 加 `CREATE_NO_WINDOW` 与额度速败标记 +
+    `runs/opencode_cooldown.json`
+  - 第 2 批：`run_cmd` / `git` / `kill_process_tree` 全部 `CREATE_NO_WINDOW`（彻底消掉 python.exe 黑框）；
+    回落前先比对工作区指纹，上一级已写完代码但没回执时**停止回落**交单测门禁，杜绝双发；
+    `auto` 链遇到冷却中的 opencode 记 `executor_skip=opencode reason=cooldown_active` 直接跳过
+  - 阻断弹窗速败：`engine/base.py` 新增 `blocking_popup_patterns`（默认覆盖 `解锁 4 Carbon` /
+    `US$99.99` / `升级到` / `Waiting for user input` / `Yes, allow this time` / `Allow check `，
+    可按端点在 `config/endpoints.json` 扩展），`ask()` 在发写前与等待循环内命中即返回
+    `error="blocking_popup"`，账本记 `failed_retryable` 不锁死
+    （M4-3 已把误报的裸词 `Request Review` 移出词表：它是常驻按钮，不是弹窗）
+  - Gemini `council` 从付费墙档位 `carbon` 改为 `flash`（`carbon` 仍保留在 `models` 中供 `--model` 手动使用）
+  - 遗留：`deepseek / grok` 网页版 `--profile council` 下拉最高可用模型的**真机**校准仍需真实窗口，
+    顺延到 M4-4
+- [x] **M4-3（P1）**：剪贴板与窗口层收编
+  - 剪贴板「方案 A」：`engine/uia.py` 新增 `backup_clipboard` / `restore_clipboard` /
+    `preserved_clipboard()`，`_headed_paste_text`、`click_ratio_and_paste`、
+    `upload_via_file_dialog` 三条粘贴路径全部改为先备份、`finally` 无损还原；
+    非文本剪贴板（图片等）标记 `restorable=False` 而不是用空串覆盖
+  - 破冰键入：端点配置项 `icebreaker_before_paste: true`，粘贴前发一次 space+backspace
+  - 主屏焦点运行时门禁：`engine/window.py` 新增 `FocusGuard` / `foreground_hwnd` /
+    `is_on_primary_screen`；`focus_window`、ratio 粘贴、composer 写入三处均纳入门禁，
+    事件写 `warnings.focus_guard:primary_lost:0x..->0x..`，`focus_guard_strict: true` 时
+    在提交前返回 `error="focus_taken"`
+  - DeepSeek 去思考：`endpoints/deepseek.py` 新增 `strip_thinking_sections`，base 过滤前后
+    各剥一次（`已思考（用时 N 秒）` 会被 base 噪声正则先删掉，故必须先剥再交给 base）
+  - 副屏平铺：`tile_windows_on_secondary_screen()` 用 `SetWindowPos + SWP_NOACTIVATE |
+    SWP_NOZORDER` 纵向平铺，坐标全部来自副屏 bounds（自动读 `right <= 0` 的显示器）
+  - 真机验证（2026-11-21 13:20，证据 `runs/m4_3_attach_verify.txt`）：
+    **剪贴板已验无损还原**（2598 字符逐字节一致）；**Gemini `--attach` 未闭环**——
+    当时快照里 composer 与“上传和工具”按钮都不在 AX 树（可见区仅剩正文 + 打开边栏/设置），
+    `attach_menu_item` 必然找不到，#32770 从未被触发，故“空框卡死”既未复现也未证伪
+  - 另发现（如实记录）：`--headed` 的 `focus_window` 把主屏前台（斗鱼客户端 529300）抢到
+    副屏 Gemini(332038)；本轮已把该调用纳入 `FocusGuard`，但 `focus_guard_strict` 默认关闭，
+    故本次仍实际抢了焦点
+- [x] **M4-GUI**：原生无黑框桌面控制台 bridge_gui.pyw（stdlib tkinter，副屏停靠、一键启停、主线进度、OpenCode 冷却与实时日志）
+  - 纯逻辑层（`parse_roadmap` / `read_log_tail` / `read_opencode_cooldown` /
+    `build_daemon_cmd` / `run_bridge_json` / `compute_secondary_geometry` / `status_badge`）
+    全部可离线单测；`tkinter` 惰性导入，导入模块不建窗口
+  - 子进程一律 `CREATE_NO_WINDOW`，守护进程 `CREATE_NO_WINDOW | DETACHED_PROCESS |
+    CREATE_NEW_PROCESS_GROUP` 分离启动；关闭控制台不会带走调度器
+  - 默认停在副屏左侧（`x < 0`，`480x700-500+40`），`SetWindowPos + SWP_NOACTIVATE`
+    落地，不抢主屏焦点、不碰系统剪贴板
+- [x] **M4-bugfix**：任务卡占位符自匹配根治（过夜调度 13:36 把 `...任务卡内容...` 当卡片派发）
+  - `extract_task_card` / `extract_patch` 改为遍历 `finditer()` 取**最后一个非占位块**，
+    `_is_placeholder_block()` 过滤空串 / `...任务卡内容...` / `...unified diff...` / 短省略号示例；
+    全为占位块时返回 `""`
+  - `build_task_prompt` / `build_gemini_prompt` 不再内嵌任何可被 `TASK_RE` / `PATCH_RE` 命中的
+    示例块（标记名改写成文字说明），提示词自身永远不会被抽取
+  - `reply_has_contract` 同步收紧：纯回声不再算合法回执，脑链继续回落到下一个端点
+- [x] **M4-4（P0）**：Gemini 附件真机闭环 + 焦点严格门禁默认化
+  - composer 可见性前置检查（滚到底/等待输入区就绪）后再触发 `--attach`，把 `#32770`
+    空框问题一次验穿，证据补进 `runs/m4_3_attach_verify.txt`
+  - 真机回归统一开启 `focus_guard_strict: true`，让抢主屏焦点直接失败而非静默发生
+  - 真机校准 `deepseek / grok` 的 `--profile council` 最高可用模型（`available_options=[]`）
+  - 本轮已完成（离线，已验）：`focus_guard_strict` 默认 `True`（`config/bridge.json` 显式写死，
+    调用方可用端点配置覆盖）；`--headed` 进入交互前先探主屏前台，有主屏前台时**不再调用**
+    `focus_window`，只在确实夺焦时按严格门禁返回 `error="focus_taken"`；新增
+    `_ensure_composer_ready()`（滚底 + 重采，仍缺则结构化失败）；attach 按钮/菜单点击纳入
+    `guarded_write`，夺焦即在提交前中止。新增 12 条离线单测
+    `tests/test_m4_4_focus_and_attach_ready.py`，全量 295 条 rc=0
+  - 本轮被阻塞（未验，原因已实测）：① Gemini「上传和工具」按钮**没有 InvokePattern**，
+    headless（`headless_default=true`，命令未带 `--headed`）点击即 `POLICY_DENIED`，
+    `#32770` 因此从未被触发——这是 M4-3 “空框未复现”的上游真因；`--headed` 的物理点击会
+    激活副屏窗口并抢走主屏前台，严格门禁下只会返回 `focus_taken`，需用户让出主屏或显式
+    关闭门禁方可重跑；② `deepseek / grok` 在非前台状态下 AX 树只暴露 1 个 `DocumentControl`，
+    无 `model_selector` 节点，展开下拉必须激活窗口，故 council 校准未做、配置未改（不编造）
+  - 本轮事故（如实记录）：13:44 只读探针用 `uia:invoke` 让 DeepSeek 窗口成为前台
+    （前台 529300→2362972），0.4s 内已还原为 529300；此后改为一律只读快照
+  - 副发现（本轮已修）：`bridge.py status` 曾对 `deepseek / grok` 报 `ready=true`，实为整页
+    `DocumentControl` 被 `_find_composer` 当成 composer 的假阳性；新增
+    `is_fullpage_document_node()`（宽 >=85% 且高 >=70%）在 `_find_composer()` 中剔除该容器
+  - 焦点方案 A（本轮落盘，已验）：`engine/window.py` 新增 `restore_focus()` /
+    `preserved_focus()`，`FocusGuard` 支持 `restore_on_exit=True` —— 离开上下文时**先还原**
+    主屏原前台，成功记 `focus_guard:restored:0x..` 且不抛错，只有还原不回去才 `taken=True`
+    并按严格门禁抛 `focus_taken`；`engine/base.py` 新增 `focus_borrow_restore()`（默认 `True`）
+    与 `_borrowed_focus()`，`ask()` 输入/提交、`switch_model()`、`attach_files()`、
+    `models(live=True)`、回复复制点击全部走「瞬时借焦 → 动作 → `finally` 还原」
+  - 真机暴露并修掉的 4 个缺陷（全部实测有据）：① `SetForegroundWindow` 异步生效，立即复验
+    会假阴性（14:31 一次还原其实成功却被判 `focus_taken`）→ 改为轮询复验 + `AttachThreadInput`
+    兜底；② 前台锁可能直接拒绝转交 → 失败时 `raise_window()`（`SetWindowPos +
+    SWP_NOACTIVATE`）抬 Z 序并记 `focus_guard:borrow_unconfirmed:0x..`；③ 附件菜单固定
+    `sleep(0.35)` 太短（实测 0.44s 才进 AX 树）→ `_wait_attach_menu()` 轮询至 3s；④ Gemini 的
+    `#32770` 由**另一个 chrome.exe 进程**拥有（实测 pid 39744 / 23536，窗口 pid 30812）→
+    `list_file_dialogs()` + `fill_file_dialog()` 按「本次新出现 + 同镜像名」定位，只认可见
+    `#32770`（本机有 6 个隐藏的网银 USBKey 对话框，不会被冒充）
+  - 剪贴板漏洞（本轮已验）：读回复的 `copy_button` 点击会把回复写进剪贴板（实测把用户 3840
+    字符换成 2 字符「OK」）→ 该点击 + 读取整体包进 `preserved_clipboard()`，并纳入借焦还原
+  - 真机结果（2026-11-21 14:2x~14:5x，主屏前台全程为斗鱼客户端 `0x81394` 的最严苛条件）：
+    Grok `--profile council` → `model_switch.switched=true`、`target="Expert"`（`models --live`
+    实测下拉为 `CheckBoxControl`：Auto/Fast/Expert/Build/Heavy，已据此校准 `model_option`）；
+    Gemini `--attach` → `attach_methods=["#32770:file_dialog"]`、回复 `BRIDGE_ATTACH_OK_M43`、
+    `rc=0`；三次运行 warnings 均为 `focus_guard:restored:0x81394`，收尾
+    `foreground_hwnd=529300`（斗鱼，主屏 `[0,0,2560,1440]`）与运行前一致，剪贴板
+    `sha256[:16]=565339bc4d33d728` 前后一致
+  - DeepSeek `--profile council`（think）**仍不可自动切换**（已实测记录，非未做完）：网页版
+    「深度思考」是输入框下方 chip，只暴露 `TextControl` + `LegacyIAccessible`，无
+    Invoke/Toggle 模式、开关状态不可读；`models --live` 如实返回 `selector_not_found`
+    （修复前会误点无名的 16x17 按钮），说明写入 `config/endpoints.json` 的 `models_note`。
+    需要 thinking 时人工点开该开关，`ask` 侧不再声称切档成功
+  - 单测：新增 `tests/test_m4_4_focus_option_a.py`（24 条），全量 319 条 `rc=0`
+  - 副发现（未修，下轮）：DeepSeek 开启深度思考时推理正文会混进 `uia_delta` 结果
+    （「已思考（用时 N 秒）」头先被 base 噪声正则删掉，`strip_thinking_sections` 失去边界）
+- [x] **M4-5（GUI 体验修复）**：修复 `bridge_gui.pyw` 两处实机观感问题
+  - 修复「执行器 Profile」下拉框白底浅灰字对比度过低问题（改为深色高对比样式，readonly 状态下清晰可读）
+  - 修复底部实时日志区长行右侧截断问题（合理换行/水平滚动并保证最新行自动滚底）
+  - 补齐对应离线单测
+  - 落地（已验）：新增纯逻辑配色 `COMBOBOX_STYLE_CONFIG` 与 `configure_dark_combobox_style()`；
+    `clam` 主题只 configure 不 map 时 readonly 会渲染成白底浅灰字，故显式映射
+    `fieldbackground=#1e293b`、`background=#334155`、`foreground=#f8fafc`、
+    `selectbackground=#334155`、`selectforeground=#f8fafc`、`arrowcolor=#e2e8f0`，
+    并用 option 数据库给弹出列表上色（`*TCombobox*Listbox*Background/Foreground`），
+    `none` 等选项在未选中/已选中两种状态下都可读
+  - 落地（已验）：日志 `Text` 由 `wrap="none"` 改为 `wrap="char"`（无空格长 URL / JSON /
+    英文路径按字符折行，不再右侧截断）并保留垂直 `Scrollbar`；新增 `should_autoscroll()`
+    让 `see("end")` 只在视图已贴底时触发，用户上翻看历史不会被拽回末尾
+  - 落地（已验）：面板 `480x700-500+40` → `560x700-580+40`（宽 560，`x + width = -20 <= 0`，
+    仍全在副屏 `-1440..0` 内）
+  - 单测：`tests/test_bridge_gui.py` 新增 7 条（readonly 高对比映射、弹出列表配色、
+    注入伪 `Style` 的调用顺序、无 Tk 的纯逻辑返回值、`wrap=char`、仅在底部自动滚底、
+    加宽后仍在副屏），全量 326 条 `rc=0`；`bridge.py doctor` `ok:true`（未实例化任何真实 Tk 窗口）
+- [x] **M4-6（DeepSeek CoT 正文净化）**：修复 DeepSeek 开启深度思考时推理正文混入 `uia_delta`
+  - 在 `DEFAULT_NOISE_REGEXES` 删除「已思考（用时 N 秒）」之前保留边界并精准剥离思考段落，只返回最终回答正文
+  - 补充包含真实思考头与多段推理正文的离线回归单测
+  - 落地（已验）：`endpoints/deepseek.py` 新增 `REASONING_LINE_RE`（`嗯，` / `好的，` / `我们需要` /
+    `用户问` / `让我先` / `let's` / `the user` 等推理开口），`strip_thinking_sections()` 在
+    「显式 `最终回答：` 标签」之后新增两道兜底：多段（`len(groups) >= 2`）时跳过开头连续的推理段、
+    无空行（单段）时跳过开头连续的推理行，两者都**至少保留最后 1 段/1 行**，绝不返回空回复
+  - 落地（已验）：`scripts/auto_heal_loop.py` 新增 `current_roadmap_task_title()`，`build_task_prompt()`
+    首行改 `【Bridge 自动迭代 round=N | <主线项> | BASE_COMMIT=<sha>】`；`call_executor()` 在
+    某一级「回复为空但 `HEAD` 前进」时记 `executor_committed` 并按完成收口、抑制误回落；
+    `run_overnight()` 提交信息改 `chore(auto): round N <主线项>`，`has_changes()` 为假但 `HEAD`
+    已前进时归零 `idle_streak`
+  - 单测：新增 `tests/test_m4_6_cot_and_scheduler_fixes.py`（7 条），全量 333 条 `rc=0`；
+    `bridge.py doctor` `ok:true`（version 仍 0.2.5）
+- [x] **M4-7（架构瘦身与单测卫生）**：消除 `scripts/auto_heal_loop.py` 与 `bridge.py` 重复控制逻辑
+  - 将两处重复的 PID 存活探测、`StateMachine` 原子落盘、`docs/ROADMAP.md` 解析与 `runs/STOP` 控制抽离到独立模块 `engine/daemon_state.py`，两端统一导入（100% 保持既有函数名与 CLI 行为兼容）
+  - 隔离既有旧单测 `test_green_suite_commits_and_respects_no_push` 的 `RUNS` 路径（不改任何断言，只避免写脏真实 `runs/state_machine.json`）
+  - 落地（已验）：新增 `engine/daemon_state.py`（纯标准库）：`pid_alive`（nt 走
+    `OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION)` + `GetExitCodeProcess`，绝不 signal）、
+    `scheduler_pid`/`read_pid_file`、`stop_path`/`stop_requested`/`clear_stop_files`、
+    `roadmap_counts(path)`/`count_roadmap_items(text)`/`roadmap_all_done(path)`、
+    `_atomic_write_text`、`StateMachine`（`.tmp` + `os.replace`，异 PID 活体分写
+    `state_machine.<pid>.json`）、`read_opencode_cooldown_until(path, now=)`
+  - 落地（已验）：`scripts/auto_heal_loop.py` 全部改为注入式薄封装（`runs_dir=lambda: RUNS`、
+    `pid_alive_fn`/`log_fn` 运行期解析），既有 `ahl.RUNS` / `ahl.pid_alive` / `ahl.log`
+    monkeypatch 点全部继续生效；`bridge.py` 的 `scheduler_pid`/`pid_alive`/roadmap 计数/STOP
+    判定同一份实现；`bridge_gui.pyw` 的 roadmap `all_done` 与冷却标记改走同一份解析。
+    顺带删掉抽离后不再使用的 `ctypes`/`re` 导入
+  - 落地（已验）：冷却键名兼容 —— `read_opencode_cooldown_until()` 同时认 `until` 与
+    `cooldown_until`（`COOLDOWN_UNTIL_KEYS`），此前写 `cooldown_until` 的标记对
+    `auto_heal_loop` 与 GUI 均不生效（M4-6 轮已上报，本轮修复）
+  - 单测：新增 `tests/test_m4_7_daemon_state.py`（16 条）；`test_green_suite_commits_and_respects_no_push`
+    改用 `TemporaryDirectory()` 隔离 `RUNS`（断言一字未改，实测不再向真实 `runs/` 写侧写文件）；
+    全量 349 条 `rc=0`；`bridge.py doctor` `ok:true`（version 仍 0.2.5）
+
+- [x] **M4-8（主脑签收闭环与守护体验修复）**：
+  - 取消本地单方面 `ALL_DONE` 静默退出：当 `docs/ROADMAP.md` 无剩余 `- [ ]` 时，守护进程自动汇总最近提交与全量单测结果向主脑发起收口验收汇报；仅当主脑回复明确包含 `<<<BRIDGE_ALL_DONE>>>` 时才记 `ALL_DONE` 优雅退出，否则继续执行主脑下发的下一项补丁/任务
+  - 将 `bridge_gui.pyw` 启动守护进程的默认 `--timeout` 从 `300` 调整为 `600`（避免 270s 半路抢提交）
+  - 修复 Windows 下 `git commit` 中文回显在日志里乱码成 `` 的问题（`git` 传 `-c i18n.logOutputEncoding=utf-8 -c core.quotepath=false`）
+  - 补齐对应离线单测
+  - 落地（已验）：`scripts/auto_heal_loop.py` 新增 `ALL_DONE_SIGN_OFF_MARKER` /
+    `brain_signed_off_all_done()` / `build_signoff_prompt()` / `request_signoff_from_brain()`
+    （后者不复用 `call_brain`：纯签收回复没有补丁/任务卡标记，会被 `call_brain` 的
+    `reply_has_contract` 过滤掉）；`run_overnight(require_brain_signoff=True)` 默认启用签收制，
+    三种返回已分别落盘验证：签收标记 → `ALL_DONE` 退出、带回任务卡 → 直接进入执行链
+    （不再重复向主脑要任务）、两者皆无 → 记 `AWAITING_BRAIN_SIGNOFF` 并按 `idle_streak` 计次；
+    仅 `require_brain_signoff=False` 且路线图自带独立 `ALL_DONE` 行时才走旧路径
+  - 落地（已验）：`engine/daemon_state.py` 的 `STATE_NAMES` 新增 `AWAITING_BRAIN_SIGNOFF`
+    （状态机仍集中校验，`bridge.py`/`bridge_gui.pyw` 同步可见）
+  - 落地（已验）：`bridge_gui.pyw` 新增 `DEFAULT_DAEMON_TIMEOUT = 600`，`build_daemon_cmd()`
+    与 `_do_start()` 统一引用（`launch_daemon_detached()` 本就不收 timeout 参数，无需改）；
+    `tests/test_bridge_gui.py` 仅把写死的 `300` 同步为 `DEFAULT_DAEMON_TIMEOUT`，断言未削弱
+  - 落地（已验）：`git()` 每次调用固定带 `-c i18n.logOutputEncoding=utf-8 -c core.quotepath=false`。
+    真机抽查 `git log -1 --format=%s c6f032a`：带 flag 为
+    `chore(auto): round 1 M4-7（架构瘦身与单测卫生）`，强制 `i18n.logOutputEncoding=gbk`
+    时复现乱码 `chore(auto): round 1 M4-7���ܹ������뵥��������`，确认就是该配置项
+  - 落地（已验）：签收提示词内嵌路线图节选，而本文件正文就写着签收标记字面量 →
+    新增 `_redact_signoff_marker()` 在入提示词前把该字面量替换成文字说明，
+    并加断言 `build_signoff_prompt()` 含标记字面量的路线图也不会泄漏（否则主脑照抄提示词即「自签收」）
+  - 单测：新增 `tests/test_m4_8_signoff_and_timeout.py`（8 条）；`test_roadmap_without_pending_items_exits_all_done_at_once`
+    只补了签收函数的 stub（原有断言一字未改，另加 `signoff.assert_called_once()`）；
+    全量 357 条 `rc=0`；`bridge.py doctor` `ok:true`（version 仍 0.2.5）
+- [x] **M4-9（GUI 执行器选择与一键会审）**：
+  - `bridge_gui.pyw` 增加「执行器」下拉框（`workbuddy / auto / antigravity`，默认 `workbuddy`）并在顶部显示当前执行器
+  - 增加「一键三方会审」按钮（异步调用 `deepseek / grok / gemini` 并汇总落盘）与对应离线单测
+  - 落地（已验）：新增 `EXECUTOR_CHOICES` / `EXECUTOR_DEFAULT = "workbuddy"`，控制区「执行器」
+    下拉框复用 `COMBOBOX_STYLE_CONFIG` 高对比深色样式；`build_daemon_cmd()` 的 `executor`
+    默认值同步改为 `EXECUTOR_DEFAULT`（避免 UI 显示 workbuddy、命令却回落 `auto`）；
+    `launch_daemon_detached(..., executor=)` 新增可选覆盖（`_with_executor()` 只复制重写 argv，
+    不改调用方列表）；顶部元信息行新增 `执行器 <当前值>`
+  - 落地（已验）：新增纯逻辑 `build_council_brief()`（分支 + HEAD + 未勾选主线项 →
+    `runs/council_brief_auto.md`，同时充当 `--file` 提示词；`_git_text()` 与调度器同样带
+    `i18n.logOutputEncoding=utf-8` + `core.quotepath=false`）与 `run_three_way_council()`
+    （逐端 `ask <ep> --file <brief> --profile council --headed --json --save ...`，
+    `runner` 可注入；单端非零/空回复/异常只记 `failed`，其余端照跑，汇总落
+    `runs/council_bundle_auto.md`，返回 `{ok, succeeded, failed, bundle_path, results}`）
+  - 落地（已验）：「⚖ 三方会审」按钮走既有 `_spawn()` 后台线程（`_do_council()`），
+    结果经动作提示栏回显成功/失败明细；`tkinter` 仍严格惰性导入，模块导入时 `gui.tk is None`
+  - 单测：新增 `tests/test_m4_9_gui_executor_and_council.py`（9 条，零 Tk、runner 注入）；
+    全量 366 条 `rc=0`；`bridge.py doctor` `ok:true`（version 仍 0.2.5）
+- [x] **M4-10（`engine/base.py` 瘦身重构）**：
+  - 将 `EndpointDriver.ask()` 拆清为独立子阶段 helper（前置准备、写入提交、回复收敛与取回），保持全部既有单测零改动全绿
+  - 落地（已验）：`ask()` 由 440 行精简到 **115 行**（`inspect.getsourcelines` 实测），只保留
+    时间/预算/poll 取值、锁、可见性前置检查与三阶段调度；拆出
+    `_prepare_ask_inputs()`（profile 解析 → attach 归一化与存在性校验 → `prepare_prompt` →
+    空 prompt 与 `ledger.check()` 去重）、`_submit_prompt_to_window()`（composer/ratio 兜底、
+    焦点方案 A 下写入与提交、阻断弹窗、记账 `submitting`）、`_await_reply_convergence()`
+    （轮询收敛、`copy_button` 剪贴板保护取回、`returned_at_deadline`、超时/回执诊断落盘与终态记账）
+  - 落地（已验）：返回值与错误分支逐字等价 —— 用脚本把被搬移的两段原文 dump 到 `runs/` 后
+    与 helper 体做去空白/去注释的 `difflib` 对比，除新增签名、docstring、参数透传与末尾
+    `return None, {...}` 外**零差异**；两个 helper 返回 `(error_payload, state)`，
+    错误分支仍原样返回给调用方（`state` 为空即调用方直接 return）
+  - 落地（已验）：`ask()` 未声明的入参按需补进 helper 关键字（`profile`/`started` 供错误载荷、
+    `effective_free_only`/`attach_paths`/`attach_methods`/`model_switch_info` 供附件与切档），
+    四个 gate 配置项（`content_min_rel_x`/`content_max_rel_x`/`require_send_receipt`/
+    `require_new_copy_button`）改为在收敛阶段按同一表达式重读，值恒等
+  - 单测：新增 `tests/test_m4_10_base_refactor.py`（12 条：结构/三阶段独立/四条历史回归路径），
+    全量 378 条 `rc=0`（**既有 366 条一条未改**）；`bridge.py doctor` `ok:true`（version 仍 0.2.5）
+- [x] **M4-11（本地 HTTP 控制面收口）**：
+  - 为 `engine/server.py`（`127.0.0.1:18765`）新增 `/daemon/status` 与 `/daemon/stop` 接口及离线单测
+  - 落地（已验）：`BridgeHTTPServer` / `create_server()` 新增可注入的 `status_fn` / `stop_fn`，
+    默认值为 `_default_status_fn` / `_default_stop_fn`（**函数内延迟 `import bridge`**，因为
+    `bridge.py` 反过来要 import 本模块建服务器，模块级导入会成环）；两者分别只调用
+    `bridge.daemon_status()` 与 `bridge.stop_scheduler(force_wait)`，**未复制任何控制逻辑**
+  - 落地（已验）：`GET /daemon/status` 恒 200 返回 `bridge.py daemon-status` 原始快照
+    （`running`/`pid`/`state`/`roadmap_pending`/`roadmap_total`/`dispatch_unfinished`/
+    `dispatch_needs_review` 等），handler 抛错则 500 `status_failed`
+  - 落地（已验）：`POST /daemon/stop` 读可选 `{"force_wait": 5}`（缺省 5s，非数字/负数 400
+    `invalid_force_wait` 且**不进入急停路径**），成功 200 透传急停结果，handler 抛错 500 `stop_failed`
+  - 落地（已验）：顺带修 `do_POST` 的健壮性 —— 合法 JSON 但不是对象（数组/字符串）原先会在
+    `body.get` 处 500，现统一 400 `invalid_json`（对所有 POST 路由生效，含 `/ask` `/read`）
+  - 真机只读冒烟（仅 GET，未触碰 `/daemon/stop`）：默认 handler 返回 HTTP 200，
+    `pid=31508 running=true state=BRAIN_PLAN round=4 roadmap_pending=1 roadmap_total=16`
+  - 单测：新增 `tests/test_m4_11_server_daemon_api.py`（11 条，回环随机端口 + 注入
+    `status_fn`/`stop_fn`，**全程不写 `runs/STOP`、不探测/杀真实 PID**）；
+    全量 389 条 `rc=0`（既有 378 条一条未改）；`bridge.py doctor` `ok:true`（version 仍 0.2.5）
+- [x] **M4-12（守护进程自改热重启）**：`scripts/auto_heal_loop.py` 提交后检测自身或 `engine/daemon_state.py` 被修改时自动 `os.execv` 原地重启加载新代码
+  - 仅由云端主脑输出补丁，本地负责 `git apply` 与全量单测验证
+- [x] **M4-13（本地 HTTP 补齐启动接口）**：`engine/server.py` 新增 `POST /daemon/start`，对齐 `/daemon/status` 与 `/daemon/stop`，支持幂等防重与脱离执行器沙箱分离启动守护进程
+  - 仅由云端主脑输出补丁，本地负责 `git apply` 与全量单测验证
+- [x] **M4-14（模型与 UI 漂移自检测及诊断上报自愈）**：新增 `engine/drift.py` 并在 `engine/base.py` 与 `scripts/auto_heal_loop.py` 接入漂移检测
+  - 发现新模型（如 Gemini 出现新档位）、旧选项消失或选择器失效时立即速败，带具体原因与 UIA/模型选项快照落盘 `runs/drift/latest.json`
+  - `build_handoff_bundle()` 自动附带未处理的漂移诊断报告发给云端主脑，由云端主脑直接产出配置或脚本修复补丁
+  - 实测：新增 `tests/test_m4_14_drift.py`（12 条隔离单测全部通过），全量 415 条单测全绿（Ran 415 tests in ~25s, OK），`bridge.py doctor` 验证通过（`ok: true`）；支持 HTML 安全标记 `===...===` 与旧 `<<<...>>>` 兼容互通
+
+## 5. 维护约定
+
+1. 只有**全量单测绿 + 已提交**的项才可以改成 `- [x]`；半成品一律保持 `- [ ]`。
+2. 新增工作项必须写进本文件再动手，禁止只写在 `runs/` 的临时 todo 里。
+3. 子说明用普通 `- ` 列表（**不要**写成 `- [ ]`），否则会被计为未完成主线项。
+4. 本地执行器严禁擅自写 ALL_DONE；当本文件无剩余 - [ ] 时，守护进程必须自动向主脑汇报验收，仅当主脑明确下发 <<<BRIDGE_ALL_DONE>>> 签收标记后才允许正式记 ALL_DONE 并退出。

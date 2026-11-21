@@ -1,5 +1,5 @@
 {
-  "version": "0.2.4",
+  "version": "0.2.5",
   "note": "Legacy summary mirror of config/model_policy.json. Use --profile test|routine|council for policy-driven model selection.",
   "purposes": {
     "test": "Free/0.00x tier for smoke & regression tests (Fail-Closed on paid multipliers)",
@@ -8,7 +8,7 @@
   },
   "endpoints": {
     "chatgpt": {"test": "gpt56", "routine": "gpt6", "council": "gpt61_sol"},
-    "gemini": {"test": "hydrogen", "routine": "neon", "council": "carbon"},
+    "gemini": {"test": "hydrogen", "routine": "neon", "council": "flash"},
     "grok": {"test": "fast", "routine": "auto", "council": "expert"},
     "deepseek": {"test": "default", "routine": "default", "council": "think"},
     "codex": {"test": "default", "routine": "default", "council": "gpt61_sol"},

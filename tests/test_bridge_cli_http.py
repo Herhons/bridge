@@ -9,6 +9,7 @@ import urllib.request
 from contextlib import redirect_stdout
 
 import bridge
+from engine import __version__
 from engine.server import create_server
 
 
@@ -39,10 +40,11 @@ class TestBridgeCLIAndHTTP(unittest.TestCase):
             rc = bridge.main(["list", "--json"])
         self.assertEqual(rc, 0)
         data = json.loads(buf.getvalue())
-        self.assertEqual(data["version"], "0.2.4")
-        self.assertEqual(len(data["endpoints"]), 10)
+        self.assertEqual(data["version"], __version__)
+        self.assertEqual(len(data["endpoints"]), 11)
         self.assertIn("hermes", data["endpoints"])
         self.assertIn("grokbot", data["endpoints"])
+        self.assertIn("antigravity", data["endpoints"])
 
         buf2 = io.StringIO()
         with redirect_stdout(buf2):
@@ -64,7 +66,7 @@ class TestBridgeCLIAndHTTP(unittest.TestCase):
             opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
             with opener.open(f"http://127.0.0.1:{port}/health", timeout=3) as resp:
                 health = json.loads(resp.read().decode("utf-8"))
-            self.assertEqual(health, {"ok": True, "version": "0.2.4"})
+            self.assertEqual(health, {"ok": True, "version": __version__})
 
             req = urllib.request.Request(
                 f"http://127.0.0.1:{port}/ask",

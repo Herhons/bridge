@@ -182,6 +182,11 @@
         "pro",
         "argon"
       ],
+      "blocking_popup_patterns": [
+        "获取更多用量",
+        "开始免费试用",
+        "解锁 4 Carbon"
+      ],
       "model_aliases": {
         "free": [
           "4 Hydrogen",
@@ -303,12 +308,49 @@
             "RadioButtonControl"
           ],
           "name_contains": []
+        },
+        "attach_button": {
+          "roles": [
+            "ButtonControl"
+          ],
+          "names": [
+            "上传和工具",
+            "上传文件",
+            "添加文件",
+            "Upload and tools",
+            "Add files"
+          ],
+          "name_contains": [
+            "上传和工具",
+            "Upload",
+            "添加文件"
+          ],
+          "anchor_box_ratio": [
+            0.04,
+            0.55,
+            0.99,
+            0.99
+          ]
+        },
+        "attach_menu_item": {
+          "roles": [
+            "MenuItemControl",
+            "ButtonControl",
+            "ListItemControl"
+          ],
+          "name_contains": [
+            "上传文件",
+            "Upload file",
+            "从设备上传",
+            "Upload from device"
+          ]
         }
       },
       "templates": {
         "send_button": "gem_send_on",
         "new_chat": "gem_newchat"
-      }
+      },
+      "attach_dialog_timeout": 12.0
     },
     "grok": {
       "kind": "web",
@@ -352,7 +394,8 @@
         "fast",
         "auto",
         "expert",
-        "build"
+        "build",
+        "heavy"
       ],
       "model_aliases": {
         "free": [
@@ -383,6 +426,11 @@
           "Build",
           "构建",
           "build"
+        ],
+        "heavy": [
+          "Heavy",
+          "heavy",
+          "重型"
         ]
       },
       "selectors": {
@@ -464,17 +512,24 @@
         },
         "model_option": {
           "roles": [
-            "RadioButtonControl",
+            "CheckBoxControl",
             "MenuItemControl",
-            "ListItemControl"
+            "RadioButtonControl"
           ],
-          "name_contains": []
+          "name_contains": [],
+          "anchor_box_ratio": [
+            0.5,
+            0.6,
+            0.95,
+            0.98
+          ]
         }
       },
       "templates": {
         "send_button": "grok_send_on",
         "new_chat": "grok_newchat"
-      }
+      },
+      "models_note": "实测（2026-11-21 14:2x）下拉由 MenuControl 承载、选项为 CheckBoxControl：Auto / Fast / Expert / Build / Heavy；model_option 已按实测改为 CheckBoxControl + 锚定区域。Heavy 为新增档位、强弱未知，未纳入 model_policy，council 仍取最强已验证档 expert。"
     },
     "deepseek": {
       "kind": "web",
@@ -601,12 +656,37 @@
             "RadioButtonControl"
           ],
           "name_contains": []
+        },
+        "attach_button": {
+          "roles": [
+            "ButtonControl"
+          ],
+          "names": [
+            "上传附件",
+            "添加附件",
+            "上传文件",
+            "Attach files",
+            "Upload files"
+          ],
+          "name_contains": [
+            "上传",
+            "附件",
+            "Upload"
+          ],
+          "anchor_box_ratio": [
+            0.04,
+            0.62,
+            0.99,
+            0.99
+          ]
         }
       },
       "templates": {
         "send_button": "ds_send_on",
         "new_chat": "ds_newchat"
-      }
+      },
+      "attach_dialog_timeout": 12.0,
+      "models_note": "网页版「深度思考」是输入框下方的开关 chip（AX 树只暴露 TextControl/LegacyIAccessible，没有 Invoke/Toggle 模式，也不回读开关状态），不是下拉菜单；因此 --profile council 的 think 档无法由 UI 自动化可靠切换，models --live 会如实返回 selector_not_found。需要 thinking 时请人工点开该开关。"
     },
     "codex": {
       "kind": "desktop",
@@ -934,9 +1014,14 @@
           ],
           "anchor_box_ratio": [
             0.23,
-            0.72,
-            0.98,
+            0.3,
+            0.65,
             0.98
+          ],
+          "name_contains": [
+            "今天帮你做些什么",
+            "输入指令",
+            "输入消息"
           ]
         },
         "send_button": {
@@ -952,8 +1037,8 @@
             "发送"
           ],
           "anchor_box_ratio": [
-            0.7,
-            0.75,
+            0.45,
+            0.3,
             0.99,
             0.99
           ]
@@ -1007,9 +1092,59 @@
             "ListItemControl"
           ],
           "name_contains": []
+        },
+        "attach_button": {
+          "roles": [
+            "GroupControl",
+            "ButtonControl"
+          ],
+          "name_contains": [
+            "添加",
+            "Attach",
+            "上传",
+            "Upload"
+          ],
+          "anchor_box_ratio": [
+            0.23,
+            0.3,
+            0.65,
+            0.99
+          ]
+        },
+        "attach_menu_item": {
+          "roles": [
+            "MenuItemControl"
+          ],
+          "name_contains": [
+            "添加文件",
+            "Add file",
+            "上传文件",
+            "Upload file",
+            "本地文件",
+            "Local file"
+          ]
         }
       },
-      "templates": {}
+      "templates": {},
+      "attach_ready_patterns": [
+        "附件",
+        "已添加",
+        "Attachment",
+        "Uploaded"
+      ],
+      "attach_ready_timeout": 8.0,
+      "content_max_rel_x": 0.62,
+      "require_new_copy_button": true,
+      "stable_seconds": 6.0,
+      "busy_text_patterns": [
+        "?????",
+        "????",
+        "??????????",
+        "????????",
+        "????",
+        "?? ",
+        "????"
+      ]
     },
     "hermes": {
       "kind": "desktop",
@@ -1241,10 +1376,223 @@
           ]
         },
         "model_selector": {},
-        "model_option": {}
+        "model_option": {},
+        "attach_button": {
+          "roles": [
+            "ButtonControl",
+            "GroupControl"
+          ],
+          "name_contains": [
+            "输入框操作",
+            "附件",
+            "Attach",
+            "上传",
+            "Upload"
+          ],
+          "anchor_box_ratio": [
+            0.06,
+            0.9,
+            0.22,
+            0.99
+          ]
+        },
+        "attach_menu_item": {
+          "roles": [
+            "MenuItemControl",
+            "ButtonControl",
+            "ListItemControl"
+          ],
+          "name_contains": [
+            "添加附件",
+            "Add attachment",
+            "上传文件",
+            "Upload file"
+          ]
+        }
       },
       "templates": {},
+      "fallback_attach_ratio": [
+        0.128,
+        0.95
+      ],
+      "attach_wait_seconds": 1.0,
       "content_max_rel_x": 0.72
+    },
+    "antigravity": {
+      "kind": "desktop",
+      "process_names": [
+        "Antigravity.exe"
+      ],
+      "window_class": "Chrome_WidgetWin_1",
+      "title_contains": [
+        "Antigravity"
+      ],
+      "title_note": "Kept as the primary pin, but Electron rewrites this title to the active conversation name (measured 2026-11-21: 'Ignoring Instructions Trap Response'), so EndpointDriver.locate_window retries with process_names + window_class only when the title pin misses. That retry is limited to endpoints that declare window_class, so web endpoints in shared chrome.exe are unaffected.",
+      "prefer_paste": true,
+      "skip_default_model_switch": true,
+      "scroll_before_copy": true,
+      "content_min_rel_x": 0.25,
+      "content_max_rel_x": 0.95,
+      "content_note": "Measured 2026-11-21 on the live window (1416x961): sidebar text sits at rel x 0.017..0.175, the conversation column starts at 0.316 and ends at 0.849. 0.25 drops the whole sidebar out of read()/reply extraction; 0.95 guards against a right-side overview panel.",
+      "placeholders": [
+        "Ask anything, @ to mention, / for actions",
+        "Message input"
+      ],
+      "blocking_popup_patterns": [
+        "Allow check ",
+        "Waiting for user input",
+        "Yes, allow this time"
+      ],
+      "noise_lines": [
+        "Antigravity",
+        "Workspace",
+        "New Conversation",
+        "Add context",
+        "Select model",
+        "Copy",
+        "复制",
+        "Send",
+        "发送",
+        "Conversation Log",
+        "You said",
+        "Agent said",
+        "No more older messages, showing 2 of 2"
+      ],
+      "noise_note": "The three structural labels + the 'No more older messages' banner were measured in the live tree (2026-11-21) and used to leak into read() output before the conversation column filter.",
+      "busy_text_patterns": [
+        "Agent working",
+        "Working",
+        "Thinking"
+      ],
+      "busy_note": "Measured 2026-11-21: while a reply streams, the transcript shows 'Agent working' / 'Working' and no Stop button is ever rendered (the run finished in <1s), so busy text is the only generating signal. Without this the first stable snapshot ('Working') was returned as the reply.",
+      "noise_regexes": [
+        "^just now$",
+        "^\\d+[smhd] ago$"
+      ],
+      "noise_regex_note": "Relative timestamps next to each message (measured: 'just now', '2m ago', '3m ago') are not covered by DEFAULT_NOISE_REGEXES, which only knows absolute clock times.",
+      "models": [
+        "default",
+        "gemini_38_flash_medium"
+      ],
+      "model_aliases": {
+        "gemini_38_flash_medium": [
+          "Gemini 3.8 Flash Medium",
+          "Gemini 3.8 Flash"
+        ]
+      },
+      "models_note": "Reply text comes from UIA snapshot deltas; controls are matched by Name/ControlType because automation ids are runtime-generated. Model selector measured 2026-11-21 (read-only UIA): ButtonControl named 'Select model, current: <model>' with ExpandCollapse+Invoke patterns, sitting in the composer row. Only 'Gemini 3.8 Flash Medium' has been observed; the dropdown options could not be enumerated because opening it requires a click.",
+      "selectors": {
+        "composer": {
+          "roles": [
+            "ComboBoxControl",
+            "EditControl",
+            "DocumentControl"
+          ],
+          "names": [
+            "Message input"
+          ],
+          "name_contains": [
+            "Message input",
+            "Ask anything"
+          ],
+          "anchor_box_ratio": [
+            0.05,
+            0.7,
+            0.98,
+            0.99
+          ]
+        },
+        "send_button": {
+          "roles": [
+            "ButtonControl"
+          ],
+          "names": [
+            "Send",
+            "Send message",
+            "发送",
+            "发送消息"
+          ],
+          "name_contains": [
+            "Send",
+            "发送"
+          ],
+          "anchor_box_ratio": [
+            0.05,
+            0.7,
+            0.99,
+            0.99
+          ]
+        },
+        "stop_button": {
+          "roles": [
+            "ButtonControl"
+          ],
+          "names": [
+            "Stop",
+            "Stop response",
+            "停止",
+            "停止生成"
+          ]
+        },
+        "copy_button": {
+          "roles": [
+            "ButtonControl"
+          ],
+          "names": [
+            "Copy",
+            "Copy response",
+            "复制",
+            "复制回复"
+          ]
+        },
+        "new_chat": {
+          "names": [
+            "New Conversation",
+            "新对话",
+            "新建对话"
+          ]
+        },
+        "model_selector": {
+          "roles": [
+            "ButtonControl"
+          ],
+          "name_contains": [
+            "Select model, current:",
+            "Select model",
+            "current:"
+          ]
+        },
+        "model_option": {
+          "roles": [
+            "MenuItemControl",
+            "ListItemControl",
+            "RadioButtonControl"
+          ],
+          "name_contains": []
+        },
+        "attach_button": {
+          "roles": [
+            "ButtonControl"
+          ],
+          "names": [
+            "Add context"
+          ],
+          "name_contains": [
+            "Add context",
+            "Attach",
+            "Upload",
+            "添加"
+          ],
+          "anchor_box_ratio": [
+            0.05,
+            0.7,
+            0.99,
+            0.99
+          ]
+        }
+      },
+      "templates": {},
+      "attach_dialog_timeout": 12.0
     }
   }
 }
