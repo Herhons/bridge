@@ -8,6 +8,9 @@ read or written.
 """
 from __future__ import annotations
 
+import contextlib
+import io
+import json
 import subprocess
 import sys
 import tempfile
@@ -236,8 +239,9 @@ class OpenCodeBoundaryTests(unittest.TestCase):
         self.assertEqual(res["kind"], "cli")
         self.assertEqual(res["cli_path"], "C:/fake/opencode.exe")
         self.assertFalse(res["db_exists"])
-        # CLI endpoint: there is no window, so no window_found field at all.
-        self.assertNotIn("window_found", res)
+        # CLI endpoint: the field exists for schema parity, always False.
+        self.assertIn("window_found", res)
+        self.assertFalse(res["window_found"])
 
     def test_status_not_ready_without_cli_or_db(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -276,37 +280,80 @@ class OpenCodeBoundaryTests(unittest.TestCase):
         self.assertEqual(res["error"], "cli_not_found")
         self.assertEqual(res["reply"], "")
 
-    def test_dispatch_contract_is_currently_broken_for_opencode(self):
-        """Known v0.2.5 defect, recorded not blessed.
+    def test_dispatch_contract_now_reaches_opencode(self):
+        """The v0.2.5 defect is fixed: dispatch() must not blow up on opencode.
 
         ``bridge.dispatch()`` always passes ``profile`` / ``free_only`` /
-        ``attach``; ``OpenCodeDriver.ask()`` accepts none of them, so every
-        ``bridge.py ask opencode ...`` (and therefore the opencode executor
-        fallback in the overnight loop) dies with a TypeError before any work
-        happens. When the driver grows ``**kwargs`` or those parameters, this
-        test must flip to asserting a structured error instead.
+        ``attach``; the driver accepts all three now, so the opencode executor
+        level in the overnight loop is reachable again.
         """
+        seen_cmd: list[str] = []
+
+        def fake_runner(cmd, budget):
+            seen_cmd.extend(cmd)
+            return 0, "opencode ok\n", ""
+
         with tempfile.TemporaryDirectory() as tmp:
-            drv = self._driver(tmp)
+            drv = self._driver(tmp, cli_runner=fake_runner)
             opts = {
                 "prompt": PROMPT,
-                "timeout": 1,
+                "timeout": 5,
                 "new_chat": False,
                 "headed": None,
                 "model": None,
-                "profile": None,
-                "free_only": False,
+                "profile": "test",
+                "free_only": True,
                 "confirm": False,
                 "force": True,
                 "attach": None,
             }
-            with mock.patch.object(opencode_mod.shutil, "which", return_value=None):
-                with self.assertRaises(TypeError) as ctx:
-                    bridge.dispatch(
-                        "ask", "opencode", opts, driver_factory=lambda _name: drv
-                    )
+            with mock.patch.object(opencode_mod.opencode_db, "current_max_seq", return_value=0):
+                res = bridge.dispatch(
+                    "ask", "opencode", opts, driver_factory=lambda _name: drv
+                )
 
-        self.assertIn("profile", str(ctx.exception))
+        self.assertTrue(res["ok"])
+        self.assertEqual(res["reply"], "opencode ok")
+        self.assertEqual(res["profile"], "test")
+        self.assertIn("--prompt", seen_cmd)
+        self.assertIn(PROMPT, seen_cmd)
+
+    def test_attach_returns_structured_error_instead_of_traceback(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            payload = Path(tmp) / "state.json"
+            payload.write_text("{}", encoding="utf-8")
+            drv = self._driver(tmp, cli_runner=lambda cmd, budget: (0, "x", ""))
+            res = drv.ask(PROMPT, attach=[str(payload)], force=True)
+
+        self.assertFalse(res["ok"])
+        self.assertEqual(res["error"], "attach_unsupported")
+        self.assertEqual(res["attachments"], [str(payload)])
+        self.assertEqual(res["reply"], "")
+
+    def test_cli_maps_notimplementederror_to_json(self):
+        class _Raising:
+            def ask(self, *_args, **_kwargs):
+                raise NotImplementedError(
+                    "endpoint chatgpt has no attach_button selector; --attach is not supported"
+                )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            payload = Path(tmp) / "state.json"
+            payload.write_text("{}", encoding="utf-8")
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                rc = bridge.main(
+                    ["ask", "chatgpt", "hi", "--attach", str(payload), "--json"],
+                    driver_factory=lambda _name: _Raising(),
+                )
+            out = buf.getvalue()
+
+        self.assertEqual(rc, 1)
+        parsed = json.loads(out)
+        self.assertFalse(parsed["ok"])
+        self.assertEqual(parsed["error"], "attach_unsupported")
+        self.assertEqual(parsed["endpoint"], "chatgpt")
+        self.assertNotIn("Traceback", out)
 
 
 if __name__ == "__main__":

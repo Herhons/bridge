@@ -74,6 +74,32 @@ def dispatch(action: str, endpoint: str, opts: dict[str, Any] | None = None, *, 
     return {"ok": False, "endpoint": endpoint, "error": "unknown_action", "message": f"Unknown action: {action}"}
 
 
+def ask_with_structured_errors(
+    endpoint: str,
+    opts: dict[str, Any],
+    *,
+    driver_factory=get_driver,
+) -> dict[str, Any]:
+    """``dispatch("ask")`` that turns an endpoint capability gap into JSON.
+
+    ``EndpointDriver.ask`` raises ``NotImplementedError`` when ``--attach`` is
+    passed to an endpoint without an ``attach_button`` selector. Letting that
+    escape printed a raw traceback even under ``--json``, so it is mapped to
+    the same ``attach_unsupported`` code the CLI-shaped endpoints return.
+    """
+    try:
+        return dispatch("ask", endpoint, opts, driver_factory=driver_factory)
+    except NotImplementedError as exc:
+        return {
+            "ok": False,
+            "endpoint": endpoint,
+            "error": "attach_unsupported",
+            "message": str(exc),
+            "attachments": list(opts.get("attach") or []),
+            "reply": "",
+        }
+
+
 def normalize_attach_paths(
     values: list[str] | str | None,
     *,
@@ -214,7 +240,9 @@ def main(argv: list[str] | None = None, *, driver_factory=get_driver) -> int:
             "attach": attach_paths or None,
         }
         if len(targets) == 1:
-            res = dispatch("ask", targets[0], opts, driver_factory=driver_factory)
+            res = ask_with_structured_errors(
+                targets[0], opts, driver_factory=driver_factory
+            )
             if res.get("ok") and args.save_path:
                 res["saved_to"] = save_reply_file(args.save_path, res["reply"])
             if args.as_json:
@@ -225,7 +253,10 @@ def main(argv: list[str] | None = None, *, driver_factory=get_driver) -> int:
                 safe_print_json(res, indent=None, stream=sys.stderr)
             return exit_code_for(res)
 
-        results = {t: dispatch("ask", t, opts, driver_factory=driver_factory) for t in targets}
+        results = {
+            t: ask_with_structured_errors(t, opts, driver_factory=driver_factory)
+            for t in targets
+        }
         all_ok = all(r.get("ok") for r in results.values())
         if args.save_path and all_ok:
             combined = "\n\n".join(f"=== {k} ===\n{v['reply']}" for k, v in results.items())

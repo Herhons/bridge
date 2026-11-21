@@ -53,6 +53,10 @@ class OpenCodeDriver(EndpointDriver):
             "cli_path": exe,
             "db_exists": db_exists,
             "ready": bool(exe),
+            # Always False: opencode is a headless CLI (MainWindowHandle == 0).
+            # The field exists so `bridge.py status` keeps one schema for all
+            # endpoints (UIA callers read window_found unconditionally).
+            "window_found": False,
             "models": list(self.cfg.get("models") or []),
         }
 
@@ -92,14 +96,43 @@ class OpenCodeDriver(EndpointDriver):
         new_chat: bool = False,
         headed: bool | None = None,
         model: str | None = None,
+        profile: str | None = None,
+        free_only: bool = False,
         confirm: bool = False,
         force: bool = False,
+        attach: list[str] | None = None,
     ) -> dict[str, Any]:
+        """Run one non-interactive ``opencode --prompt`` turn.
+
+        ``profile`` / ``free_only`` / ``headed`` are accepted so
+        ``bridge.dispatch()`` can forward its fixed option set to every
+        endpoint, but they are not applied: the opencode CLI exposes no model
+        switch and always runs its own free local models. ``attach`` is
+        rejected with a structured error instead of raising, because this
+        endpoint has no attach surface at all.
+        """
         started = time.monotonic()
         budget = float(timeout or self.cfg.get("timeout") or self.bridge_cfg.get("default_timeout", 180.0))
         clean_prompt = prompt.strip()
         if not clean_prompt:
             return {"ok": False, "endpoint": self.name, "error": "empty_prompt", "reply": ""}
+
+        raw_attach = [attach] if isinstance(attach, str) else list(attach or [])
+        attach_paths = [
+            part.strip()
+            for entry in raw_attach
+            for part in str(entry).split(",")
+            if part.strip()
+        ]
+        if attach_paths:
+            return {
+                "ok": False,
+                "endpoint": self.name,
+                "error": "attach_unsupported",
+                "message": "opencode is a CLI endpoint and has no attach surface",
+                "attachments": attach_paths,
+                "reply": "",
+            }
 
         if not force:
             allowed, prev_state = self.ledger.check(clean_prompt, self.name)
@@ -173,6 +206,7 @@ class OpenCodeDriver(EndpointDriver):
                 "reply": reply,
                 "source": source,
                 "model_requested": model,
+                "profile": profile,
                 "elapsed": round(time.monotonic() - started, 2),
             }
 
