@@ -1398,6 +1398,149 @@
       ],
       "attach_wait_seconds": 1.0,
       "content_max_rel_x": 0.72
+    },
+    "antigravity": {
+      "kind": "desktop",
+      "process_names": [
+        "Antigravity.exe"
+      ],
+      "window_class": "Chrome_WidgetWin_1",
+      "title_contains": [
+        "Antigravity"
+      ],
+      "prefer_paste": true,
+      "skip_default_model_switch": true,
+      "scroll_before_copy": true,
+      "placeholders": [
+        "Ask anything, @ to mention, / for actions",
+        "Message input"
+      ],
+      "noise_lines": [
+        "Antigravity",
+        "Workspace",
+        "New Conversation",
+        "Add context",
+        "Select model",
+        "Copy",
+        "复制",
+        "Send",
+        "发送"
+      ],
+      "models": [
+        "default"
+      ],
+      "models_note": "Reply text comes from UIA snapshot deltas; controls are matched by Name/ControlType because automation ids are runtime-generated.",
+      "selectors": {
+        "composer": {
+          "roles": [
+            "ComboBoxControl",
+            "EditControl",
+            "DocumentControl"
+          ],
+          "names": [
+            "Message input"
+          ],
+          "name_contains": [
+            "Message input",
+            "Ask anything"
+          ],
+          "anchor_box_ratio": [
+            0.05,
+            0.7,
+            0.98,
+            0.99
+          ]
+        },
+        "send_button": {
+          "roles": [
+            "ButtonControl"
+          ],
+          "names": [
+            "Send",
+            "Send message",
+            "发送",
+            "发送消息"
+          ],
+          "name_contains": [
+            "Send",
+            "发送"
+          ],
+          "anchor_box_ratio": [
+            0.05,
+            0.7,
+            0.99,
+            0.99
+          ]
+        },
+        "stop_button": {
+          "roles": [
+            "ButtonControl"
+          ],
+          "names": [
+            "Stop",
+            "Stop response",
+            "停止",
+            "停止生成"
+          ]
+        },
+        "copy_button": {
+          "roles": [
+            "ButtonControl"
+          ],
+          "names": [
+            "Copy",
+            "Copy response",
+            "复制",
+            "复制回复"
+          ]
+        },
+        "new_chat": {
+          "names": [
+            "New Conversation",
+            "新对话",
+            "新建对话"
+          ]
+        },
+        "model_selector": {
+          "roles": [
+            "ButtonControl"
+          ],
+          "name_contains": [
+            "Select model",
+            "current:"
+          ]
+        },
+        "model_option": {
+          "roles": [
+            "MenuItemControl",
+            "ListItemControl",
+            "RadioButtonControl"
+          ],
+          "name_contains": []
+        },
+        "attach_button": {
+          "roles": [
+            "ButtonControl"
+          ],
+          "names": [
+            "Add context"
+          ],
+          "name_contains": [
+            "Add context",
+            "Attach",
+            "Upload",
+            "添加"
+          ],
+          "anchor_box_ratio": [
+            0.05,
+            0.7,
+            0.99,
+            0.99
+          ]
+        }
+      },
+      "templates": {},
+      "attach_dialog_timeout": 12.0
     }
   }
 }

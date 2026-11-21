@@ -41,9 +41,10 @@ class TestBridgeCLIAndHTTP(unittest.TestCase):
         self.assertEqual(rc, 0)
         data = json.loads(buf.getvalue())
         self.assertEqual(data["version"], __version__)
-        self.assertEqual(len(data["endpoints"]), 10)
+        self.assertEqual(len(data["endpoints"]), 11)
         self.assertIn("hermes", data["endpoints"])
         self.assertIn("grokbot", data["endpoints"])
+        self.assertIn("antigravity", data["endpoints"])
 
         buf2 = io.StringIO()
         with redirect_stdout(buf2):

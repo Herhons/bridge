@@ -1,4 +1,4 @@
-"""Unit tests covering all 10 Bridge v0.2.1 endpoints, chunking, Grok normalization, templates, and OpenCode DB."""
+"""Unit tests covering all 11 Bridge v0.2.5 endpoints, chunking, Grok normalization, templates, and OpenCode DB."""
 from __future__ import annotations
 
 import json
@@ -24,12 +24,12 @@ def _build_snap(snap_id: str, lines: list[str], *, busy: bool = False) -> Snapsh
     return Snapshot(snapshot_id=snap_id, hwnd=42, title="AI", url="", nodes=[root], refs=assign_refs([root], snap_id))
 
 
-class TestAllTenEndpoints(unittest.TestCase):
-    def test_exactly_ten_registered_endpoints(self):
+class TestAllElevenEndpoints(unittest.TestCase):
+    def test_exactly_eleven_registered_endpoints(self):
         expected = (
             "chatgpt", "gemini", "grok", "deepseek",
             "codex", "dsh", "opencode", "workbuddy",
-            "hermes", "grokbot",
+            "hermes", "grokbot", "antigravity",
         )
         self.assertEqual(ENDPOINT_NAMES, expected)
         for name in expected:

@@ -1,6 +1,7 @@
-"""Registry of all 10 standalone Bridge v0.2.1 endpoint drivers."""
+"""Registry of all 11 standalone Bridge v0.2.5 endpoint drivers."""
 from __future__ import annotations
 
+from endpoints.antigravity import AntigravityDriver
 from endpoints.chatgpt import ChatGPTDriver
 from endpoints.codex import CodexDriver
 from endpoints.deepseek import DeepSeekDriver
@@ -23,6 +24,7 @@ REGISTRY = {
     "workbuddy": WorkBuddyDriver,
     "hermes": HermesDriver,
     "grokbot": GrokbotDriver,
+    "antigravity": AntigravityDriver,
 }
 
 ENDPOINT_NAMES = tuple(REGISTRY.keys())

@@ -14,6 +14,7 @@ class WindowInfo:
     title: str
     process_name: str
     pid: int
+    class_name: str = ""
 
 
 def _enum_windows_raw() -> list[WindowInfo]:
@@ -38,6 +39,8 @@ def _enum_windows_raw() -> list[WindowInfo]:
             return True
         pid = ctypes.c_ulong(0)
         user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        cls_buf = ctypes.create_unicode_buffer(256)
+        user32.GetClassNameW(hwnd, cls_buf, 256)
         proc = ""
         hproc = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid.value)
         if hproc:
@@ -48,7 +51,10 @@ def _enum_windows_raw() -> list[WindowInfo]:
                     proc = os.path.basename(pbuf.value)
             finally:
                 kernel32.CloseHandle(hproc)
-        results.append(WindowInfo(hwnd=int(hwnd), title=title, process_name=proc, pid=int(pid.value)))
+        results.append(WindowInfo(
+            hwnd=int(hwnd), title=title, process_name=proc,
+            pid=int(pid.value), class_name=cls_buf.value,
+        ))
         return True
 
     user32.EnumWindows(_cb, 0)
@@ -97,6 +103,7 @@ def find_window(
     process_names: list[str] | None = None,
     title_contains: list[str] | None = None,
     exclude_processes: list[str] | None = None,
+    window_class: str | None = None,
     windows: list[WindowInfo] | None = None,
 ) -> WindowInfo | None:
     """Find the best matching window by process name and/or title keywords."""
@@ -104,6 +111,7 @@ def find_window(
     proc_set = {p.lower() for p in (process_names or [])}
     excl_set = {p.lower() for p in (exclude_processes or [])}
     title_keys = [t.lower() for t in (title_contains or [])]
+    class_key = (window_class or "").strip().lower()
 
     candidates: list[WindowInfo] = []
     for win in items:
@@ -114,6 +122,8 @@ def find_window(
         if proc_set and pname and pname not in proc_set:
             continue
         if title_keys and not any(k in wtitle for k in title_keys):
+            continue
+        if class_key and (win.class_name or "").lower() != class_key:
             continue
         candidates.append(win)
     return candidates[0] if candidates else None

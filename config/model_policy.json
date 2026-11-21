@@ -91,6 +91,14 @@
         {"id": "default", "ui_label": "GrokBot 默认", "tier": "free"}
       ]
     },
+    "antigravity": {
+      "test": "default",
+      "routine": "default",
+      "council": "default",
+      "verified_models": [
+        {"id": "default", "ui_label": "Antigravity", "tier": "free"}
+      ]
+    },
     "hermes": {
       "test": "freellm",
       "routine": "freellm",

@@ -13,7 +13,7 @@ class TestV025Doctor(unittest.TestCase):
     def test_doctor_passes_cleanly_on_current_repo(self):
         res = run_doctor(ENDPOINT_NAMES)
         self.assertTrue(res["ok"], res)
-        self.assertEqual(res["endpoint_count"], 10)
+        self.assertEqual(res["endpoint_count"], 11)
         self.assertEqual(res["issues"], [])
 
     def test_cli_doctor_returns_zero(self):

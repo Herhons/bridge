@@ -25,8 +25,15 @@ RUNS = ROOT / "runs"
 PYTHON = sys.executable
 
 TIMEOUT_RC = 124
-EXECUTOR_CHOICES: tuple[str, ...] = ("auto", "workbuddy", "opencode")
-EXECUTOR_FALLBACK = {"workbuddy": "opencode", "opencode": "workbuddy"}
+EXECUTOR_FALLBACK = {
+    "workbuddy": "opencode",
+    "opencode": "antigravity",
+    "antigravity": "none",
+}
+EXECUTOR_CHAIN: tuple[str, ...] = (
+    "workbuddy", "opencode", "antigravity",
+)
+EXECUTOR_CHOICES: tuple[str, ...] = ("auto",) + EXECUTOR_CHAIN
 TASK_RE = re.compile(
     r"<<<WORKBUDDY_TASK_START>>>(.*?)<<<WORKBUDDY_TASK_END>>>", re.S
 )
@@ -483,17 +490,30 @@ def call_opencode(
     )
 
 
+def call_antigravity(
+    task_card: str,
+    attempt: int,
+    timeout: float,
+    *,
+    executor: str = "",
+) -> str:
+    return _ask_endpoint(
+        "antigravity", task_card, attempt, timeout, executor=executor
+    )
+
+
 def call_executor(
     task_card: str,
     attempt: int,
     timeout: float,
     executor: str = "auto",
 ) -> str:
-    """Dispatch a task card, falling back between WorkBuddy and OpenCode.
+    """Dispatch a task card through the three-level executor pool.
 
-    ``auto`` tries WorkBuddy first and falls back to OpenCode when WorkBuddy
-    returns an empty reply or a non-zero bridge rc. Explicit executors never
-    fall back, so an operator can pin one target.
+    ``auto`` tries WorkBuddy, then OpenCode, then Antigravity. Any level that
+    returns an empty reply, a non-zero bridge rc (including timeout rc=124) or
+    raises is skipped with a logged reason, and the next level is tried.
+    Explicit executors never fall back, so an operator can pin one target.
     """
     mode = (executor or "auto").strip().lower()
     if mode not in EXECUTOR_CHOICES:
@@ -501,23 +521,40 @@ def call_executor(
             "unknown executor %r (choose from %s)"
             % (executor, ", ".join(EXECUTOR_CHOICES))
         )
-    order = (
-        ["workbuddy", EXECUTOR_FALLBACK["workbuddy"]]
-        if mode == "auto" else [mode]
-    )
-    for endpoint in order:
-        if endpoint == "opencode":
-            reply = call_opencode(
+    order = list(EXECUTOR_CHAIN) if mode == "auto" else [mode]
+    callers = {
+        "workbuddy": call_workbuddy,
+        "opencode": call_opencode,
+        "antigravity": call_antigravity,
+    }
+    for index, endpoint in enumerate(order):
+        try:
+            reply = callers[endpoint](
                 task_card, attempt, timeout, executor=mode
             )
-        else:
-            reply = call_workbuddy(
-                task_card, attempt, timeout, executor=mode
+        except Exception as exc:  # noqa: BLE001 - fall through to next level
+            log(
+                "executor_miss=%s round=%d reason=%r"
+                % (endpoint, attempt, exc),
+                "ERROR",
             )
+            reply = ""
         if reply:
-            log("executor_hit=%s round=%d" % (endpoint, attempt))
+            log(
+                "executor_hit=%s round=%d level=%d/%d"
+                % (endpoint, attempt, index + 1, len(order))
+            )
             return reply
-        log("executor_hit=none round=%d endpoint=%s" % (attempt, endpoint), "ERROR")
+        log(
+            "executor_miss=%s round=%d reason=empty_or_nonzero rc"
+            % (endpoint, attempt),
+            "ERROR",
+        )
+        if index + 1 < len(order):
+            log(
+                "executor_fallback -> %s round=%d"
+                % (order[index + 1], attempt)
+            )
     return ""
 
 
@@ -560,6 +597,7 @@ def heal(
     timeout: float = 300,
     report_path: str | Path = "runs/crash_report.md",
     commit_on_green: bool = True,
+    executor: str = "auto",
 ) -> int:
     os.environ["PYTHONIOENCODING"] = "utf-8"
     base_commit = head_commit()
@@ -601,9 +639,12 @@ def heal(
             (RUNS / ("extracted_task_round%d.md" % attempt)).write_text(
                 card, encoding="utf-8"
             )
-            workbuddy_reply = call_workbuddy(card, attempt, timeout)
+            workbuddy_reply = call_executor(
+                card, attempt, timeout, executor=executor
+            )
             if not workbuddy_reply:
-                log("round %d: empty WorkBuddy reply" % attempt, "ERROR")
+                log("round %d: all executors returned empty replies" % attempt,
+                    "ERROR")
 
         if attempt < max(1, max_retries):
             reset_hard(round_base)
@@ -812,6 +853,7 @@ def main(argv: list[str] | None = None) -> int:
             no_push=args.no_push,
             timeout=args.timeout,
             report_path=args.report,
+            executor=args.executor,
         )
     except Exception:  # noqa: BLE001 - hidden console must not swallow crashes
         detail = traceback.format_exc()

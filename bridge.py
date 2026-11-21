@@ -104,7 +104,7 @@ def normalize_attach_paths(
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="bridge.py",
-        description=f"Bridge v{__version__} — Universal AI-to-AI caller (10 endpoints, UIA-first + screenshot fallback)",
+        description=f"Bridge v{__version__} — Universal AI-to-AI caller (11 endpoints, UIA-first + screenshot fallback)",
     )
     parser.add_argument("--version", action="version", version=f"Bridge {__version__}")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -142,7 +142,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_snap.add_argument("--all", action="store_true", help="Include non-interactive nodes")
     p_snap.add_argument("--limit", type=int, default=300)
 
-    p_list = sub.add_parser("list", help="List all 10 registered endpoints")
+    p_list = sub.add_parser("list", help="List all 11 registered endpoints")
     sub.add_parser("doctor", help="Validate configs, model policy, ratio boxes, and template PNGs")
     p_list.add_argument("--json", action="store_true", dest="as_json")
 

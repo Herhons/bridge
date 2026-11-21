@@ -1,4 +1,4 @@
-"""Unified base driver for all 10 Bridge v0.2.4 endpoints.
+"""Unified base driver for all 11 Bridge v0.2.5 endpoints.
 
 Fixes & capabilities in v0.2.3:
 - BUG-08 (Hermes): GBK-safe stdio output (``configure_stdio_utf8`` / ``safe_print_json``)
@@ -274,7 +274,7 @@ def _default_confirm(endpoint: str, prompt: str, model: str | None) -> bool:
 
 
 class EndpointDriver:
-    """UIA-first, screenshot-fallback driver shared by all 10 endpoints."""
+    """UIA-first, screenshot-fallback driver shared by all 11 endpoints."""
 
     name: str = ""
 
@@ -361,6 +361,7 @@ class EndpointDriver:
             process_names=self.cfg.get("process_names"),
             title_contains=self.cfg.get("title_contains"),
             exclude_processes=self.cfg.get("exclude_processes"),
+            window_class=self.cfg.get("window_class"),
         )
         if win is None and auto_open:
             launched = False
@@ -374,6 +375,7 @@ class EndpointDriver:
                     process_names=self.cfg.get("process_names"),
                     title_contains=self.cfg.get("title_contains"),
                     exclude_processes=self.cfg.get("exclude_processes"),
+                    window_class=self.cfg.get("window_class"),
                 )
         return win
 
