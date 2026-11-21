@@ -10,6 +10,8 @@ Usage:
     python bridge.py models workbuddy [--live]
     python bridge.py status
     python bridge.py snapshot hermes
+    python bridge.py stop [--force-wait 5]
+    python bridge.py daemon-status
     python bridge.py ledger list
     python bridge.py ledger clear [--key <hash>]
     python bridge.py serve [--port 18765]
@@ -17,8 +19,13 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import ctypes
+import json
 import os
+import re
+import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -127,6 +134,258 @@ def normalize_attach_paths(
     return resolved
 
 
+# ---------------------------------------------------------------- scheduler control
+STOP_FILE = "STOP"
+PID_FILE = "overnight.pid"
+STATE_FILE = "state_machine.json"
+ROADMAP_PATH = "docs/ROADMAP.md"
+ROADMAP_PENDING_RE = re.compile(r"^[ \t]*-[ \t]+\[ \]", re.M)
+ROADMAP_ITEM_RE = re.compile(r"^[ \t]*-[ \t]+\[[ xX]\]", re.M)
+UNFINISHED_DISPATCH_STATES = ("dispatched", "timed_out")
+STOP_WAIT_POLL = 0.2
+
+
+def runs_dir() -> Path:
+    """``runs/`` under the repo root (``ROOT`` is patched by offline tests)."""
+    return ROOT / "runs"
+
+
+def _unlink(path: Path) -> bool:
+    """Remove ``path`` if present; True only when something was deleted."""
+    try:
+        path.unlink()
+        return True
+    except OSError:
+        return False
+
+
+def scheduler_pid(path: str | Path | None = None) -> int | None:
+    """Read the daemon pid file; None when absent, empty or unparsable."""
+    target = Path(path) if path is not None else runs_dir() / PID_FILE
+    try:
+        text = target.read_text(encoding="utf-8", errors="replace").strip()
+    except OSError:
+        return None
+    try:
+        pid = int(text.split()[0])
+    except (IndexError, ValueError):
+        return None
+    return pid if pid > 0 else None
+
+
+def pid_alive(pid: int) -> bool:
+    """Liveness probe that can never kill the target.
+
+    ``os.kill(pid, 0)`` terminates the process on Windows, so nt goes through
+    ``OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION)`` + ``GetExitCodeProcess``.
+    """
+    try:
+        pid = int(pid)
+    except (TypeError, ValueError):
+        return False
+    if pid <= 0:
+        return False
+    if os.name == "nt":
+        try:
+            kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+            handle = kernel32.OpenProcess(0x1000, False, pid)
+        except (AttributeError, OSError, ValueError):
+            return False
+        if not handle:
+            return False
+        try:
+            code = ctypes.c_ulong(0)
+            ok = kernel32.GetExitCodeProcess(handle, ctypes.byref(code))
+            return bool(ok) and code.value == 259  # STILL_ACTIVE
+        finally:
+            kernel32.CloseHandle(handle)
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return True
+
+
+def kill_scheduler_tree(pid: int) -> int:
+    """``taskkill /F /T`` the scheduler tree; returns taskkill's rc (-1 on error)."""
+    try:
+        proc = subprocess.run(
+            ["taskkill", "/F", "/T", "/PID", str(int(pid))],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=30,
+        )
+        return int(proc.returncode)
+    except (OSError, subprocess.SubprocessError):
+        return -1
+
+
+def stop_scheduler(
+    force_wait: float = 5.0,
+    *,
+    runs: str | Path | None = None,
+) -> dict[str, Any]:
+    """Ask the overnight scheduler to stop, force-killing its tree if it will not.
+
+    ``runs/STOP`` is written first: the loop polls it at round start, before
+    every dispatch and inside its sleep slices. After ``force_wait`` seconds a
+    still-living PID gets ``taskkill /F /T``. A stale pid file (no live process)
+    is cleaned *without* writing STOP, so the next run is not stopped on arrival;
+    STOP is removed once the scheduler is confirmed gone.
+    """
+    base = Path(runs) if runs is not None else runs_dir()
+    base.mkdir(parents=True, exist_ok=True)
+    stop_path = base / STOP_FILE
+    pid_path = base / PID_FILE
+    pid = scheduler_pid(pid_path)
+    alive = bool(pid and pid_alive(pid))
+    started = time.monotonic()
+    result: dict[str, Any] = {
+        "ok": True,
+        "action": "stop",
+        "pid": pid,
+        "running": alive,
+        "stop_file": str(stop_path),
+        "pid_file": str(pid_path),
+        "stop_written": False,
+        "waited_s": 0.0,
+        "exited_gracefully": False,
+        "killed": False,
+        "taskkill_rc": None,
+        "pid_file_removed": False,
+        "detail": "",
+    }
+    if not alive:
+        result["pid_file_removed"] = _unlink(pid_path)
+        result["detail"] = "no live scheduler; nothing to stop"
+        return result
+
+    try:
+        stop_path.write_text(
+            "pid=%d requested_at=%s\n"
+            % (pid, time.strftime("%Y-%m-%dT%H:%M:%S")),
+            encoding="utf-8",
+        )
+    except OSError as exc:
+        result["ok"] = False
+        result["detail"] = "cannot write STOP: %r" % exc
+        return result
+    result["stop_written"] = True
+
+    deadline = started + max(0.0, float(force_wait))
+    while time.monotonic() < deadline:
+        if not pid_alive(pid):
+            break
+        time.sleep(min(STOP_WAIT_POLL, max(0.0, deadline - time.monotonic())))
+    result["waited_s"] = round(time.monotonic() - started, 2)
+
+    if pid_alive(pid):
+        current = scheduler_pid(pid_path)
+        if current not in (None, pid):
+            result["ok"] = False
+            result["detail"] = (
+                "pid file now points at %s; refusing to kill the wrong tree"
+                % current
+            )
+            return result
+        result["killed"] = True
+        result["taskkill_rc"] = kill_scheduler_tree(pid)
+
+    still = pid_alive(pid)
+    result["running"] = still
+    result["ok"] = not still
+    result["exited_gracefully"] = not still and not result["killed"]
+    result["pid_file_removed"] = _unlink(pid_path)
+    if still:
+        result["detail"] = "scheduler still alive after taskkill rc=%s" % (
+            result["taskkill_rc"]
+        )
+    else:
+        result["detail"] = (
+            "stopped via taskkill" if result["killed"] else "stopped gracefully"
+        )
+        _unlink(stop_path)
+    return result
+
+
+def daemon_status(
+    *,
+    runs: str | Path | None = None,
+    root: str | Path | None = None,
+) -> dict[str, Any]:
+    """Read-only scheduler snapshot: liveness, state machine, roadmap backlog."""
+    base = Path(runs) if runs is not None else runs_dir()
+    repo = Path(root) if root is not None else ROOT
+    pid = scheduler_pid(base / PID_FILE)
+    alive = bool(pid and pid_alive(pid))
+
+    state_path = base / STATE_FILE
+    state_doc: dict[str, Any] = {}
+    try:
+        loaded = json.loads(state_path.read_text(encoding="utf-8"))
+        if isinstance(loaded, dict):
+            state_doc = loaded
+    except (OSError, ValueError):
+        state_doc = {}
+
+    roadmap = repo / ROADMAP_PATH
+    roadmap_present = roadmap.is_file()
+    pending: int | None = None
+    total: int | None = None
+    if roadmap_present:
+        try:
+            text = roadmap.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            text = ""
+        pending = len(ROADMAP_PENDING_RE.findall(text))
+        total = len(ROADMAP_ITEM_RE.findall(text))
+
+    unfinished = 0
+    needs_review = 0
+    dispatched_dir = base / "dispatched"
+    if dispatched_dir.is_dir():
+        for item in sorted(dispatched_dir.glob("*.json")):
+            try:
+                doc = json.loads(item.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            if not isinstance(doc, dict):
+                continue
+            if doc.get("status") in UNFINISHED_DISPATCH_STATES:
+                unfinished += 1
+            if doc.get("needs_review"):
+                needs_review += 1
+
+    return {
+        "ok": True,
+        "action": "daemon-status",
+        "pid": pid,
+        "running": alive,
+        "pid_file": str(base / PID_FILE),
+        "stop_requested": (base / STOP_FILE).is_file(),
+        "state": state_doc.get("state"),
+        "state_reason": state_doc.get("reason"),
+        "state_round": state_doc.get("round"),
+        "state_pid": state_doc.get("pid"),
+        "state_updated_at": state_doc.get("updated_at"),
+        "state_file": str(state_path),
+        "roadmap": ROADMAP_PATH,
+        "roadmap_present": roadmap_present,
+        "roadmap_pending": pending,
+        "roadmap_total": total,
+        "dispatch_unfinished": unfinished,
+        "dispatch_needs_review": needs_review,
+    }
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="bridge.py",
@@ -179,6 +438,22 @@ def build_parser() -> argparse.ArgumentParser:
     p_serve = sub.add_parser("serve", help="Run optional local HTTP server (127.0.0.1:18765)")
     p_serve.add_argument("--host", default=None)
     p_serve.add_argument("--port", type=int, default=None)
+
+    p_stop = sub.add_parser(
+        "stop",
+        help="Ask the overnight scheduler to stop gracefully, then taskkill /F /T if it will not",
+    )
+    p_stop.add_argument(
+        "--force-wait",
+        type=float,
+        default=5.0,
+        help="Seconds to wait for a graceful exit before force-killing the tree (default 5)",
+    )
+
+    sub.add_parser(
+        "daemon-status",
+        help="Read-only status: scheduler PID liveness, state machine, ROADMAP backlog",
+    )
 
     return parser
 
@@ -304,6 +579,15 @@ def main(argv: list[str] | None = None, *, driver_factory=get_driver) -> int:
         )
         safe_print_json(res)
         return exit_code_for(res)
+
+    if args.command == "stop":
+        res = stop_scheduler(args.force_wait)
+        safe_print_json(res)
+        return 0 if res.get("ok") else 1
+
+    if args.command == "daemon-status":
+        safe_print_json(daemon_status())
+        return 0
 
     if args.command == "serve":
         srv = create_server(

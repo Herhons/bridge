@@ -4,10 +4,28 @@
 Standard library only. Every subprocess is non-interactive and UTF-8 decoded.
 Never imports or launches OpenCode. Runs are capped at --max-retries attempts;
 a red suite is never committed, and a fully failed run resets to BASE_COMMIT.
+
+M4-1 (v0.2.5) adds the control plane around that loop:
+
+* ``docs/ROADMAP.md`` is the first backlog source; when it holds no ``- [ ]``
+  item (or carries a standalone ``ALL_DONE`` line) the run records ``ALL_DONE``
+  and exits instead of spinning three idle rounds.
+* ``runs/STOP`` is honoured before a round, before a dispatch and while
+  sleeping; it records ``STOPPED_BY_USER`` and cleans ``runs/STOP`` +
+  ``runs/overnight.pid``.
+* ``StateMachine`` writes through a ``.tmp`` file + ``os.replace`` and never
+  overwrites the state of a *live* foreign scheduler: that history is kept in
+  ``runs/state_machine.json`` and the newcomer writes
+  ``runs/state_machine.<pid>.json``.
+* Every task card gets a stable ``card_id`` (``round + sha256(card)[:12]``)
+  recorded under ``runs/dispatched/``; a card already ``dispatched`` or
+  ``timed_out`` is never blindly re-dispatched to the next executor.
 """
 from __future__ import annotations
 
 import argparse
+import ctypes
+import hashlib
 import json
 import os
 import re
@@ -52,6 +70,10 @@ STATE_FILE = "state_machine.json"
 HANDOFF_FILE = "brain_handoff.md"
 PATCH_FILE = "brain_patch.diff"
 ATTACH_INLINE_LIMIT = 20000
+STOP_FILE = "STOP"
+DISPATCH_DIR = "dispatched"
+ROADMAP_PATH = "docs/ROADMAP.md"
+ALL_DONE_MARKER = "ALL_DONE"
 STATE_NAMES: tuple[str, ...] = (
     "IDLE",
     "PICK_TASK",
@@ -65,7 +87,18 @@ STATE_NAMES: tuple[str, ...] = (
     "COMMIT_AND_PUSH",
     "BLOCKED",
     "STOPPED",
+    "STOPPED_BY_USER",
+    "ALL_DONE",
 )
+# States whose history must survive the ``finally`` cleanup untouched.
+TERMINAL_STATES: tuple[str, ...] = ("STOPPED_ON_BUG", "STOPPED_BY_USER", "ALL_DONE")
+# ``- [ ]`` anywhere at the start of a line (indented list items included).
+ROADMAP_PENDING_RE = re.compile(r"^[ \t]*-[ \t]+\[ \]", re.M)
+ROADMAP_ITEM_RE = re.compile(r"^[ \t]*-[ \t]+\[[ xX]\]", re.M)
+# A card stays blocked while a dispatch is still owed or died on the wire.
+BLOCKING_DISPATCH_STATES: tuple[str, ...] = ("dispatched", "timed_out")
+# Slice length for the interruptible sleep (STOP is honoured within this lag).
+STOP_POLL_SECONDS = 2.0
 FAIL_NAMED_RE = re.compile(
     r"^(?:FAIL|ERROR):\s+(\S+)\s+\(([^)]+)\)", re.M
 )
@@ -87,6 +120,7 @@ LOG_NAMES: tuple[str, ...] = ("auto_heal_loop.log",)
 OVERNIGHT_LOG = "overnight.log"
 PID_FILE = "overnight.pid"
 BACKLOG_CANDIDATES = (
+    ROADMAP_PATH,
     "runs/overnight_todo.md",
     "runs/todo.md",
     "TODO.md",
@@ -121,6 +155,278 @@ def clear_pid() -> None:
         (RUNS / PID_FILE).unlink(missing_ok=True)
     except OSError:
         pass
+
+
+# ---------------------------------------------------------------- control plane
+def _pid_alive_windows(pid: int) -> bool:
+    """PROCESS_QUERY_LIMITED_INFORMATION probe: read-only, never signals."""
+    kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+    handle = kernel32.OpenProcess(0x1000, False, int(pid))
+    if not handle:
+        return False
+    try:
+        code = ctypes.c_ulong(0)
+        ok = kernel32.GetExitCodeProcess(handle, ctypes.byref(code))
+        return bool(ok) and code.value == 259  # STILL_ACTIVE
+    finally:
+        kernel32.CloseHandle(handle)
+
+
+def pid_alive(pid: int) -> bool:
+    """Liveness probe that can never kill the target (``os.kill`` can on nt)."""
+    try:
+        pid = int(pid)
+    except (TypeError, ValueError):
+        return False
+    if pid <= 0:
+        return False
+    if os.name == "nt":
+        try:
+            return _pid_alive_windows(pid)
+        except (AttributeError, OSError, ValueError):
+            return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return True
+
+
+def stop_path() -> Path:
+    return RUNS / STOP_FILE
+
+
+def stop_requested() -> bool:
+    """True when an operator dropped ``runs/STOP`` (never raises)."""
+    try:
+        return stop_path().is_file()
+    except OSError:
+        return False
+
+
+def clear_stop_files() -> None:
+    """Remove ``runs/STOP`` and ``runs/overnight.pid`` (idempotent)."""
+    for name in (STOP_FILE, PID_FILE):
+        try:
+            (RUNS / name).unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def sleep_with_stop_watch(seconds: float, poll: float | None = None) -> bool:
+    """Sleep in slices so ``runs/STOP`` interrupts the wait.
+
+    Returns True when a STOP request appeared during the sleep. A zero/negative
+    duration still issues one no-op ``time.sleep(0)`` call, which keeps the
+    historic call pattern of the round loop intact.
+    """
+    remaining = float(seconds)
+    if remaining <= 0:
+        time.sleep(0)
+        return stop_requested()
+    chunk_max = float(poll if poll is not None else STOP_POLL_SECONDS)
+    while remaining > 0:
+        if stop_requested():
+            return True
+        chunk = min(chunk_max, remaining)
+        time.sleep(chunk)
+        remaining -= chunk
+    return stop_requested()
+
+
+def halt_for_stop(
+    machine: "StateMachine",
+    round_no: int = 0,
+    where: str = "",
+) -> None:
+    """Record STOPPED_BY_USER and drop ``runs/STOP`` + ``runs/overnight.pid``."""
+    spot = where or "before start"
+    machine.set(
+        "STOPPED_BY_USER",
+        reason="runs/STOP present %s" % spot,
+        round_no=round_no,
+    )
+    log("runs/STOP present (%s); stopping by user request" % spot, "WARN")
+    clear_stop_files()
+
+
+def _atomic_write_text(path: Path, text: str) -> None:
+    """Write ``path`` via a sibling ``.tmp`` file + ``os.replace``.
+
+    Same-directory temp keeps the replace atomic on NTFS; a crash mid-write
+    leaves the previous complete file untouched instead of a truncated one.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.parent / (path.name + ".tmp")
+    tmp.write_text(text, encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def roadmap_path() -> Path:
+    return ROOT / ROADMAP_PATH
+
+
+def has_pending_roadmap_items(text: str) -> bool:
+    """True when the roadmap still holds at least one ``- [ ]`` item."""
+    return bool(ROADMAP_PENDING_RE.search(text or ""))
+
+
+def has_all_done_marker(text: str) -> bool:
+    """True only for a standalone ``ALL_DONE`` line (prose mentions ignored)."""
+    for line in (text or "").splitlines():
+        if line.strip().strip("`").strip() == ALL_DONE_MARKER:
+            return True
+    return False
+
+
+def roadmap_counts(text: str) -> tuple[int, int]:
+    """Return ``(pending, total)`` checkbox counts for a roadmap body."""
+    body = text or ""
+    return (
+        len(ROADMAP_PENDING_RE.findall(body)),
+        len(ROADMAP_ITEM_RE.findall(body)),
+    )
+
+
+def roadmap_all_done() -> tuple[bool, str]:
+    """``(done, reason)`` — done when the roadmap exists and owes nothing."""
+    path = roadmap_path()
+    if not path.is_file():
+        return False, "roadmap_missing"
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        return False, "roadmap_unreadable:%r" % exc
+    if has_all_done_marker(text):
+        return True, "ALL_DONE line present"
+    if not has_pending_roadmap_items(text):
+        return True, "no pending checkbox"
+    return False, "pending items remain"
+
+
+# ---------------------------------------------------------------- dispatch ledger
+def canonical_card(card: str) -> str:
+    """Normalize a card body so the marked and extracted forms share one id.
+
+    ``execute_brain_reply`` hands over the already-extracted card while a brain
+    reply may still carry the ``<<<WORKBUDDY_TASK_*>>>`` markers; keying the
+    ledger on the raw text would give those two forms different ids and let the
+    same task through twice.
+    """
+    text = card or ""
+    extracted = extract_task_card(text)
+    return (extracted or text).strip()
+
+
+def card_digest(card: str) -> str:
+    """First 12 hex chars of sha256 over the canonical (trimmed) card."""
+    return hashlib.sha256(
+        canonical_card(card).encode("utf-8")
+    ).hexdigest()[:12]
+
+
+def card_id_for(card: str, round_no: int) -> str:
+    """Stable dispatch id: ``round<N>_<sha256(card)[:12]>``."""
+    return "round%d_%s" % (int(round_no), card_digest(card))
+
+
+def dispatch_record_path(card_id: str) -> Path:
+    return RUNS / DISPATCH_DIR / ("%s.json" % card_id)
+
+
+def read_dispatch_record(card_id: str) -> dict[str, Any]:
+    try:
+        data = json.loads(
+            dispatch_record_path(card_id).read_text(encoding="utf-8")
+        )
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _save_dispatch_record(card_id: str, record: dict[str, Any]) -> Path:
+    path = dispatch_record_path(card_id)
+    try:
+        _atomic_write_text(
+            path, json.dumps(record, ensure_ascii=False, indent=2)
+        )
+    except OSError as exc:
+        log("dispatch record write failed: %r" % exc, "ERROR")
+    return path
+
+
+def prepare_dispatch(card: str, round_no: int) -> tuple[str, str]:
+    """Reserve a card for dispatch; return ``(card_id, blocked_status)``.
+
+    An empty ``blocked_status`` means the card may go out. Otherwise the record
+    is flagged ``needs_review`` and nothing is sent anywhere: a card still
+    ``dispatched`` (reply never came back) or already ``timed_out`` must never
+    be blindly re-handed to the next executor, or WorkBuddy and Antigravity
+    would run the same task concurrently.
+    """
+    card_id = card_id_for(card, round_no)
+    stamp = datetime.now().isoformat(timespec="seconds")
+    record = read_dispatch_record(card_id)
+    status = str(record.get("status") or "")
+    if status in BLOCKING_DISPATCH_STATES:
+        attempts = list(record.get("attempts") or [])
+        attempts.append({"endpoint": "-", "status": "blocked", "at": stamp})
+        record.update({
+            "card_id": card_id,
+            "status": status,
+            "needs_review": True,
+            "blocked_reason": "already_%s" % status,
+            "updated_at": stamp,
+            "attempts": attempts[-50:],
+        })
+        _save_dispatch_record(card_id, record)
+        return card_id, status
+
+    record.update({
+        "card_id": card_id,
+        "round": int(round_no),
+        "card_sha256": card_digest(card),
+        "card_head": (card or "").strip()[:200],
+        "status": "dispatched",
+        "needs_review": False,
+        "pid": os.getpid(),
+        "created_at": record.get("created_at") or stamp,
+        "updated_at": stamp,
+    })
+    record.setdefault("attempts", [])
+    _save_dispatch_record(card_id, record)
+    return card_id, ""
+
+
+def finish_dispatch(
+    card_id: str,
+    *,
+    completed: bool,
+    endpoint: str = "",
+    detail: str = "",
+) -> Path:
+    """Close a dispatch record as ``completed`` or ``timed_out``."""
+    stamp = datetime.now().isoformat(timespec="seconds")
+    record = read_dispatch_record(card_id)
+    record.setdefault("card_id", card_id)
+    attempts = list(record.get("attempts") or [])
+    if endpoint:
+        attempts.append({
+            "endpoint": endpoint,
+            "status": "completed" if completed else "timed_out",
+            "at": stamp,
+        })
+    record.update({
+        "status": "completed" if completed else "timed_out",
+        "updated_at": stamp,
+        "detail": (detail or "")[:300],
+        "attempts": attempts[-50:],
+    })
+    return _save_dispatch_record(card_id, record)
 
 
 # ---------------------------------------------------------------- subprocess
@@ -228,10 +534,15 @@ class StateMachine:
     The file is rewritten on each transition so an operator (or the next
     round) can tell exactly where an unattended run stopped, even if the
     process was killed without unwinding.
+
+    Two M4-1 guarantees: writes go through a sibling ``.tmp`` + ``os.replace``
+    so a crash can never leave a truncated JSON, and a scheduler never
+    overwrites the file of another scheduler that is still alive.
     """
 
     def __init__(self, path: str | Path | None = None) -> None:
         self._path = Path(path) if path is not None else None
+        self._effective: Path | None = None
         self.state = "IDLE"
         self.reason = ""
         self.round = 0
@@ -240,6 +551,49 @@ class StateMachine:
     @property
     def path(self) -> Path:
         return self._path if self._path is not None else RUNS / STATE_FILE
+
+    @property
+    def written_to(self) -> Path | None:
+        """File actually written (sidecar included); None until the first save."""
+        return self._effective
+
+    def _resolve_target(self) -> Path:
+        """Choose the write target, isolating from a live foreign scheduler.
+
+        ``runs/state_machine.json`` belongs to whoever wrote it last. When it
+        records a different pid that is still running, that process keeps the
+        canonical file and this one writes ``runs/state_machine.<pid>.json``
+        so the live scheduler's history is never clobbered. An explicit
+        ``path=`` is never isolated: the caller owns that file.
+        """
+        if self._effective is not None:
+            return self._effective
+        base = self.path
+        if self._path is not None:
+            self._effective = base
+            return base
+        foreign = 0
+        try:
+            existing = json.loads(base.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            existing = None
+        if isinstance(existing, dict):
+            try:
+                foreign = int(existing.get("pid") or 0)
+            except (TypeError, ValueError):
+                foreign = 0
+        if foreign and foreign != os.getpid() and pid_alive(foreign):
+            self._effective = base.with_name(
+                "%s.%d%s" % (base.stem, os.getpid(), base.suffix)
+            )
+            log(
+                "state machine isolated: pid=%d is alive and holds %s; "
+                "writing %s" % (foreign, base.name, self._effective.name),
+                "WARN",
+            )
+        else:
+            self._effective = base
+        return self._effective
 
     def set(
         self,
@@ -273,12 +627,11 @@ class StateMachine:
         }
 
     def save(self, stamp: str = "") -> None:
-        path = self.path
+        target = self._resolve_target()
         try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(
+            _atomic_write_text(
+                target,
                 json.dumps(self.snapshot(stamp), ensure_ascii=False, indent=2),
-                encoding="utf-8",
             )
         except OSError as exc:
             log("state machine write failed: %r" % exc, "ERROR")
@@ -534,6 +887,8 @@ def build_task_prompt(round_no: int, backlog: str, base_commit: str) -> str:
     recent = git_text("log", "-n", "8", "--oneline").strip() or "(no commits)"
     return (
         "【Bridge 过夜迭代 round=%d | BASE_COMMIT=%s】\n"
+        "主线来源：docs/ROADMAP.md 是唯一权威主线；只挑其中未勾选的 `- [ ]` "
+        "小步推进，不要另立主线、不要跳到后面的项。\n"
         "现有自动循环/待办清单（若某项已完成，请挑下一项未完成的小步）：\n"
         "%s\n\n"
         "最近 8 条 commit（已完成的不要重复提交）：\n%s\n\n"
@@ -852,6 +1207,12 @@ def call_executor(
     Explicit executors never fall back, so an operator can pin one target.
     ``executor_profile="none"`` keeps the endpoint's current model and never
     passes ``--profile``.
+
+    The card is reserved under ``runs/dispatched/<card_id>.json`` first. If that
+    record is still ``dispatched`` or already ``timed_out`` the call refuses to
+    send anything and flags the record ``needs_review`` instead — handing a
+    possibly in-flight task to the *next* executor is exactly the concurrent
+    double-dispatch this guard exists to stop.
     """
     mode = (executor or "auto").strip().lower()
     if mode not in EXECUTOR_CHOICES:
@@ -859,6 +1220,16 @@ def call_executor(
             "unknown executor %r (choose from %s)"
             % (executor, ", ".join(EXECUTOR_CHOICES))
         )
+    card_id, blocked = prepare_dispatch(task_card, attempt)
+    if blocked:
+        log(
+            "dispatch_blocked card_id=%s previous_status=%s round=%d "
+            "(no re-dispatch; needs_review=true)"
+            % (card_id, blocked, attempt),
+            "ERROR",
+        )
+        return ""
+
     order = list(EXECUTOR_CHAIN) if mode == "auto" else [mode]
     callers = {
         "workbuddy": call_workbuddy,
@@ -883,6 +1254,7 @@ def call_executor(
                 "executor_hit=%s round=%d level=%d/%d"
                 % (endpoint, attempt, index + 1, len(order))
             )
+            finish_dispatch(card_id, completed=True, endpoint=endpoint)
             return reply
         log(
             "executor_miss=%s round=%d reason=empty_or_nonzero rc"
@@ -894,6 +1266,9 @@ def call_executor(
                 "executor_fallback -> %s round=%d"
                 % (order[index + 1], attempt)
             )
+    finish_dispatch(
+        card_id, completed=False, detail="all executors returned empty"
+    )
     return ""
 
 
@@ -952,8 +1327,9 @@ def execute_brain_reply(
     """Apply a direct brain patch, else hand the task card to a local executor.
 
     Returns ``{"mode": "patch"|"task"|"none", "applied": bool, "task": str,
-    "executor_reply": str, "detail": str}`` so callers can log and decide
-    without re-parsing the reply.
+    "executor_reply": str, "detail": str, "card_id": str, "blocked": bool}``
+    so callers can log and decide without re-parsing the reply. ``blocked``
+    means the idempotency guard refused the dispatch (see ``call_executor``).
     """
     patch = extract_patch(reply)
     if patch:
@@ -965,11 +1341,15 @@ def execute_brain_reply(
                 "task": "",
                 "executor_reply": "",
                 "detail": detail,
+                "card_id": "",
+                "blocked": False,
             }
         log("brain patch rejected (%s); falling back to task card" % detail,
             "ERROR")
     card = extract_task_card(reply)
     if card:
+        card_id = card_id_for(card, attempt)
+        pending = str(read_dispatch_record(card_id).get("status") or "")
         executor_reply = call_executor(
             card, attempt, timeout, executor=executor,
             executor_profile=executor_profile,
@@ -980,6 +1360,8 @@ def execute_brain_reply(
             "task": card,
             "executor_reply": executor_reply,
             "detail": "",
+            "card_id": card_id,
+            "blocked": pending in BLOCKING_DISPATCH_STATES,
         }
     return {
         "mode": "none",
@@ -987,6 +1369,8 @@ def execute_brain_reply(
         "task": "",
         "executor_reply": "",
         "detail": "no patch and no task card",
+        "card_id": "",
+        "blocked": False,
     }
 
 
@@ -1162,11 +1546,22 @@ def run_overnight(
             "no_push=%s brain=%s executor=%s executor_profile=%s stop_on_bug=%s"
             % (pid, max_rounds, sleep, delay_start, no_push, brain, executor,
                executor_profile, stop_on_bug))
+        if stop_requested():
+            halt_for_stop(machine, 0, "before start")
+            return 0
         if delay_start > 0:
             log("delay-start: sleeping %.1fs" % delay_start)
             time.sleep(delay_start)
+            if stop_requested():
+                halt_for_stop(machine, 0, "after delay-start")
+                return 0
 
         for round_no in range(1, max(1, max_rounds) + 1):
+            if stop_requested():
+                halt_for_stop(machine, round_no, "at round start")
+                reason = "STOPPED_BY_USER"
+                exit_code = 0
+                break
             base = head_commit()
             if not COMMIT_RE.fullmatch(base):
                 log("round %d: cannot resolve BASE_COMMIT" % round_no, "ERROR")
@@ -1177,13 +1572,32 @@ def run_overnight(
                 if failure_streak >= 3:
                     reason = "THREE_CONSECUTIVE_FAILURES"
                     break
-                time.sleep(sleep)
+                if sleep_with_stop_watch(sleep):
+                    halt_for_stop(machine, round_no, "during sleep")
+                    reason = "STOPPED_BY_USER"
+                    exit_code = 0
+                    break
                 continue
 
             log("round %d/%d BASE_COMMIT=%s" % (round_no, max_rounds, base[:12]))
             machine.set("VERIFY_TESTS", reason="round pre-check",
                         round_no=round_no)
             rc, _ = run_tests(timeout)
+
+            if rc == 0:
+                done, why = roadmap_all_done()
+                if done:
+                    machine.set(
+                        "ALL_DONE",
+                        reason="roadmap owes nothing (%s)" % why,
+                        round_no=round_no,
+                    )
+                    log("round %d: suite green and roadmap has no pending item "
+                        "(%s); recording ALL_DONE and exiting"
+                        % (round_no, why))
+                    reason = "ALL_DONE"
+                    exit_code = 0
+                    break
 
             if rc != 0:
                 log("round %d: red suite; self-heal up to 3 attempts" % round_no,
@@ -1218,7 +1632,11 @@ def run_overnight(
                         reason = "THREE_CONSECUTIVE_FAILURES"
                         break
                     log("sleep %.1fs before next round" % sleep)
-                    time.sleep(sleep)
+                    if sleep_with_stop_watch(sleep):
+                        halt_for_stop(machine, round_no, "during sleep")
+                        reason = "STOPPED_BY_USER"
+                        exit_code = 0
+                        break
                     continue
             else:
                 failure_streak = 0
@@ -1226,6 +1644,11 @@ def run_overnight(
                 log("round %d: next-task source=%s" % (round_no, source))
                 machine.set("PICK_TASK", reason="source=%s" % source,
                             round_no=round_no)
+                if stop_requested():
+                    halt_for_stop(machine, round_no, "before dispatch")
+                    reason = "STOPPED_BY_USER"
+                    exit_code = 0
+                    break
                 machine.set("BRAIN_PLAN", reason="request next task",
                             round_no=round_no)
                 reply = request_task_from_gemini(
@@ -1242,7 +1665,25 @@ def run_overnight(
                     if idle_streak >= 3:
                         reason = "THREE_IDLE_ROUNDS"
                         break
-                    time.sleep(sleep)
+                    if sleep_with_stop_watch(sleep):
+                        halt_for_stop(machine, round_no, "during sleep")
+                        reason = "STOPPED_BY_USER"
+                        exit_code = 0
+                        break
+                    continue
+                if result.get("blocked"):
+                    log("round %d: card %s blocked by the idempotency guard "
+                        "(needs_review); skipping round"
+                        % (round_no, result.get("card_id") or "?"), "ERROR")
+                    idle_streak += 1
+                    if idle_streak >= 3:
+                        reason = "THREE_IDLE_ROUNDS"
+                        break
+                    if sleep_with_stop_watch(sleep):
+                        halt_for_stop(machine, round_no, "during sleep")
+                        reason = "STOPPED_BY_USER"
+                        exit_code = 0
+                        break
                     continue
 
                 (RUNS / ("overnight_accepted_task_round%d.md" % round_no)).write_text(
@@ -1289,7 +1730,11 @@ def run_overnight(
                         if failure_streak >= 3:
                             reason = "THREE_CONSECUTIVE_FAILURES"
                             break
-                        time.sleep(sleep)
+                        if sleep_with_stop_watch(sleep):
+                            halt_for_stop(machine, round_no, "during sleep")
+                            reason = "STOPPED_BY_USER"
+                            exit_code = 0
+                            break
                         continue
                     failure_streak = 0
                 rc = post_rc
@@ -1301,7 +1746,11 @@ def run_overnight(
                 if failure_streak >= 3:
                     reason = "THREE_CONSECUTIVE_FAILURES"
                     break
-                time.sleep(sleep)
+                if sleep_with_stop_watch(sleep):
+                    halt_for_stop(machine, round_no, "during sleep")
+                    reason = "STOPPED_BY_USER"
+                    exit_code = 0
+                    break
                 continue
 
             if has_changes():
@@ -1330,14 +1779,18 @@ def run_overnight(
                 break
             if round_no < max(1, max_rounds):
                 log("sleep %.1fs before next round" % sleep)
-                time.sleep(sleep)
+                if sleep_with_stop_watch(sleep):
+                    halt_for_stop(machine, round_no, "during sleep")
+                    reason = "STOPPED_BY_USER"
+                    exit_code = 0
+                    break
     except Exception as exc:  # noqa: BLE001 - unattended runner must not hang
         log("overnight exception: %s" % exc, "ERROR")
         reason = "EXCEPTION"
         exit_code = 1
     finally:
         log("overnight stop reason=%s pid=%d" % (reason, pid))
-        if machine.state != "STOPPED_ON_BUG":
+        if machine.state not in TERMINAL_STATES:
             machine.set("STOPPED", reason=reason)
         clear_pid()
         LOG_NAMES = previous_logs
@@ -1352,8 +1805,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--timeout", type=float, default=300,
                         help="per-subprocess timeout in seconds")
     parser.add_argument("--report", default="runs/crash_report.md")
-    parser.add_argument("--overnight", action="store_true",
-                        help="run multi-round unattended overnight loop")
+    parser.add_argument(
+        "--overnight", "--daemon", dest="overnight", action="store_true",
+        help="run the multi-round unattended daemon loop "
+             "(--daemon is an exact alias of --overnight)",
+    )
     parser.add_argument("--max-rounds", type=int, default=20)
     parser.add_argument("--sleep", type=float, default=60,
                         help="seconds between overnight rounds")
